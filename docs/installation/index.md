@@ -1,6 +1,6 @@
 # Installation Overview
 
-For a private or permanent instance of SO-CRATES, most folks will want to use our pre-built container image. We publish a container image that is compatible with both Docker and Podman - see the separate [Docker](docker.md) or [Podman](podman.md) sections.
+For a private or permanent instance of SO-CRATES, most folks will want our pre-built container image, which is compatible with both Docker and Podman - see the [Docker](docker.md) or [Podman](podman.md) pages.
 
 On Windows or macOS, use [Docker Desktop](docker.md#docker-desktop-windows-macos).
 

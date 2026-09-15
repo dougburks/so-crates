@@ -38,7 +38,7 @@ var currentFileName = '';    // display name (var, not let - see below)
 var currentNotes = '';       // per-analysis freeform notes (var, not let - see below)
 var currentFilters = {};     // {columnName: value} — global, flat (var, not let - see below)
 let currentSearch = [];      // server-side full-text search terms (array)
-let baseEventStats = {};     // unfiltered totals for stats card denominator
+let baseEventStats = {};     // unfiltered per-type totals (baseline for the tab set)
 var advancedMode = false;    // advanced toggle state (var, not let - see below)
 let tabDataCache = {};       // cached event data per type
 ```
@@ -56,7 +56,7 @@ let tabDataCache = {};       // cached event data per type
 | Rendering | `buildStats()`, `buildSections()`, `buildSection()`, `buildAllEvents()`, `buildRowForEvent()`, `updateSankeyDiagram()` | Build HTML |
 | Aggregation | `buildAggregationTablesCore()`, `buildAggregationTables()`, `buildAggregationTablesAll()`, `buildAggregationsSection()`, `buildAggregationsSectionAll()` | Frequency grids |
 | Search | `performSearch()`, `clearSearchTerm()`, `refreshAnalysisData()` | Full-text search via server |
-| Filtering | `applyFilter()`, `applyFilters()`, `clearFilter()`, `clearAllFilters()`, `getFilteredEvents()`, `getSankeyEvents()`, `refreshCurrentView()` | Column filter management |
+| Filtering | `applyFilters()`, `clearFilter()`, `clearAllFilters()`, `getFilteredEvents()`, `getSankeyEvents()`, `refreshCurrentView()` | Column filter management |
 | Streams | `downloadPcap()`, `loadAsciiTranscript()`, `loadHexdumpData()`, `switchStreamView()`, `togglePacket()`, `toggleRow()` | Stream analysis |
 | Modals | `closeAllModals()`, `showNotesModal()`, `closeNotesModal()`, `saveAnalysisNotes()`, `openAnalysisNotesFromList()`, `showRulesModal()`, `closeRulesModal()`, `triggerRulesetUpdate()`, `isRulesetStale()` | Notes editing and Rules-modal management, shared modal cleanup |
 | Utilities | `escapeHtml()`, `formatEvent()`, `extractValue()`, `extractAllValue()`, `getColumnsForType()`, `clearAnalysisContainers()` | Helpers |

@@ -15,12 +15,12 @@ You'll need these prerequisites:
 - **suricata-update** - for downloading/updating Suricata rules (internet access required; the app will warn and continue without rules if offline)
 - **tcpdump** - for stream carving (`/api/download-stream`) and hexdump extraction (`/api/hexdump-stream`)
 - **tshark** - for ASCII transcript extraction (`/api/ascii-stream`)
-- **yara** (optional) - for scanning extracted files. If installed, SO-CRATES automatically downloads YARA rules on first run (or uses baked-in rules in Docker). If missing, file extraction and File Alerts are skipped.
+- **yara** (optional) - if installed, SO-CRATES scans extracted/uploaded files with YARA rules (baked-in in Docker; otherwise downloaded on demand via the Rules modal). If missing, YARA scanning and File Alerts are skipped (files are still extracted).
 - **Zircolite** (optional) - for Sigma rule detection on log files. SO-CRATES auto-detects if Zircolite is installed and skips log analysis if absent. The Dockerfile bakes in Zircolite v3.7.1.
 - **exiftool** (optional) - for extracting EXIF/media metadata from binary files. If missing, EXIF extraction is silently skipped (the rest of the file analysis still runs).
 - **file** (optional) - for MIME/file-type detection on non-PCAP uploads. If missing, this detection is silently skipped (the rest of the file analysis still runs).
 
-Once you have the prerequisites, then you can clone this github repo and run the server:
+Once you have the prerequisites, you can clone this GitHub repo and run the server:
 
 ```bash
 python3 socrates.py

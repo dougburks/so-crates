@@ -13,6 +13,7 @@ A standalone web application for analyzing pcap files, log files, and binary fil
 - [Interactive Demo](https://so-crates.org/quick-demo/)
 - [Installation](https://so-crates.org/installation/) ([OhMyDebn](https://so-crates.org/installation/ohmydebn/), [Docker](https://so-crates.org/installation/docker/), [Podman](https://so-crates.org/installation/podman/))
 - [Usage](https://so-crates.org/usage/)
+- [Themes](https://so-crates.org/themes/)
 - [Configuration](https://so-crates.org/configuration/)
 - [Security](https://so-crates.org/security/)
 - [Architecture](https://so-crates.org/architecture/) / [API Reference](https://so-crates.org/api/) / [Filtering](https://so-crates.org/filtering/)
@@ -30,4 +31,4 @@ python3 -m unittest discover -v
 
 ## License
 
-See [LICENSE](LICENSE)
+See [LICENSE](LICENSE).

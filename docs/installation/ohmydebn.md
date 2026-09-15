@@ -4,4 +4,4 @@ If you are running the latest version of [OhMyDebn](https://ohmydebn.org), then 
 
 ## Theme Sync
 
-Launching this way also enables an opt-in "Sync theme to OhMyDebn theme" toggle (in the Themes modal, off by default) that keeps SO-CRATES's theme following your OhMyDebn desktop theme automatically. If your current OhMyDebn theme's name matches one of SO-CRATES's own built-in themes, SO-CRATES switches to it directly; otherwise, a theme is generated on the fly from your OhMyDebn theme's own color palette. See [Themes](../themes.md) for details.
+Launching this way also enables an opt-in "Sync theme to OhMyDebn theme" toggle (in the Themes modal, off by default) that automatically keeps SO-CRATES's theme in sync with your OhMyDebn desktop theme. If your current OhMyDebn theme's name matches one of SO-CRATES's own built-in themes, SO-CRATES switches to it directly; otherwise, a theme is generated on the fly from your OhMyDebn theme's own color palette. See [Themes](../themes.md) for details.

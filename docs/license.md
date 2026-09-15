@@ -1,3 +1,3 @@
 # License
 
-See [LICENSE](https://github.com/dougburks/so-crates/blob/main/LICENSE) in the repository.
+SO-CRATES is released under the [MIT License](https://github.com/dougburks/so-crates/blob/main/LICENSE).

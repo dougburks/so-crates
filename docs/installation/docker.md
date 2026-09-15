@@ -36,15 +36,19 @@ mkdir -p socrates-data
 newgrp docker -c "docker compose up"
 ```
 
+Note that `docker compose` stores its data in `./socrates-data` next to `docker-compose.yml`, rather than `~/socrates-data` as in the `docker run` instructions above.
+
 To stop:
 ```bash
-docker compose down
+newgrp docker -c "docker compose down"
 ```
 
 To restart:
 ```bash
-docker compose restart
+newgrp docker -c "docker compose restart"
 ```
+
+Once you log out and back in, your `docker` group membership takes effect and you can run these `docker compose` commands without the `newgrp docker -c` wrapper.
 
 ## Air-Gapped / Offline Deployment for Docker
 
@@ -55,15 +59,16 @@ docker pull ghcr.io/dougburks/so-crates:main
 docker save ghcr.io/dougburks/so-crates:main > so-crates.tar
 ```
 
-Then transfer so-crates.tar to the isolated network via USB or other media. On the air-gapped machine:
+Then transfer `so-crates.tar` to the isolated network via USB or other media. On the air-gapped machine:
 ```bash
 docker load < so-crates.tar
+mkdir -p ~/socrates-data
 docker run -v ~/socrates-data:/data -p 8000:8000 ghcr.io/dougburks/so-crates:main
 ```
 
 ## Build Your Own Docker Image
 
-If you prefer to build your own Docker image, you can clone this github repo and then build the image:
+If you prefer to build your own Docker image, you can clone this GitHub repo and then build the image:
 
 ```bash
 git clone https://github.com/dougburks/so-crates

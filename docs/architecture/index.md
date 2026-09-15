@@ -29,10 +29,13 @@ A stdlib-only Python HTTP server (`http.server.SimpleHTTPRequestHandler`). Handl
 | `models.py` | Suricata event field extraction helpers (IP, port, protocol) |
 | `validators.py` | Input validation: IP, port, filename, path safety, URL safety (SSRF/DNS-rebinding), zip-slip and zip-bomb limits, PCAP magic bytes |
 | `suricata_analyzer.py` | Suricata orchestration: executable checks, rules download/config, background spawn |
+| `suricata_sid_ranges.py` | Maps Suricata SIDs to their source ruleset, shared by `db.py` and the API |
 | `yara_analyzer.py` | YARA scanning: executable checks, rules download/setup, scanning extracted files, parsing output |
 | `sigma_analyzer.py` | Zircolite/Sigma orchestration: log type detection, running Zircolite, parsing and importing results into SQLite |
-| `file_analyzer.py` | Lightweight binary file metadata: hashes, Shannon entropy, extracted strings; delegates to `exif_analyzer.py` |
+| `file_analyzer.py` | Lightweight binary file metadata: file type, Shannon entropy, extracted strings; delegates to `exif_analyzer.py` |
 | `exif_analyzer.py` | EXIF/media metadata extraction via `exiftool` subprocess |
+| `playbook_lookup.py` | Looks up per-rule investigation playbooks from the pre-generated index |
+| `ai_summary_lookup.py` | Looks up pre-generated AI rule summaries |
 | `ohmydebn_colors.py` | Derives a full SO-CRATES theme from an OhMyDebn/Aether color palette (`colors.toml` or `alacritty.toml`), for the theme-sync feature |
 | `config.py` | Centralized application constants: size limits, timeouts, thresholds |
 
