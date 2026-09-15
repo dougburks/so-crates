@@ -9,7 +9,9 @@ import ssl
 import sqlite3
 import subprocess
 import hashlib
-from urllib.parse import urlparse, parse_qs, urljoin
+import ipaddress
+import posixpath
+from urllib.parse import urlparse, parse_qs, urljoin, unquote
 import urllib.request
 import urllib.error
 import zipfile
@@ -27,7 +29,7 @@ from db import (
     query_sigma_alerts_sqlite, get_sigma_stats_sqlite,
     get_sigma_alert_count_sqlite, get_event_date_range_sqlite,
     get_sankey_data_sqlite, get_aggregation_data_sqlite, get_aggregation_totals_sqlite,
-    AGGREGATION_TOP_N,
+    AGGREGATION_TOP_N, AGGREGATION_JSON_PATHS, REAL_AGGREGATION_COLUMNS,
     set_row_note, has_row_notes,
     set_acknowledged, set_acknowledged_bulk,
 )
@@ -99,14 +101,42 @@ MAX_URL_REDIRECTS = 5
 _SANKEY_CACHE = {}
 _AGGREGATION_CACHE = {}
 _AGGREGATION_TOTALS_CACHE = {}
+# Single source of truth for "every analysis-result cache": _evict_analysis_cache
+# and the delete-all handler must always cover the same set, so a new cache
+# added here is automatically evicted/cleared in both places.
+_ALL_CACHES = (_SANKEY_CACHE, _AGGREGATION_CACHE, _AGGREGATION_TOTALS_CACHE)
 _CACHE_LOCK = threading.Lock()
+# Backstop against cache-fill abuse: cache keys include client-supplied
+# strings, so even with per-key validation the total entry count is bounded.
+_CACHE_MAX_ENTRIES = 2048
 
 
 def _evict_analysis_cache(md5):
     with _CACHE_LOCK:
-        for cache in (_SANKEY_CACHE, _AGGREGATION_CACHE, _AGGREGATION_TOTALS_CACHE):
+        for cache in _ALL_CACHES:
             for key in [k for k in cache if k[0] == md5]:
                 del cache[key]
+
+
+def _cache_put(cache, key, value):
+    """Insert into an analysis cache; caller must hold _CACHE_LOCK."""
+    if len(cache) >= _CACHE_MAX_ENTRIES:
+        cache.clear()
+    cache[key] = value
+
+
+def _cacheable_aggregation_key(event_type, column=None):
+    """Only cache keys built from recognized event types/columns - arbitrary
+    client strings must not become permanent cache entries (memory DoS)."""
+    if event_type is not None and event_type not in AGGREGATION_JSON_PATHS:
+        return False
+    if column is None:
+        return True
+    if column in REAL_AGGREGATION_COLUMNS:
+        return True
+    if event_type is None:
+        return column in ('Type', 'Detail')
+    return column in AGGREGATION_JSON_PATHS[event_type]
 
 
 # Server-wide rule-update job state, polled by the frontend via
@@ -619,7 +649,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         Returns the parsed dict, or None and sends an error response if
         reading fails, the body isn't valid JSON, or it isn't a JSON object.
+
+        Requires Content-Type: application/json. Browsers allow cross-site
+        "simple request" POSTs (no preflight) only for a few content types -
+        never application/json - so this check blocks CSRF from web pages
+        while costing legitimate clients nothing (the frontend always sends
+        it, and curl users add one header).
         """
+        ctype = (self.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
+        if ctype != 'application/json':
+            self._send_error(415, 'Content-Type must be application/json')
+            return None
         post_data = self._read_post_body(max_size)
         if post_data is None:
             return None
@@ -804,7 +844,66 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/update-rules': 'handle_post_update_rules',
     }
 
+    # Hostnames accepted in Host/Origin headers beyond localhost and IP
+    # literals; comma-separated env var for reverse-proxy/hostname deployments.
+    ALLOWED_HOSTNAMES = frozenset(
+        h.strip().lower()
+        for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()
+    )
+
+    def _trusted_host(self, netloc):
+        """True when a Host/Origin host is safe for this localhost-first app.
+
+        IP literals are always accepted: DNS rebinding needs a *name* (the
+        attacker's domain re-resolving to this server), so a raw IP in Host
+        cannot be a rebinding attack, and LAN users legitimately browse to
+        the server's IP. Names are limited to localhost (+subdomains) plus
+        the ALLOWED_HOSTS env allowlist.
+        """
+        if not netloc:
+            return True  # non-browser clients (curl, scripts) may omit Host
+        try:
+            host = urlparse('//' + netloc).hostname or ''
+        except ValueError:
+            return False
+        if host == 'localhost' or host.endswith('.localhost'):
+            return True
+        if host in self.ALLOWED_HOSTNAMES:
+            return True
+        try:
+            ipaddress.ip_address(host)
+            return True
+        except ValueError:
+            return False
+
+    def _reject_cross_origin(self, is_post):
+        """DNS-rebinding (Host) and CSRF (Origin/Sec-Fetch-Site) defenses.
+
+        Returns True (and sends a 403) when the request must not proceed.
+        Complements _read_json_body's Content-Type check, which blocks the
+        cross-site "simple request" POSTs that carry neither header.
+        """
+        if not self._trusted_host(self.headers.get('Host', '')):
+            self._send_error(403, 'Invalid Host header')
+            return True
+        if not is_post:
+            return False
+        origin = self.headers.get('Origin')
+        if origin:
+            if origin.lower() == 'null':
+                self._send_error(403, 'Cross-origin request rejected')
+                return True
+            if not self._trusted_host(urlparse(origin).netloc):
+                self._send_error(403, 'Cross-origin request rejected')
+                return True
+        if (self.headers.get('Sec-Fetch-Site') or '').lower() == 'cross-site':
+            self._send_error(403, 'Cross-origin request rejected')
+            return True
+        return False
+
     def do_GET(self):
+        if self._reject_cross_origin(is_post=False):
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         params = parse_qs(parsed.query)
@@ -824,11 +923,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if handler_name:
             getattr(self, handler_name)(params)
         elif path == '/socrates.html' or path.startswith('/static/'):
-            super().do_GET()
+            # The prefix check above runs on the raw path, but the stdlib
+            # handler unquotes and normalizes before serving - so a path like
+            # /static/%2e%2e/foo would escape /static/. Re-check the prefix
+            # on the same normalized form the file server will actually use.
+            normalized = posixpath.normpath(unquote(path))
+            if normalized == '/socrates.html' or (
+                    normalized.startswith('/static/')
+                    and '..' not in normalized.split('/')):
+                super().do_GET()
+            else:
+                self._send_error(404, 'Not found')
         else:
             self._send_error(404, 'Not found')
 
     def do_POST(self):
+        if self._reject_cross_origin(is_post=True):
+            return
         handler_name = self.POST_ROUTES.get(self.path)
         if handler_name:
             getattr(self, handler_name)()
@@ -929,7 +1040,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({'nodes': [], 'links': []})
             return
         try:
-            if q is None:
+            if q is None and _cacheable_aggregation_key(event_type):
                 cache_key = (md5, event_type)
                 with _CACHE_LOCK:
                     cached = _SANKEY_CACHE.get(cache_key)
@@ -938,7 +1049,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return
                 data = get_sankey_data_sqlite(db_file, event_type, q)
                 with _CACHE_LOCK:
-                    _SANKEY_CACHE[cache_key] = data
+                    _cache_put(_SANKEY_CACHE, cache_key, data)
             else:
                 data = get_sankey_data_sqlite(db_file, event_type, q)
         except Exception:
@@ -982,7 +1093,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({})
             return
         try:
-            if q is None:
+            if q is None and _cacheable_aggregation_key(event_type, column):
                 cache_key = (md5, event_type, column, page, page_size)
                 with _CACHE_LOCK:
                     cached = _AGGREGATION_CACHE.get(cache_key)
@@ -991,7 +1102,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return
                 data = get_aggregation_data_sqlite(db_file, event_type, q, top_n=page_size, offset=offset, column=column)
                 with _CACHE_LOCK:
-                    _AGGREGATION_CACHE[cache_key] = data
+                    _cache_put(_AGGREGATION_CACHE, cache_key, data)
             else:
                 data = get_aggregation_data_sqlite(db_file, event_type, q, top_n=page_size, offset=offset, column=column)
         except Exception:
@@ -1018,7 +1129,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({})
             return
         try:
-            if q is None:
+            if q is None and _cacheable_aggregation_key(event_type):
                 cache_key = (md5, event_type)
                 with _CACHE_LOCK:
                     cached = _AGGREGATION_TOTALS_CACHE.get(cache_key)
@@ -1027,7 +1138,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return
                 data = get_aggregation_totals_sqlite(db_file, event_type, q)
                 with _CACHE_LOCK:
-                    _AGGREGATION_TOTALS_CACHE[cache_key] = data
+                    _cache_put(_AGGREGATION_TOTALS_CACHE, cache_key, data)
             else:
                 data = get_aggregation_totals_sqlite(db_file, event_type, q)
         except Exception:
@@ -1528,8 +1639,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(500, f'Could not delete analyses: {errors[0]}')
             return
         with _CACHE_LOCK:
-            _SANKEY_CACHE.clear()
-            _AGGREGATION_CACHE.clear()
+            for cache in _ALL_CACHES:
+                cache.clear()
         self._send_json({'success': True, 'deleted': deleted})
 
     def handle_post_update_rules(self):
@@ -1975,7 +2086,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                             continue
                         try:
                             self._commit_and_spawn_pcap_analysis(extra, safe_filename, md5_hash=md5_hash)
-                        except OSError:
+                        except (OSError, ValueError):
+                            # ValueError: e.g. a reserved artifact filename
+                            # inside the ZIP - skip that member, keep the rest
                             failed_count += 1
                             continue
                         seen.add(md5_hash)
@@ -1991,7 +2104,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                             continue
                         try:
                             self._commit_and_analyze_standalone_file(extra, safe_filename, md5_hash, prefix)
-                        except OSError:
+                        except (OSError, ValueError):
                             failed_count += 1
                             continue
                         seen.add(md5_hash)

@@ -20,7 +20,22 @@ BLOCKED_NETWORKS = [
     ipaddress.ip_network('::1/128'),
     ipaddress.ip_network('fd00::/8'),
     ipaddress.ip_network('::/96'),  # IPv4-compatible (::127.0.0.1)
+    ipaddress.ip_network('0.0.0.0/8'),  # "this network"; connect() to 0.0.0.0 reaches localhost
 ]
+
+
+def _ip_is_blocked(ip):
+    """True when a resolved address must not be fetched from.
+
+    Property-based checks catch whole special-address classes the explicit
+    network list could miss (0.0.0.0 -> localhost on Linux, fe80::/10, CGNAT
+    on newer Pythons, multicast, reserved); the BLOCKED_NETWORKS loop is kept
+    as an explicit, version-independent floor.
+    """
+    if (ip.is_unspecified or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_private):
+        return True
+    return any(ip in network for network in BLOCKED_NETWORKS)
 
 
 def validate_ip(ip_str):
@@ -40,7 +55,13 @@ def validate_port(port_str):
 
 
 RESERVED_FILENAMES = {
-    'events.db', 'eve.json', 'name.txt', '.meta', '.phase', '.error',
+    'events.db', 'eve.json', 'name.txt', 'notes.txt', '.meta', '.phase', '.error',
+    # Analyzer output artifacts: an upload with one of these names would be
+    # overwritten mid-scan (result spoofing) or deleted by reanalyze's
+    # artifact sweep. Keep in sync with PCAP_ANALYSIS_ARTIFACTS /
+    # FILE_ANALYSIS_ARTIFACTS in socrates.py.
+    'yara_matches.json', 'sigma_matches.json', 'zircolite.log',
+    '.zircolite_events.db', 'file_metadata.json',
 }
 
 
@@ -121,9 +142,8 @@ def _resolve_and_validate_ips(hostname):
         # Normalize IPv4-mapped IPv6 (::ffff:127.0.0.1) so it is checked against IPv4 blocklists.
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
             ip = ip.ipv4_mapped
-        for network in BLOCKED_NETWORKS:
-            if ip in network:
-                raise ValueError(f"Access to private/internal addresses is not allowed ({addr})")
+        if _ip_is_blocked(ip):
+            raise ValueError(f"Access to private/internal addresses is not allowed ({addr})")
     return resolved_ips
 
 
