@@ -7637,11 +7637,23 @@
         // positives from CDNs not on this list.
         const DNS_HEURISTICS_CDN_SUFFIXES = [
             'amazonaws.com', 'cloudfront.net', 'akamaiedge.net', 'akamaitechnologies.com',
-            'akamai.net', 'azureedge.net', 'azurewebsites.net', 'windows.net',
+            'akamai.net', 'akamaized.net', 'akamaihd.net', 'akadns.net',
+            'azureedge.net', 'azurewebsites.net', 'windows.net',
             'googleusercontent.com', 'gstatic.com', 'googleapis.com', 'googlesyndication.com',
             'doubleclick.net', 'fastly.net', 'fastlylb.net', 'cloudflare.net',
             'edgekey.net', 'edgesuite.net', 'edgecastcdn.net', 'msedge.net',
             'trafficmanager.net', 'cdn77.org', 'stackpathdns.com',
+            // Ubiquitous OS/browser/vendor domains whose background
+            // traffic (updates, telemetry, sync) legitimately fans out
+            // across many subdomains. Excluding them is safe for a
+            // DGA/tunneling detector: those techniques require an
+            // attacker-CONTROLLED domain, which these are not.
+            'microsoft.com', 'windowsupdate.com', 'msftconnecttest.com',
+            'live.com', 'office.com', 'office.net', 'bing.com',
+            'google.com', 'gvt1.com', 'gvt2.com', 'youtube.com',
+            'apple.com', 'icloud.com', 'mzstatic.com',
+            'mozilla.org', 'mozilla.com', 'mozilla.net', 'firefox.com',
+            'ubuntu.com', 'canonical.com', 'debian.org', 'archlinux.org',
         ];
 
         function _isKnownCdnSuffix(suffix) {
@@ -7709,6 +7721,18 @@
         // from "08kcbghk807qtl9" (0.0) despite their nearly identical
         // entropy (3.50 vs 3.51).
         const DNS_HEURISTICS_DGA_MAX_VOWEL_RATIO = 0.20;
+        // Shared by the tunneling (subdomain label) and DGA (registrable
+        // label) checks so their three-part test can never drift apart: a
+        // label long enough to carry payload, with the character spread of
+        // encoded data (entropy) AND without the vowel density of real
+        // words - see vowelRatio's comment for why entropy alone false-
+        // positives on word-mashups like prod-streaming-video-msn-com.
+        function _labelLooksEncoded(label) {
+            return label.length >= DNS_HEURISTICS_MIN_ENTROPY_PREFIX_LENGTH
+                && shannonEntropyBits(label) > DNS_HEURISTICS_ENTROPY_THRESHOLD
+                && vowelRatio(label) < DNS_HEURISTICS_DGA_MAX_VOWEL_RATIO;
+        }
+
         const DNS_HEURISTICS_LONG_NAME_LENGTH = 60;
         const DNS_HEURISTICS_LONG_LABEL_LENGTH = 50;
         // Distinct subdomains under one suffix, not raw query count - a
@@ -7753,12 +7777,30 @@
                 const prefix = domain.endsWith(suffixWithDot)
                     ? domain.slice(0, domain.length - suffixWithDot.length)
                     : (domain === suffix ? '' : domain);
-                const prefixCompact = prefix.replace(/\./g, '');
-                if (prefixCompact.length >= DNS_HEURISTICS_MIN_ENTROPY_PREFIX_LENGTH) {
-                    const ent = shannonEntropyBits(prefixCompact);
-                    if (ent > rec.maxEntropy) {
-                        rec.maxEntropy = ent;
-                        rec.maxEntropyName = domain;
+                // Entropy is scored per label, never over the dot-stripped
+                // prefix as a whole: concatenating a deep-but-ordinary
+                // chain like msedge.b.tlu.dl.delivery.mp merges many short
+                // words into one string whose character spread reads as
+                // high entropy, flagging normal vendor traffic. Real DNS
+                // tunneling carries its randomness inside individual long
+                // labels (encoded payload chunks), which this still
+                // catches; campaigns of many short random labels are the
+                // fan-out check's job below.
+                // The vowel-ratio guard mirrors the DGA check below, for
+                // the same reason its comment gives: a long hyphenated
+                // word-mashup label (prod-streaming-video-msn-com, a real
+                // false positive this shipped with briefly) lands right in
+                // DGA-entropy territory, but words carry ~30-40% vowels
+                // while encoded tunneling payloads sit well under 20%
+                // (base32 ~0.16, hex ~0.13, base64 ~0.16, random alnum
+                // ~0.14) - so requiring both keeps the real signal.
+                for (const label of prefix.split('.')) {
+                    if (_labelLooksEncoded(label)) {
+                        const ent = shannonEntropyBits(label);
+                        if (ent > rec.maxEntropy) {
+                            rec.maxEntropy = ent;
+                            rec.maxEntropyName = domain;
+                        }
                     }
                 }
 
@@ -7802,9 +7844,7 @@
                 // alongside entropy, not scored as its own separate
                 // reason.
                 const suffixLabel = rec.suffix.split('.')[0];
-                if (suffixLabel.length >= DNS_HEURISTICS_MIN_ENTROPY_PREFIX_LENGTH
-                        && shannonEntropyBits(suffixLabel) > DNS_HEURISTICS_ENTROPY_THRESHOLD
-                        && vowelRatio(suffixLabel) < DNS_HEURISTICS_DGA_MAX_VOWEL_RATIO) {
+                if (_labelLooksEncoded(suffixLabel)) {
                     reasons.push('High-entropy domain name (possible DGA)');
                     score += 35;
                 }
@@ -8613,6 +8653,11 @@
         // own several call sites by hand.
         let acknowledgedAlertsCount = 0;
         let acknowledgedAlertsCountStale = true;
+        // The analysis the count was computed FOR - buildStats() only
+        // trusts the count when this matches currentMd5, so a number left
+        // over from a previously viewed analysis can never render (or
+        // suppress) a card on the wrong one while a refresh is in flight.
+        let acknowledgedAlertsCountMd5 = null;
 
         // The DNS Heuristics stat card's count - same lazy-refresh shape
         // as acknowledgedAlertsCount just above (see its own comment) and
@@ -8626,12 +8671,17 @@
         // handful (or zero) actually scored.
         let dnsHeuristicsFlaggedCount = 0;
         let dnsHeuristicsCountStale = true;
+        // See acknowledgedAlertsCountMd5's comment - same wrong-analysis
+        // carry-over protection for this card's count.
+        let dnsHeuristicsCountMd5 = null;
 
         async function refreshDnsHeuristicsCount() {
             if (isLogAnalysisMode || !currentMd5) {
                 dnsHeuristicsFlaggedCount = 0;
+                dnsHeuristicsCountMd5 = currentMd5;
                 return;
             }
+            const md5 = currentMd5;
             try {
                 // A dedicated fetch, not ensureCappedBatch('dns')/
                 // tabDataCache - this runs fire-and-forget from inside
@@ -8646,11 +8696,30 @@
                 // wrong dataset and then sticking with the wrong count
                 // once dnsHeuristicsCountStale flipped back to false.
                 const qParam = buildSearchQuery();
-                const resp = await fetch(`/api/events?md5=${encodeURIComponent(currentMd5)}&type=dns&limit=${getUserQueryLimit()}${qParam}&t=${Date.now()}`);
+                const resp = await fetch(`/api/events?md5=${encodeURIComponent(md5)}&type=dns&limit=${getUserQueryLimit()}${qParam}&t=${Date.now()}`);
                 const events = await resp.json();
+                if (currentMd5 !== md5) {
+                    // The user switched analyses while this fetch was in
+                    // flight - the result belongs to the old one. Re-arm
+                    // the lazy refresh; the switch's own buildStats() call
+                    // re-runs it against the new analysis.
+                    dnsHeuristicsCountStale = true;
+                    return;
+                }
+                if (!Array.isArray(events)) {
+                    // Error payload or analysis still processing (no
+                    // events.db yet) - don't lock in a wrong 0; retry on
+                    // the next buildStats() instead. No tight loop: the
+                    // early return skips this function's own buildStats()
+                    // call, so the retry only fires on an external one.
+                    dnsHeuristicsCountStale = true;
+                    return;
+                }
                 dnsHeuristicsFlaggedCount = computeDnsHeuristics(events).length;
+                dnsHeuristicsCountMd5 = md5;
             } catch (e) {
-                dnsHeuristicsFlaggedCount = 0;
+                dnsHeuristicsCountStale = true;
+                return;
             }
             buildStats(await computeFilteredStats());
         }
@@ -8658,18 +8727,28 @@
         async function refreshAcknowledgedAlertsCount() {
             if (isLogAnalysisMode || !currentMd5) {
                 acknowledgedAlertsCount = 0;
+                acknowledgedAlertsCountMd5 = currentMd5;
                 return;
             }
+            const md5 = currentMd5;
             try {
                 const [alertResp, sigmaResp] = await Promise.all([
-                    fetch(`/api/count?md5=${encodeURIComponent(currentMd5)}&type=alert&acknowledged=only&t=${Date.now()}`),
-                    fetch(`/api/sigma-count?md5=${encodeURIComponent(currentMd5)}&acknowledged=only&t=${Date.now()}`)
+                    fetch(`/api/count?md5=${encodeURIComponent(md5)}&type=alert&acknowledged=only&t=${Date.now()}`),
+                    fetch(`/api/sigma-count?md5=${encodeURIComponent(md5)}&acknowledged=only&t=${Date.now()}`)
                 ]);
                 const alertCount = (await alertResp.json()).count || 0;
                 const sigmaCount = (await sigmaResp.json()).count || 0;
+                if (currentMd5 !== md5) {
+                    // See refreshDnsHeuristicsCount - result belongs to a
+                    // previously viewed analysis; re-arm and discard.
+                    acknowledgedAlertsCountStale = true;
+                    return;
+                }
                 acknowledgedAlertsCount = alertCount + sigmaCount;
+                acknowledgedAlertsCountMd5 = md5;
             } catch (e) {
-                acknowledgedAlertsCount = 0;
+                acknowledgedAlertsCountStale = true;
+                return;
             }
             buildStats(await computeFilteredStats());
         }
@@ -8792,7 +8871,10 @@
                     stats.push({
                         id: 'dns_heuristics',
                         label: 'DNS Heuristics',
-                        count: dnsHeuristicsFlaggedCount,
+                        // A count computed for a different analysis renders
+                        // as 0 (no card) until this analysis's own refresh
+                        // lands - never another capture's number.
+                        count: dnsHeuristicsCountMd5 === currentMd5 ? dnsHeuristicsFlaggedCount : 0,
                         color: '#ff9800'
                     });
                 }
@@ -8820,7 +8902,7 @@
                 stats.push({
                     id: 'acknowledged',
                     label: 'Acknowledged Alerts',
-                    count: acknowledgedAlertsCount,
+                    count: acknowledgedAlertsCountMd5 === currentMd5 ? acknowledgedAlertsCount : 0,
                     color: 'var(--text-muted)'
                 });
             }
@@ -10945,6 +11027,16 @@
                     eventTypes = [];
                     currentFilters = {};
                     currentSearch = [];
+                    // Re-arm both lazy stat-card counts for the newly
+                    // opened analysis. Without this, only page load and
+                    // refreshAnalysisData() (search/acknowledge/filter
+                    // paths) ever set these, so switching analyses left
+                    // the previous one's Acknowledged Alerts / DNS
+                    // Heuristics counts in place - the md5 tag gating in
+                    // buildStats() hides the wrong number, but only this
+                    // re-arm makes the right one get computed.
+                    acknowledgedAlertsCountStale = true;
+                    dnsHeuristicsCountStale = true;
                     resetPagination();
                     hiddenAggregations = new Set();
                     aggPage = {}; aggFullCountsCache = {}; aggTotalsCache = {};

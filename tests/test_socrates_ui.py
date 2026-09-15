@@ -1266,6 +1266,20 @@ class TestUXFeatures(unittest.TestCase):
         self.assertIn("loadTabData(eventTypes[0])", func,
                       'loadAnalysis must call loadTabData after buildSections')
 
+    def test_loadAnalysis_rearms_lazy_stat_card_counts(self):
+        """REGRESSION: switching analyses goes through loadAnalysis(), which
+        never re-armed the lazy Acknowledged Alerts / DNS Heuristics count
+        refreshes (only page load and refreshAnalysisData() did). The
+        previous analysis's counts therefore carried over: a DNS Heuristics
+        card showing another capture's number (whose tab then said 'No
+        suspicious DNS activity detected'), or - with the md5 tag gating -
+        no card at all until a manual page reload recomputed it."""
+        func = JS_CONTENT.split('async function loadAnalysis')[1].split('async function')[0]
+        self.assertIn('dnsHeuristicsCountStale = true;', func,
+                      'loadAnalysis must re-arm the DNS Heuristics count refresh')
+        self.assertIn('acknowledgedAlertsCountStale = true;', func,
+                      'loadAnalysis must re-arm the Acknowledged Alerts count refresh')
+
     def test_loadAnalysis_uses_showAnalysisUI(self):
         """loadAnalysis must call showAnalysisUI after rebuilding the analysis view."""
         func = JS_CONTENT.split('async function loadAnalysis')[1].split('async function')[0]
@@ -11095,6 +11109,48 @@ class TestDnsHeuristicsScoring(unittest.TestCase):
     def _dns_event(self, rrname, rrtype='A', src_ip='10.0.0.5', timestamp='2026-01-01T00:00:00'):
         return {'event_type': 'dns', 'timestamp': timestamp, 'src_ip': src_ip, 'dns': {'rrname': rrname, 'rrtype': rrtype}}
 
+    def test_wordy_hyphenated_label_is_not_flagged_as_high_entropy(self):
+        """REGRESSION: prod-streaming-video-msn-com.akamaized.net (a real
+        false positive) - a long hyphenated word-mashup label clears the
+        raw entropy threshold, but words carry ~30-40% vowels while
+        encoded tunneling payloads sit under 20%, so the subdomain check
+        requires both (mirroring the DGA check's vowel guard)."""
+        from tests.jsdom_helper import js_statements
+        events = [self._dns_event('prod-streaming-video-msn-com.example-cdn.example')]
+        result = js_statements('''
+            window.__jsdom_result = { items: computeDnsHeuristics(''' + json.dumps(events) + ''') };
+        ''')
+        reasons = [r for i in result['items'] for r in i['reasons']]
+        self.assertNotIn('High-entropy subdomain', reasons,
+                         'a hyphenated word-mashup label must not read as a tunneling payload')
+
+    def test_encoded_payload_label_still_flags_after_vowel_guard(self):
+        """The vowel guard must not blind the tunneling check to actual
+        encoded payloads: a base32-style label (low vowel ratio, high
+        entropy) still flags."""
+        from tests.jsdom_helper import js_statements
+        events = [self._dns_event('mzxw6ytb0i2gk3tp0jsw65df.exfil-parent.example')]
+        result = js_statements('''
+            window.__jsdom_result = { items: computeDnsHeuristics(''' + json.dumps(events) + ''') };
+        ''')
+        reasons = [r for i in result['items'] for r in i['reasons']]
+        self.assertIn('High-entropy subdomain', reasons)
+
+    def test_akamaized_and_vendor_suffixes_are_excluded(self):
+        """REGRESSION: akamaized.net (Akamai CDN) and vendor domains like
+        microsoft.com/google.com must be excluded before scoring."""
+        from tests.jsdom_helper import js_statements
+        events = [
+            self._dns_event('prod-streaming-video-msn-com.akamaized.net'),
+            self._dns_event('msedge.b.tlu.dl.delivery.mp.microsoft.com'),
+            self._dns_event('ogads-pa.clients6.google.com'),
+        ]
+        result = js_statements('''
+            window.__jsdom_result = { items: computeDnsHeuristics(''' + json.dumps(events) + ''') };
+        ''')
+        self.assertEqual(result['items'], [],
+                         'CDN and vendor telemetry domains must never be scored')
+
     def test_dnsRegistrableSuffix_basic_two_label(self):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
@@ -12868,6 +12924,167 @@ class TestDnsHeuristicsTab(unittest.TestCase):
             window.__jsdom_result = { found: !!card };
         ''')
         self.assertFalse(result['found'], 'the card must not show when the analysis has no DNS events at all')
+
+    def test_stale_count_from_previous_analysis_never_renders_a_card(self):
+        """REGRESSION: viewing analysis A (with flagged domains) and then
+        switching to analysis B (with none) used to leave A's nonzero
+        flagged-count rendering a DNS Heuristics card on B - whose tab then
+        showed 'No suspicious DNS activity detected'. The count is now
+        tagged with the analysis it was computed for, and buildStats()
+        renders 0 (no card) whenever the tag doesn't match currentMd5.
+
+        (State is driven purely through functions/DOM: socrates.js's
+        top-level `let` variables are invisible to test-scope eval.)"""
+        from tests.jsdom_helper import js_statements
+        flagged = [{'event_type': 'dns', 'timestamp': '2026-01-01T00:00:00', 'src_ip': '10.0.0.5',
+                    'dns': {'rrname': '08kcbghk807qtl9.top', 'rrtype': 'A'}}]
+        result = js_statements(self._refresh_stats_js({'dns': 1}, dns_events=flagged) + '''
+            var findCard = function() {
+                return Array.from(document.querySelectorAll('#statsGrid .stat-card')).find(function(c) {
+                    return c.dataset.section === 'section-dns_heuristics';
+                });
+            };
+            var cardOnA = !!findCard();
+            // Switch to a different analysis and re-render synchronously -
+            // before any refresh for it could land, analysis A's count is
+            // the only thing in memory and must NOT produce a card here.
+            currentMd5 = 'analysis-b-md5';
+            buildStats(null);
+            var cardOnBImmediately = !!findCard();
+            window.__jsdom_result = { cardOnA: cardOnA, cardOnBImmediately: cardOnBImmediately };
+        ''')
+        self.assertTrue(result['cardOnA'], 'sanity: analysis A must show the card')
+        self.assertFalse(result['cardOnBImmediately'],
+                         "analysis A's flagged-count must not render a card on analysis B")
+
+    def test_acknowledged_count_shares_the_analysis_tag_gating(self):
+        """Parity with the DNS Heuristics tests above: the Acknowledged
+        Alerts count got the identical race fixes, so its stale count from
+        a previously viewed analysis must not render a card either. (Lives
+        here to reuse _refresh_stats_js; the flow under test is the same
+        buildStats() gating.)"""
+        from tests.jsdom_helper import js_statements
+        # dns_events non-empty makes the mocked /api/count return a nonzero
+        # acknowledged count for the initial analysis
+        events = [{'event_type': 'dns', 'timestamp': '2026-01-01T00:00:00', 'src_ip': '10.0.0.5',
+                   'dns': {'rrname': 'www.example.com', 'rrtype': 'A'}}]
+        result = js_statements(self._refresh_stats_js({'dns': 1, 'alert': 2}, dns_events=events) + '''
+            var findCard = function() {
+                return Array.from(document.querySelectorAll('#statsGrid .stat-card')).find(function(c) {
+                    return c.dataset.section === 'section-acknowledged';
+                });
+            };
+            var cardOnA = !!findCard();
+            currentMd5 = 'analysis-b-md5';
+            buildStats(null);
+            window.__jsdom_result = { cardOnA: cardOnA, cardOnBImmediately: !!findCard() };
+        ''')
+        self.assertTrue(result['cardOnA'], 'sanity: analysis A must show the Acknowledged Alerts card')
+        self.assertFalse(result['cardOnBImmediately'],
+                         "analysis A's acknowledged count must not render a card on analysis B")
+
+    def test_refresh_discards_result_when_analysis_switches_mid_flight(self):
+        """REGRESSION: refreshDnsHeuristicsCount() is fire-and-forget; if
+        the user switches analyses while its fetch is in flight, the result
+        belongs to the old analysis. It must be discarded (no card on the
+        new analysis) and the stale flag re-armed so the next buildStats()
+        recomputes against the new analysis - verified behaviorally via a
+        follow-up buildStats() whose re-fetch then lands correctly."""
+        from tests.jsdom_helper import js_statements
+        flagged = [{'event_type': 'dns', 'timestamp': '2026-01-01T00:00:00', 'src_ip': '10.0.0.5',
+                    'dns': {'rrname': '08kcbghk807qtl9.top', 'rrtype': 'A'}}]
+        result = js_statements(self._refresh_stats_js({'dns': 1}) + '''
+            var findCard = function() {
+                return Array.from(document.querySelectorAll('#statsGrid .stat-card')).find(function(c) {
+                    return c.dataset.section === 'section-dns_heuristics';
+                });
+            };
+            var flagged = ''' + json.dumps(flagged) + ''';
+            // A controllable in-flight fetch for the count refresh.
+            var resolveFetch = null;
+            window.fetch = function(url) {
+                var u = String(url);
+                if (u.indexOf('/api/events') >= 0 && u.indexOf('type=dns') >= 0) {
+                    return new Promise(function(resolve) {
+                        resolveFetch = function(payload) {
+                            resolve({ ok: true, json: function() { return Promise.resolve(payload); } });
+                        };
+                    });
+                }
+                return Promise.resolve({ ok: true, json: function() { return Promise.resolve({ count: 0 }); } });
+            };
+            currentMd5 = 'analysis-a';
+            var p = refreshDnsHeuristicsCount();
+            // switch analyses while the fetch is still pending, then let
+            // the old analysis's flagged result arrive late
+            currentMd5 = 'analysis-b';
+            resolveFetch(flagged);
+            await p;
+            // Working fetch for analysis B before the next buildStats()
+            // consumes the re-armed stale flag and fires its refresh.
+            window.fetch = function(url) {
+                var u = String(url);
+                if (u.indexOf('/api/events') >= 0 && u.indexOf('type=dns') >= 0) {
+                    return Promise.resolve({ ok: true, json: function() { return Promise.resolve(flagged); } });
+                }
+                return Promise.resolve({ ok: true, json: function() { return Promise.resolve({ count: 0 }); } });
+            };
+            buildStats(null);
+            // Synchronous check: the refresh fired by that buildStats()
+            // hasn't landed yet, so any card here could only come from
+            // the discarded in-flight result.
+            var cardAfterLateResult = !!findCard();
+            await new Promise(function(r) { setTimeout(r, 50); });
+            var cardAfterRetry = !!findCard();
+            window.__jsdom_result = { cardAfterLateResult: cardAfterLateResult, cardAfterRetry: cardAfterRetry };
+        ''')
+        self.assertFalse(result['cardAfterLateResult'],
+                         "a result that arrived after switching analyses must not render a card")
+        self.assertTrue(result['cardAfterRetry'],
+                        'the stale flag must re-arm so the next buildStats() recomputes for the new analysis')
+
+    def test_error_payload_rearms_refresh_instead_of_locking_in_zero(self):
+        """REGRESSION: while an analysis is still processing, /api/events
+        can return an error object instead of an array. That used to lock
+        in a wrong 0 (stale flag already consumed), leaving the card
+        missing until a manual page refresh. A non-array payload must
+        re-arm the lazy refresh so a later buildStats() retries - verified
+        behaviorally: after the error, a buildStats() with a working fetch
+        makes the card appear."""
+        from tests.jsdom_helper import js_statements
+        flagged = [{'event_type': 'dns', 'timestamp': '2026-01-01T00:00:00', 'src_ip': '10.0.0.5',
+                    'dns': {'rrname': '08kcbghk807qtl9.top', 'rrtype': 'A'}}]
+        result = js_statements(self._refresh_stats_js({'dns': 1}) + '''
+            var findCard = function() {
+                return Array.from(document.querySelectorAll('#statsGrid .stat-card')).find(function(c) {
+                    return c.dataset.section === 'section-dns_heuristics';
+                });
+            };
+            var flagged = ''' + json.dumps(flagged) + ''';
+            // Analysis still processing: the events endpoint errors.
+            window.fetch = function(url) {
+                return Promise.resolve({ ok: false, json: function() {
+                    return Promise.resolve({ error: 'still processing' });
+                } });
+            };
+            await refreshDnsHeuristicsCount();
+            // Analysis finished: the endpoint works now. The next
+            // buildStats() must retry (re-armed stale flag) and render
+            // the card - pre-fix it never retried and the card stayed
+            // missing until a manual page refresh.
+            window.fetch = function(url) {
+                var u = String(url);
+                if (u.indexOf('/api/events') >= 0 && u.indexOf('type=dns') >= 0) {
+                    return Promise.resolve({ ok: true, json: function() { return Promise.resolve(flagged); } });
+                }
+                return Promise.resolve({ ok: true, json: function() { return Promise.resolve({ count: 0 }); } });
+            };
+            buildStats(null);
+            await new Promise(function(r) { setTimeout(r, 50); });
+            window.__jsdom_result = { cardAfterRetry: !!findCard() };
+        ''')
+        self.assertTrue(result['cardAfterRetry'],
+                        'after an error payload, the next buildStats() must retry and render the card')
 
     def test_buildStats_card_count_is_flagged_domains_not_raw_dns_count(self):
         """REGRESSION GUARD: the actual bug report - a capture with 157 DNS
