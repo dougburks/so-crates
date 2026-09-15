@@ -5780,6 +5780,7 @@
         const RULESET_LABELS = { suricata: 'Suricata', yara: 'YARA', sigma: 'Sigma' };
 
         let rulesPollInterval = null;
+        let rulesModalLastRenderedHtml = null;
         // Separate 1s ticker just for the "Updating… Ns" elapsed-time
         // display, so it counts up every second instead of only jumping
         // every 2s alongside rulesPollInterval's actual network fetch.
@@ -6152,6 +6153,19 @@
             if (selection && !selection.isCollapsed && modalBody.contains(selection.anchorNode)) {
                 return;
             }
+            // Skip the replacement entirely when nothing visible changed -
+            // an idle modal (no update running) renders byte-identical HTML
+            // on every 2s poll tick, and replacing anyway swaps every node
+            // out from under an in-progress click: a human press spans
+            // ~100ms+, and if the rebuild lands between mousedown and
+            // mouseup the browser never fires click on the button at all
+            // (the two targets are different nodes). Reported as "after
+            // Revert to Default, the Update button needs two clicks".
+            const html = renderRulesModalBody(info, status);
+            if (html === rulesModalLastRenderedHtml) {
+                return;
+            }
+            rulesModalLastRenderedHtml = html;
             const scrollPositions = {};
             modalBody.querySelectorAll('.rule-update-log').forEach(function(el) {
                 scrollPositions[el.dataset.ruleset] = el.scrollTop;
@@ -6162,7 +6176,7 @@
             // poll tick just like they do.
             const sourcesListEl = modalBody.querySelector('.suricata-sources-list');
             const sourcesScrollTop = sourcesListEl ? sourcesListEl.scrollTop : null;
-            modalBody.innerHTML = renderRulesModalBody(info, status);
+            modalBody.innerHTML = html;
             modalBody.querySelectorAll('.rule-update-log').forEach(function(el) {
                 if (el.dataset.ruleset in scrollPositions) {
                     el.scrollTop = scrollPositions[el.dataset.ruleset];

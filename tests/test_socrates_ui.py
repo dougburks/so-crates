@@ -19760,11 +19760,18 @@ class TestRulesModal(unittest.TestCase):
         running_status = json.loads(json.dumps(RULE_UPDATE_STATUS_IDLE))
         running_status['suricata'] = {'running': True, 'lines': ['line 1', 'line 2'], 'done': False, 'error': None}
         result = js_statements('''
+            // Log lines grow between polls (as they do during a real
+            // update run) - identical content would now skip the replace
+            // entirely (see the unchanged-content regression test below).
+            var pollCount = 0;
             window.fetch = function(url) {
                 if (url === '/api/rules-info') {
                     return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULES_INFO_RESPONSE) + ''') });
                 }
-                return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(running_status) + ''') });
+                pollCount++;
+                var status = JSON.parse(JSON.stringify(''' + json.dumps(running_status) + '''));
+                status.suricata.lines.push('line ' + (2 + pollCount));
+                return Promise.resolve({ json: () => Promise.resolve(status) });
             };
             await refreshRulesModal();
             toggleRuleLog('suricata');
@@ -19788,9 +19795,15 @@ class TestRulesModal(unittest.TestCase):
         result = js_statements('''
             localStorage.setItem('socrates_hideHelp', 'true');
             await new Promise(r => setTimeout(r, 50));
+            // The rule count changes between polls so the re-render
+            // actually replaces the DOM - identical content now skips it.
+            var infoPolls = 0;
             window.fetch = function(url) {
                 if (url === '/api/rules-info') {
-                    return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULES_INFO_RESPONSE) + ''') });
+                    infoPolls++;
+                    var info = JSON.parse(JSON.stringify(''' + json.dumps(RULES_INFO_RESPONSE) + '''));
+                    info.suricata.count = (info.suricata.count || 0) + infoPolls;
+                    return Promise.resolve({ json: () => Promise.resolve(info) });
                 }
                 return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULE_UPDATE_STATUS_IDLE) + ''') });
             };
@@ -19842,6 +19855,46 @@ class TestRulesModal(unittest.TestCase):
         ''')
         self.assertTrue(result['sameElementKept'], 'poll tick must skip the innerHTML replace while a selection lives inside the log')
         self.assertTrue(result['selectionSurvived'], 'text selection inside the log must survive a poll tick')
+
+    def test_unchanged_poll_tick_keeps_dom_nodes_for_in_flight_clicks(self):
+        """REGRESSION: an idle Rules modal renders byte-identical HTML on
+        every 2s poll tick, and replacing the body anyway swapped every
+        button out from under an in-progress click - a human press spans
+        ~100ms+, and a rebuild between mousedown and mouseup means the
+        click never fires (reported as 'after Revert to Default, the
+        Update button needs two clicks'). Identical content must skip the
+        replacement so the same nodes stay clickable."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.fetch = function(url) {
+                if (url === '/api/rules-info') {
+                    return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULES_INFO_RESPONSE) + ''') });
+                }
+                return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULE_UPDATE_STATUS_IDLE) + ''') });
+            };
+            await refreshRulesModal();
+            var btn = document.querySelector('[data-action="update-ruleset"][data-arg="suricata"]');
+            btn.__clickTarget = true;
+            await refreshRulesModal();
+            await refreshRulesModal();
+            var btnAfter = document.querySelector('[data-action="update-ruleset"][data-arg="suricata"]');
+            // and after a client-side revert, the re-render (content DID
+            // change) then the next identical poll must again hold steady
+            resetSuricataSourcesToDefault();
+            var btnPostRevert = document.querySelector('[data-action="update-ruleset"][data-arg="suricata"]');
+            btnPostRevert.__clickTarget = true;
+            await refreshRulesModal();
+            var btnPostRevertAfterPoll = document.querySelector('[data-action="update-ruleset"][data-arg="suricata"]');
+            window.__jsdom_result = {
+                sameNodeAcrossIdlePolls: btnAfter === btn && btnAfter.__clickTarget === true,
+                sameNodeAfterRevertThenPoll: btnPostRevertAfterPoll === btnPostRevert
+                    && btnPostRevertAfterPoll.__clickTarget === true,
+            };
+        ''')
+        self.assertTrue(result['sameNodeAcrossIdlePolls'],
+                        'idle poll ticks must not replace the Update button node')
+        self.assertTrue(result['sameNodeAfterRevertThenPoll'],
+                        'the poll tick after a revert re-render must not replace the Update button node')
 
     def test_escape_closes_rules_modal(self):
         from tests.jsdom_helper import js_statements
