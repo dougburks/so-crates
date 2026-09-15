@@ -2,6 +2,40 @@
 
 Once you've connected to SO-CRATES in your browser, here are some of the things you can do.
 
+## Screenshot Tour
+
+When you first connect to SO-CRATES, a welcome window will appear with an overview of SO-CRATES:
+
+![Welcome screen](images/so-crates-welcome.png)
+
+When you dismiss the welcome window, the main screen allows you to upload a file or load a previous analysis:
+
+![Main screen](images/so-crates-main.png)
+
+After analysis, you can view network alerts, file alerts, network metadata, and extracted streams:
+
+![Analysis screen](images/so-crates-analysis.png)
+
+Clicking a value in the data table opens a pivot menu for Include/Exclude/Only filtering, Hunt, and Correlate - which searches for every other log across the capture sharing that row's community ID (the cross-tool flow-correlation hash, computed by Suricata - force-enabled in 4.1.0):
+
+![Pivot menu](images/so-crates-pivot-menu.png)
+
+Drilling into a Suricata, Sigma, or YARA alert shows an AI-generated summary of what the rule detects, when one is available for that rule. Suricata and Sigma alerts also show a Playbook with plain-English investigation guidance for that specific detection:
+
+![Playbook](images/so-crates-playbook.png)
+
+You can optionally collapse the Playbook questions. You can also scroll to the bottom to see the ASCII transcript:
+
+![ASCII transcript view](images/so-crates-transcript.png)
+
+You can also select the hexdump view:
+
+![Hexdump view](images/so-crates-hexdump.png)
+
+To slice and dice your data, expand the Aggregation Tables section and click on values that you want to filter for:
+
+![Aggregation table filtering](images/so-crates-aggregation-filtering.png)
+
 ## Analyze a File
 
 1. **Upload a file** - click "Choose File" and select a `.pcap`, `.pcapng`, `.cap`, `.trace`, `.evtx`, `.json`, `.jsonl`, `.csv`, `.xml`, `.log`, or any other file type (or a `.zip` containing one). File types are auto-detected:
@@ -18,7 +52,7 @@ After analysis completes, the UI displays different views depending on the file 
 
 **For PCAP files:**
 
-- **Stats Grid** - clickable cards showing event counts by type (Alerts, DNS, HTTP, TLS, Flows, etc.). If you've enabled "Show protocol-anomaly noise alerts" (Gear Menu → Rules), those alerts get their own **Decoder Alerts** card instead of mixing into Network Alerts. A **DNS Heuristics** card appears immediately before DNS whenever any domain in the capture trips a scoring flag; see [DNS Heuristics](#dns-heuristics) below
+- **Stats Grid** - clickable cards showing event counts by type (Alerts, DNS, HTTP, TLS, Flows, etc.). If you've enabled "Show protocol-anomaly noise alerts" (Gear Menu → Rules), those alerts get their own **Decoder Alerts** card instead of mixing into Network Alerts. A **DNS Heuristics** card appears immediately before the **DNS Queries** card whenever any domain in the capture trips a scoring flag; see [DNS Heuristics](#dns-heuristics) below
 - **Sankey Diagram** - expand the collapsible heading to visualize network flow relationships (Source IP → Dest IP → Dest Port)
 - **Aggregation Tables** - frequency counts for each column; click a value to open the [pivot menu](#pivot-menu). Each table pages through its values with Prev/Next instead of growing the page, at a size (10/25/50/100) set by the "Items per page" selector, which applies to every table in the section and persists across sessions
 - **Data Table** - sortable table with expandable detail rows showing full event JSON, ASCII transcripts, and hexdumps. Every row's flow carries a community ID, and a TLS row's detail panel includes JA3/JA3S/JA4 fingerprints whenever present - both computed by Suricata automatically, no configuration needed
@@ -39,7 +73,15 @@ After analysis completes, the UI displays different views depending on the file 
 
 ## DNS Heuristics
 
-When a capture contains DNS queries, a **DNS Heuristics** card appears on the Stats Grid immediately before the **DNS** card, but only once at least one domain in the capture trips a flag - it's simply absent otherwise. Opening it groups every DNS query by registrable domain and scores each one 0-100 against five independent signals: a high-entropy subdomain prefix under an otherwise ordinary parent domain (the classic DNS tunneling shape), a high-entropy/low-vowel-ratio registrable domain itself (the DGA - Domain Generation Algorithm - shape), 15 or more distinct subdomains queried under the same parent (fan-out, not just repeated lookups of the same name), an unusually long query name or label, and TXT/NULL query types, more associated with tunneling/exfil tooling than ordinary browsing. Known CDN domains are excluded before scoring to cut noise. A collapsible **About DNS Heuristics** info card at the top of the tab explains the scoring in place. Clicking a flagged domain's row searches for it and jumps straight to the real **DNS Queries** tab so you can see every individual query behind the score - unlike every other tab, a row here doesn't expand a detail panel in place. Treat a flag as a lead to investigate, not a confirmed verdict.
+When a capture contains DNS queries, a **DNS Heuristics** card appears on the Stats Grid immediately before the **DNS Queries** card, but only once at least one domain in the capture trips a flag - it's simply absent otherwise. Opening it groups every DNS query by registrable domain and scores each one 0-100 against five independent signals:
+
+- a high-entropy subdomain prefix under an otherwise ordinary parent domain (the classic DNS tunneling shape)
+- a high-entropy/low-vowel-ratio registrable domain itself (the DGA (Domain Generation Algorithm) shape)
+- 15 or more distinct subdomains queried under the same parent (fan-out, not just repeated lookups of the same name)
+- an unusually long query name or label
+- TXT/NULL query types, more associated with tunneling/exfil tooling than ordinary browsing
+
+Known CDN domains are excluded before scoring to cut noise. A collapsible **About DNS Heuristics** info card at the top of the tab explains the scoring in place. Clicking a flagged domain's row searches for it and jumps straight to the real **DNS Queries** tab so you can see every individual query behind the score - unlike every other tab, a row here doesn't expand a detail panel in place. Treat a flag as a lead to investigate, not a confirmed verdict.
 
 ## Pivot Menu
 
@@ -60,16 +102,16 @@ The **Acknowledged Alerts** stat-card tab (PCAP analyses only) is the only place
 
 ## AI Summary
 
-Expanding a Suricata alert, Sigma alert, or YARA file match shows an **AI Summary** field right at the top of Alert Details/Sigma Rule/Rule - a one-paragraph, plain-English explanation of what the rule actually detects. It only appears if a summary is actually available for that specific rule (there's no generic fallback, unlike Playbook below - a summary for the wrong rule would be misleading). A file with more than one YARA match shows one summary per match. AI Summary data ships baked into the official Docker/Podman image - a manually-installed (non-container) deployment won't see this field unless the maintainer has set it up with its own summary data (see [Development Setup](development-setup.md#environment-variables)).
+Expanding a Suricata alert, Sigma alert, or YARA file match shows an **AI Summary** field right at the top of Alert Details/Sigma Rule/Rule - a one-paragraph, plain-English explanation of what the rule actually detects. It only appears if a summary is actually available for that specific rule (there's no generic fallback, unlike Playbook below - a summary for the wrong rule would be misleading). A file with more than one YARA match shows one summary per match. Both AI summaries and the playbooks below are pre-generated by AI - nothing is sent to an AI service at analysis time. AI Summary data ships baked into the official Docker/Podman image - a manually-installed (non-container) deployment won't see this field unless the maintainer has set it up with its own summary data (see [Development Setup](development-setup.md#environment-variables)).
 
 ## Playbook
 
-Expanding a Suricata or Sigma alert shows a **Playbook** section (after Alert Details/Sigma Rule) with plain-English investigation guidance for that specific detection - a name, description, and a list of questions to help guide your investigation, which you can collapse if it's in the way while you're also looking at the Rule/Payload sections. The section only appears if a playbook is actually available for that detection; if none is available, no trace of the feature shows at all. Playbook data ships baked into the official Docker/Podman image - a manually-installed (non-container) deployment won't see this section unless the maintainer has set it up with its own playbook data (see [Development Setup](development-setup.md#environment-variables)).
+Expanding a Suricata or Sigma alert shows a **Playbook** section (after Alert Details/Sigma Rule) with plain-English investigation guidance for that specific detection - a name, description, and a list of questions to help guide your investigation, which you can collapse if it's in the way while you're also looking at the Rule/Payload sections. If no playbook exists for that specific detection, a generic engine-wide playbook is shown instead; the section is absent only when no playbook data is installed at all. Playbook data ships baked into the official Docker/Podman image - a manually-installed (non-container) deployment won't see this section unless the maintainer has set it up with its own playbook data (see [Development Setup](development-setup.md#environment-variables)).
 
 ## Notes
 
-- **Analysis notes** - the notes icon in the app header (next to the reanalyze icon) lets you attach freeform investigation context to the whole analysis ("suspected GuLoader, C2 at x.top"). Always available once an analysis is loaded.
-- **Row-level notes** - expand a row's detail panel and use the Notes section's **+ Add Note** link to attach a short annotation to that specific piece of evidence ("false positive, known scanner", "escalated to IR ticket #4521"), separate from the analysis-wide notes above. Once a row has a note, a small note icon appears directly on that row for quick access/editing without expanding it again. Row-level notes are lost if you reanalyze the file (which rebuilds the underlying database from scratch) - the reanalyze confirmation dialog warns you if the analysis has any before you confirm.
+- **Analysis notes** - the notes icon in the app header (next to the reanalyze icon) lets you attach freeform investigation context to the whole analysis ("suspected GuLoader, C2 at x.top"). Always available once an analysis is loaded
+- **Row-level notes** - expand a row's detail panel and use the Notes section's **+ Add Note** link to attach a short annotation to that specific piece of evidence ("false positive, known scanner", "escalated to IR ticket #4521"), separate from the analysis-wide notes above. Once a row has a note, a small note icon appears directly on that row for quick access/editing without expanding it again. Row-level notes are lost if you reanalyze the file (which rebuilds the underlying database from scratch) - the reanalyze confirmation dialog warns you if the analysis has any before you confirm
 
 ## Stream Analysis
 
@@ -83,7 +125,7 @@ Click a row's timestamp cell (or use the pivot menu's **Expand Row** entry) to e
 
 Arrow keys navigate rather than scroll the page, and adapt to what's on screen:
 
-- **Left/Right** - on the welcome screen, moves between the sample-file cards; on an analysis page, switches between stat-card tabs, or between Aggregation Tables (or, once on a table's Prev/Next stop, toggles between the two) when the ring is inside that section
+- **Left/Right** - on the welcome screen, moves between the sample-file cards; on an analysis page, switches between stat-card tabs, or between Aggregation Tables (or, once on a table's Prev/Next stop, toggles between the two) when the keyboard highlight is inside that section
 - **Up/Down** - on the welcome screen, moves between rows in Previous Analyses; on an analysis page, moves between rows in the visible data table. Inside the Aggregation Tables section, Down walks a table's own rows and then its Prev/Next stop before continuing into the next visual row of tables (or the Data Table if there isn't one) - Up retraces the same path in reverse
 - **Enter** - activates whatever's currently highlighted (opens a sample or previous analysis, or expands/collapses a table row) - the same as clicking it
 - **Escape** - closes whatever's open (a modal, the gear menu, a pivot menu) one level at a time, then returns to the welcome screen once nothing else is open
@@ -93,7 +135,7 @@ When the [Themes](themes.md) modal is open, all four arrow keys instead move a h
 
 ### Command Palette
 
-Typing any letter or digit outside a text field opens a command palette, pre-filled with what you typed. Keep typing to narrow the list, Up/Down to highlight a candidate, Enter to commit it (or Escape to cancel without doing anything). A query matches anywhere in a candidate, not just its very first word - typing `alerts` finds both **Network Alerts** and **File Alerts**, `blue` finds every Fun theme with "Blue" in its name, and even a bare mid-word fragment like `eme` finds **Open Themes**. Results that match at the very start rank above word-boundary matches, which rank above a bare mid-word match, so a short, precise query never gets buried. It matches:
+Typing any letter or digit outside a text field opens a command palette, pre-filled with what you typed. Keep typing to narrow the list, Up/Down to highlight a candidate, Enter to commit it (or Escape to cancel without doing anything). A query matches anywhere in a candidate, not just its very first word - typing `alerts` finds both **Network Alerts** and **File Alerts**, `blue` finds every Fun theme with "Blue" in its name, and even a bare mid-word fragment like `eme` finds **Themes**. Results that match at the very start rank above word-boundary matches, which rank above a bare mid-word match, so a short, precise query never gets buried. It matches:
 
 - Any theme's own name (e.g. `gruvbox`, `cga`, `breadbin blue`) - switches to it directly, the same as picking it from the [Themes](themes.md) modal
 - Any data-type stat-card tab currently on screen (e.g. `dns`, `http`, `all events`) - switches to that tab, the same as clicking it
@@ -105,7 +147,7 @@ Typing any letter or digit outside a text field opens a command palette, pre-fil
 - `rename analysis` (analysis page only) - starts renaming the current analysis, same as clicking its filename in the header
 - `notes` (analysis page only) - opens the Notes modal for the current analysis
 - `delete` (analysis page only) - opens the delete-confirmation modal for the current analysis (still requires confirming there before anything is actually deleted)
-- `re-analyze` (analysis page only) - opens the re-analyze confirmation modal for the current analysis
+- `re-analyze` (analysis page only) - opens the reanalyze confirmation modal for the current analysis
 - `search` (analysis page only) - focuses the search bar instead of opening a modal
 - `clear` (analysis page only) - clears all active search terms/filters, same as the filter bar's own Clear All button
 - `sankey` (analysis page only) - collapses or expands the Sankey Diagram section

@@ -5,12 +5,16 @@ repo_url: https://github.com/dougburks/so-crates
 repo_name: dougburks/so-crates
 docs_dir: docs
 
+watch:
+  - overrides
+
 plugins:
   - glightbox
   - search
 
 theme:
   name: material
+  custom_dir: overrides
   features:
     - content.code.copy
     - navigation.footer
