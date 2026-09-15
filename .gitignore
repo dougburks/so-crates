@@ -41,6 +41,7 @@ Thumbs.db
 venv/
 env/
 .venv/
+.venv-*/
 
 # Node.js
 node_modules/

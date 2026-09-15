@@ -187,8 +187,10 @@ window.eval(jsContent);
     env = os.environ.copy()
     env['NODE_PATH'] = NODE_MODULES
 
-    # Write script to temp file (avoids "Argument list too long" error)
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False, dir=PROJECT_ROOT) as f:
+    # Write script to temp file (avoids "Argument list too long" error).
+    # System temp dir, not PROJECT_ROOT: a hard-killed test run would
+    # otherwise strand ~840KB tmp*.js orphans in the repo root.
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False) as f:
         f.write(node_script)
         script_path = f.name
 
