@@ -205,8 +205,15 @@ def validate_zip_extraction(zip_ref, extract_path, max_size=None):
     """
     if max_size is None:
         max_size = config.MAX_UPLOAD_SIZE
+    members = zip_ref.namelist()
+    # Each member becomes its own analysis (pcaps each spawn a Suricata
+    # process), so an unbounded member count is a fork/OOM vector even when
+    # the total decompressed size is tiny.
+    if len(members) > config.MAX_ZIP_MEMBERS:
+        raise ValueError(
+            f"ZIP contains too many files ({len(members)}, max {config.MAX_ZIP_MEMBERS})")
     total_uncompressed = 0
-    for member in zip_ref.namelist():
+    for member in members:
         member_path = os.path.realpath(os.path.join(extract_path, member))
         if not member_path.startswith(os.path.realpath(extract_path) + os.sep):
             raise ValueError(f"Zip slip detected: {member}")

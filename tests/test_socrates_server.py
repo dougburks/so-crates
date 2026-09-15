@@ -4980,9 +4980,9 @@ class TestSizeLimitMessages(unittest.TestCase):
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
         error_count = content.count('max {MAX_EVE_SIZE // (1024*1024)}MB')
-        error_text_count = content.count('eve.json too large')
+        error_text_count = content.count('Analysis data too large to load')
         self.assertGreaterEqual(error_count, 1, 'Error message appears at least once')
-        self.assertGreaterEqual(error_text_count, 1, 'eve.json too large text appears at least once')
+        self.assertGreaterEqual(error_text_count, 1, 'too-large error text appears at least once')
 
 
 class TestHTMLNoDuplicateFunctions(unittest.TestCase):
@@ -6360,7 +6360,7 @@ class TestCheckDiskSpace(unittest.TestCase):
         with unittest.mock.patch('shutil.disk_usage', return_value=fake_usage):
             result = handler._check_disk_space(100 * 1024 * 1024)
         self.assertFalse(result)
-        handler._send_error.assert_called_once_with(507, 'Not enough disk space available for this upload')
+        handler._send_error.assert_called_once_with(507, 'Not enough disk space available on the server for this upload')
 
     def test_allows_when_ample_space(self):
         handler = self._make_handler()
@@ -7269,6 +7269,45 @@ class TestIngressDefenses(unittest.TestCase):
     def test_static_legit_file_served(self):
         status, _ = self._raw('GET', '/static/socrates.css')
         self.assertEqual(status, 200)
+
+
+class TestErrorTextSanitizer(unittest.TestCase):
+    def test_data_dir_paths_stripped(self):
+        msg = server._sanitize_error_text(
+            "YARA scan failed: [Errno 13] Permission denied: '%s'"
+            % os.path.join(server.DATA_DIR, 'abc', 'file.bin'))
+        self.assertNotIn(server.DATA_DIR, msg)
+
+    def test_other_absolute_paths_redacted(self):
+        msg = server._sanitize_error_text(
+            'Suricata failed: /usr/lib/suricata/suricata.yaml missing')
+        self.assertNotIn('/usr/lib/', msg)
+        self.assertIn('<path>', msg)
+
+    def test_plain_message_unchanged(self):
+        msg = 'Suricata failed to start: command not found'
+        self.assertEqual(server._sanitize_error_text(msg), msg)
+
+
+class TestRunCapped(unittest.TestCase):
+    def test_output_capped_and_flagged(self):
+        rc, out, truncated = server._run_capped(
+            ['python3', '-c', 'import sys; sys.stdout.write("x" * 1000000)'],
+            max_bytes=1000, timeout=30)
+        self.assertTrue(truncated)
+        self.assertEqual(len(out), 1000)
+
+    def test_small_output_untruncated(self):
+        rc, out, truncated = server._run_capped(
+            ['python3', '-c', 'print("hello")'], max_bytes=1000, timeout=30, text=True)
+        self.assertEqual(rc, 0)
+        self.assertFalse(truncated)
+        self.assertEqual(out.strip(), 'hello')
+
+    def test_timeout_raises(self):
+        import subprocess as sp
+        with self.assertRaises(sp.TimeoutExpired):
+            server._run_capped(['sleep', '30'], max_bytes=1000, timeout=1)
 
 
 if __name__ == '__main__':

@@ -549,5 +549,33 @@ class TestReservedArtifactFilenames(unittest.TestCase):
                          'my_yara_matches.json')
 
 
+class TestZipMemberCap(unittest.TestCase):
+    """validate_zip_extraction must cap member count - each member becomes
+    its own analysis (pcaps each spawn a Suricata process)."""
+
+    def _make_zip(self, count):
+        import io, zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            for i in range(count):
+                zf.writestr(f'file{i}.log', 'x')
+        buf.seek(0)
+        return zipfile.ZipFile(buf)
+
+    def test_over_cap_rejected(self):
+        import tempfile, config
+        with self._make_zip(config.MAX_ZIP_MEMBERS + 1) as zf, \
+                tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(ValueError) as ctx:
+                validators.validate_zip_extraction(zf, td)
+            self.assertIn('too many files', str(ctx.exception))
+
+    def test_at_cap_allowed(self):
+        import tempfile, config
+        with self._make_zip(config.MAX_ZIP_MEMBERS) as zf, \
+                tempfile.TemporaryDirectory() as td:
+            validators.validate_zip_extraction(zf, td)  # must not raise
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -118,6 +118,61 @@ def _evict_analysis_cache(md5):
                 del cache[key]
 
 
+def _sanitize_error_text(text):
+    """Redact server filesystem paths from client-facing .error text -
+    exception strings routinely embed absolute paths (data dir, tool
+    locations) that a browser client has no use for."""
+    text = text.replace(DATA_DIR + os.sep, '').replace(DATA_DIR, '')
+    return re.sub(r'(?:^|(?<=[\s:\'"(]))/(?:[\w.+-]+/)+[\w.+-]+', '<path>', text)
+
+
+def _run_capped(cmd, max_bytes, timeout, text=False):
+    """Run a command capturing stdout up to max_bytes.
+
+    subprocess.run(capture_output=True) buffers the entire stdout in RAM
+    before any size cap can apply - for pcap-derived streams that can be
+    gigabytes. Read incrementally instead and kill the process once the cap
+    is reached. Returns (returncode, output, truncated); raises
+    subprocess.TimeoutExpired on timeout, matching subprocess.run.
+    """
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    timed_out = [False]
+
+    def _kill_on_timeout():
+        timed_out[0] = True
+        proc.kill()
+
+    timer = threading.Timer(timeout, _kill_on_timeout)
+    timer.start()
+    chunks = []
+    total = 0
+    truncated = False
+    try:
+        while True:
+            chunk = proc.stdout.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                chunks.append(chunk[:max_bytes - (total - len(chunk))])
+                truncated = True
+                proc.kill()
+                break
+            chunks.append(chunk)
+        proc.wait()
+    finally:
+        timer.cancel()
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    if timed_out[0]:
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    data = b''.join(chunks)
+    if text:
+        data = data.decode('utf-8', errors='replace')
+    return proc.returncode, data, truncated
+
+
 def _cache_put(cache, key, value):
     """Insert into an analysis cache; caller must hold _CACHE_LOCK."""
     if len(cache) >= _CACHE_MAX_ENTRIES:
@@ -609,7 +664,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except OSError:
             return True
         if free < required_bytes + config.DISK_SPACE_SAFETY_MARGIN:
-            self._send_error(507, 'Not enough disk space available for this upload')
+            self._send_error(507, 'Not enough disk space available on the server for this upload')
             return False
         return True
 
@@ -681,7 +736,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         non-internal string suitable for client responses.
         """
         if not md5:
-            return None, 'md5 parameter required'
+            return None, 'MD5 parameter required'
         if not MD5_RE.match(md5):
             return None, 'Invalid MD5'
         dir_path = os.path.join(DATA_DIR, md5)
@@ -1159,18 +1214,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         dport = result['dport']
 
         try:
-            proc = subprocess.run(
+            returncode, stdout, truncated = _run_capped(
                 ['tcpdump', '-r', pcap, '-w', '-', f"host {src} and host {dst} and port {sport} and port {dport}"],
-                capture_output=True, timeout=config.STREAM_TIMEOUT_SECONDS
+                max_bytes=config.MAX_STREAM_DOWNLOAD_SIZE,
+                timeout=config.STREAM_TIMEOUT_SECONDS
             )
-            if proc.returncode == 0 and len(proc.stdout) > 0:
+            if truncated:
+                # A cut-off pcap is a corrupt download - refuse rather than
+                # serve a partial file that looks complete.
+                self._send_error(413, 'Stream too large to download')
+            elif returncode == 0 and len(stdout) > 0:
                 filename = f"stream_{src}_{sport}_to_{dst}_{dport}.pcap"
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/vnd.tcpdump.pcap')
                 self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
-                self.send_header('Content-Length', str(len(proc.stdout)))
+                self.send_header('Content-Length', str(len(stdout)))
                 self.end_headers()
-                self.wfile.write(proc.stdout)
+                self.wfile.write(stdout)
             else:
                 self._send_error(404, 'No packets found')
         except subprocess.TimeoutExpired:
@@ -1219,14 +1279,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(500, 'Internal server error')
 
     def _extract_payload_lines(self, pcap, src, sport, dst, dport, proto):
-        result = subprocess.run(
+        # Capped read: the response is trimmed to MAX_TRANSCRIPT_* far below
+        # this, so anything past the cap could never be shown anyway.
+        _, stdout, _ = _run_capped(
             ['tshark', '-r', pcap, '-Y',
              f'ip.addr == {src} && ip.addr == {dst} && {proto}.port == {sport} && {proto}.port == {dport}',
              '-T', 'fields', '-e', 'ip.src', '-e', f'{proto}.payload'],
-            capture_output=True, text=True, timeout=config.STREAM_TIMEOUT_SECONDS
+            max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
+            timeout=config.STREAM_TIMEOUT_SECONDS, text=True
         )
         lines = []
-        for line in result.stdout.strip().split('\n'):
+        for line in stdout.strip().split('\n'):
             if not line.strip():
                 continue
             parts = line.split('\t')
@@ -1259,17 +1322,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         dport = result['dport']
 
         try:
-            proc = subprocess.run(
+            _, stdout, raw_truncated = _run_capped(
                 ['tcpdump', '-r', pcap, '-X', '-nn',
                  f'host {src} and host {dst} and port {sport} and port {dport}'],
-                capture_output=True, text=True, timeout=config.STREAM_TIMEOUT_SECONDS
+                max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
+                timeout=config.STREAM_TIMEOUT_SECONDS, text=True
             )
             packets = []
             current_packet = None
             total_chars = 0
-            truncated = False
+            truncated = raw_truncated
 
-            for line in proc.stdout.split('\n'):
+            for line in stdout.split('\n'):
                 if not line.strip():
                     if current_packet:
                         packets.append(current_packet)
@@ -1357,7 +1421,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if os.path.exists(eve_path):
                 eve_size = os.path.getsize(eve_path)
                 if eve_size > MAX_EVE_SIZE:
-                    self._send_error(400, f'eve.json too large ({eve_size // (1024*1024)}MB, max {MAX_EVE_SIZE // (1024*1024)}MB)')
+                    self._send_error(400, f'Analysis data too large to load ({eve_size // (1024*1024)}MB, max {MAX_EVE_SIZE // (1024*1024)}MB). Try reanalyzing.')
                     return
 
             notes = ''
@@ -2431,7 +2495,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 try:
                     with open(error_file, 'r') as f:
-                        error_msg = f.read().strip()
+                        error_msg = _sanitize_error_text(f.read().strip())
                 except OSError:
                     error_msg = 'Analysis failed'
                 return {'status': 'error', 'message': error_msg}
@@ -2588,7 +2652,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if os.path.exists(error_file):
                     try:
                         with open(error_file, 'r') as f:
-                            error_msg = f.read().strip()
+                            error_msg = _sanitize_error_text(f.read().strip())
                     except OSError:
                         error_msg = 'Suricata failed to start'
                     self._send_error(500, error_msg)

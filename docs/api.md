@@ -740,4 +740,4 @@ Deletes all historical analyses (every MD5-shaped directory under the data root)
 | `409` | Conflict - analysis already in progress for this MD5 |
 | `413` | File too large |
 | `500` | Internal server error (generic message, no details leaked) |
-| `507` | Not enough disk space available for this upload |
+| `507` | Not enough disk space available on the server for this upload |

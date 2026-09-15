@@ -44,3 +44,7 @@ This documentation site and its splash page are built with:
 | [GLightbox / mkdocs-glightbox](https://github.com/blueswen/mkdocs-glightbox) | MIT | Image lightbox for screenshots |
 | [Orbitron](https://fonts.google.com/specimen/Orbitron) | OFL-1.1 | Splash page font (Google Fonts) |
 | [Rajdhani](https://fonts.google.com/specimen/Rajdhani) | OFL-1.1 | Splash page font (Google Fonts) |
+
+## Artwork
+
+The SO-CRATES statue artwork (`socrates.jpg`, shown in the welcome window and on the docs splash page) is AI-generated for this project.

@@ -82,6 +82,9 @@ MAX_NOTES_LENGTH = 10000                    # characters - user-entered analysis
 MAX_ROW_NOTE_LENGTH = 500                   # characters - row-scoped counterpart to MAX_NOTES_LENGTH, a short annotation not a second full notes field
 HASH_CHUNK_SIZE = 65536                    # bytes for incremental hashing
 MAX_STRINGS_READ_SIZE = 2 * 1024 * 1024    # 2 MB cap for string extraction
+MAX_ZIP_MEMBERS = 100                      # files per uploaded ZIP - each member becomes its own analysis (and pcaps each spawn a Suricata process), so an unbounded count is a fork-bomb vector
+MAX_STREAM_TEXT_OUTPUT = 4 * 1024 * 1024   # 4 MB cap on raw tshark/tcpdump text read for transcripts/hexdumps - the response is trimmed to MAX_TRANSCRIPT_* far below this; without a read cap a huge stream buffers fully in RAM first
+MAX_STREAM_DOWNLOAD_SIZE = 200 * 1024 * 1024  # 200 MB cap on a carved-stream pcap download; larger streams get a 413 rather than a partial (corrupt) file
 MAX_ENTROPY_READ_SIZE = 10 * 1024 * 1024   # 10 MB cap for entropy calculation
 
 # Thresholds
