@@ -66,7 +66,7 @@ If SO-CRATES was launched via [OhMyDebn](installation/ohmydebn.md), the Themes m
 
 ## Fun Themes
 
-Every theme on this page (Fun or otherwise) can also be switched to instantly by typing its name anywhere outside a text field - see [Command Palette](usage.md#command-palette).
+Every theme on this page (Fun or otherwise) can also be switched to instantly by typing its name anywhere outside a text field - see [Command Palette](usage/keyboard-and-menus.md#command-palette).
 
 - **Amber CRT** - monochrome amber phosphor on black, like a VT100/DEC-style business terminal, with a faint scanline overlay for the CRT effect
   <br><img src="../images/themes/amber.png" width="360" alt="Amber CRT theme">

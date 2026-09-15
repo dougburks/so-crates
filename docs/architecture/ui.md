@@ -50,8 +50,8 @@ let tabDataCache = {};       // cached event data per type
 | Group | Functions | Purpose |
 |---|---|---|
 | Navigation | `showWelcome()`, `loadAnalysis()`, `showTab()`, `showWelcomeUI()`, `showAnalysisUI()` | Screen/tab switching |
-| Keyboard Navigation | `navigateStatTabs()`, `activeColumnStatCards()`, `navigateSampleCards()`, `navigateVertical()`, `seedVerticalNavSelectionIfStale()`, `navigateFilterBarItems()`, `focusNewestFilterChip()`, `focusFilterBarOrFirstCard()`, `navigateThemeTiles()`, `activateKeyboardSelection()`, `isNavigableKeyContext()` | Arrow-key/Enter navigation (see [Usage](../usage.md#keyboard-shortcuts)) |
-| Command Palette | `AUTOCOMPLETE_COMMANDS`, `openAutocompleteModal()`, `filterAutocomplete()`, `autocompleteMatchesQuery()`, `autocompleteMatchScore()`, `activateAutocompleteSelection()` | Type-anywhere command list (see [Usage](../usage.md#command-palette)) |
+| Keyboard Navigation | `navigateStatTabs()`, `activeColumnStatCards()`, `navigateSampleCards()`, `navigateVertical()`, `seedVerticalNavSelectionIfStale()`, `navigateFilterBarItems()`, `focusNewestFilterChip()`, `focusFilterBarOrFirstCard()`, `navigateThemeTiles()`, `activateKeyboardSelection()`, `isNavigableKeyContext()` | Arrow-key/Enter navigation (see [Usage](../usage/keyboard-and-menus.md#keyboard-shortcuts)) |
+| Command Palette | `AUTOCOMPLETE_COMMANDS`, `openAutocompleteModal()`, `filterAutocomplete()`, `autocompleteMatchesQuery()`, `autocompleteMatchScore()`, `activateAutocompleteSelection()` | Type-anywhere command list (see [Usage](../usage/keyboard-and-menus.md#command-palette)) |
 | Data Loading | `loadTabData()`, `loadFromUrl()`, `uploadPcap()`, `checkStatus()` | Fetch data from API |
 | Rendering | `buildStats()`, `buildSections()`, `buildSection()`, `buildAllEvents()`, `buildRowForEvent()`, `updateSankeyDiagram()` | Build HTML |
 | Aggregation | `buildAggregationTablesCore()`, `buildAggregationTables()`, `buildAggregationTablesAll()`, `buildAggregationsSection()`, `buildAggregationsSectionAll()` | Frequency grids |
