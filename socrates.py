@@ -617,11 +617,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _add_security_headers(self):
         self.send_header('X-Frame-Options', 'DENY')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'self';")
-        # Phase 0 of dropping script-src 'unsafe-inline': report (without
-        # blocking) everything the target policy would refuse, so the
-        # inline-handler migration can be tracked and regressions surface.
-        self.send_header('Content-Security-Policy-Report-Only', "script-src 'self'; report-uri /api/csp-report;")
+        # script-src 'self' with no inline carve-out: all handlers are wired
+        # via addEventListener/data-action dispatch and the theme bootstrap
+        # is an external file, so injected markup (an escaping regression in
+        # an innerHTML sink) renders as inert text instead of executing.
+        # report-uri keeps /api/csp-report as a permanent tripwire - any
+        # future violation is blocked AND logged server-side.
+        # style-src keeps 'unsafe-inline' deliberately: the UI uses inline
+        # style= attributes throughout, and CSS injection is a far weaker
+        # primitive than script injection.
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'self'; report-uri /api/csp-report;")
 
     def end_headers(self):
         self._add_security_headers()
@@ -1692,12 +1697,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     _CSP_REPORTS_SEEN = {}
 
     def handle_post_csp_report(self):
-        """Sink for Content-Security-Policy-Report-Only violation reports.
+        """Sink for Content-Security-Policy violation reports.
 
         Browsers POST these with Content-Type: application/csp-report, so
         this reads the raw body instead of going through _read_json_body's
-        application/json requirement. Reports are logged (deduplicated) for
-        the inline-script migration; the response is always 204.
+        application/json requirement. The enforced policy's report-uri
+        points here, so any future inline-script regression is blocked by
+        the browser AND logged (deduplicated) server-side. Always 204.
         """
         body = self._read_post_body(65536)
         if body is None:

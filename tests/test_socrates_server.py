@@ -7310,9 +7310,10 @@ class TestRunCapped(unittest.TestCase):
             server._run_capped(['sleep', '30'], max_bytes=1000, timeout=1)
 
 
-class TestCSPReportOnly(unittest.TestCase):
-    """Phase 0 of removing script-src 'unsafe-inline': a Report-Only header
-    plus a report sink, without changing the enforced policy."""
+class TestCSPEnforced(unittest.TestCase):
+    """The enforced CSP has no inline-script carve-out (all handlers are
+    wired via data-action dispatch; the theme bootstrap is external), and
+    its report-uri keeps /api/csp-report as a permanent tripwire."""
 
     @classmethod
     def setUpClass(cls):
@@ -7333,16 +7334,18 @@ class TestCSPReportOnly(unittest.TestCase):
         server.DATA_DIR = cls.original_base
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
-    def test_report_only_header_present(self):
+    def test_enforced_policy_has_no_inline_script(self):
         import urllib.request
         with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/socrates.html', timeout=5) as resp:
-            ro = resp.headers.get('Content-Security-Policy-Report-Only', '')
             enforced = resp.headers.get('Content-Security-Policy', '')
-        self.assertIn("script-src 'self'", ro)
-        self.assertIn('/api/csp-report', ro)
-        self.assertNotIn('unsafe-inline', ro)
-        # enforced policy unchanged in phase 0
-        self.assertIn("'unsafe-inline'", enforced)
+            ro = resp.headers.get('Content-Security-Policy-Report-Only')
+        script_src = [d.strip() for d in enforced.split(';') if d.strip().startswith('script-src')]
+        self.assertEqual(script_src, ["script-src 'self'"])
+        self.assertIn('report-uri /api/csp-report', enforced)
+        # style-src keeps unsafe-inline deliberately (inline style= attrs)
+        self.assertIn("style-src 'self' 'unsafe-inline'", enforced)
+        # the migration-era report-only header is retired
+        self.assertIsNone(ro)
 
     def test_report_endpoint_accepts_csp_content_type(self):
         import urllib.request

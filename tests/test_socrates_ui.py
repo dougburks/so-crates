@@ -99,13 +99,20 @@ class TestHTMLStructure(unittest.TestCase):
         self.assertNotIn('</style>', HTML_CONTENT, 'Inline </style> tag found in HTML')
 
     def test_no_inline_script_block(self):
-        """HTML must not contain inline <script> blocks after split."""
-        inline_script = re.search(r'<script[^>]*>(?!\s*</script>)', HTML_CONTENT)
-        if inline_script:
-            # Allow the small FOUC-prevention theme script in <head>
-            snippet = HTML_CONTENT[inline_script.start():inline_script.start()+200]
-            if 'data-theme' not in snippet:
-                self.fail('Inline <script> block found in HTML')
+        """HTML must not contain inline <script> blocks at all - the theme
+        FOUC-prevention bootstrap lives in static/theme-boot.js so the CSP
+        can be a strict script-src 'self' with no inline carve-outs."""
+        for m in re.finditer(r'<script([^>]*)>', HTML_CONTENT):
+            self.assertIn('src=', m.group(1),
+                          'Inline <script> block found in HTML: ' + m.group(0))
+
+    def test_theme_boot_script_is_parser_blocking(self):
+        """The theme bootstrap must run before first paint: referenced from
+        <head> without defer/async so the parser blocks on it."""
+        m = re.search(r'<script[^>]*theme-boot\.js[^>]*>', HTML_CONTENT)
+        self.assertIsNotNone(m, 'theme-boot.js script tag missing')
+        self.assertNotIn('defer', m.group(0))
+        self.assertNotIn('async', m.group(0))
 
     def test_no_inline_event_handler_attributes(self):
         """socrates.html (the static page shell) must contain no inline
@@ -2968,14 +2975,19 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn('data-theme', HTML_CONTENT,
                       'HTML must have FOUC-prevention theme script')
 
+    def _theme_boot_source(self):
+        # The FOUC-prevention bootstrap lives in static/theme-boot.js (not
+        # inline) so the CSP can be a strict script-src 'self'.
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            '..', 'static', 'theme-boot.js')
+        with open(path) as f:
+            return f.read()
+
     def test_fouc_prevention_script_is_fault_tolerant(self):
-        head = HTML_CONTENT.split('</head>')[0]
-        inline_script_match = re.search(r'<script[^>]*>(.*?)</script>', head, re.DOTALL)
-        self.assertTrue(inline_script_match, 'Inline script must be present in <head>')
-        inline_script = inline_script_match.group(1)
-        self.assertIn('try{', inline_script.replace(' ', ''),
+        boot = self._theme_boot_source().replace(' ', '').replace('\n', '')
+        self.assertIn('try{', boot,
                       'FOUC script must guard theme read in try block')
-        self.assertIn('catch(e){}', inline_script.replace(' ', ''),
+        self.assertIn('catch(e){}', boot,
                       'FOUC script must swallow localStorage errors')
 
     def test_fouc_script_migrates_daylight_to_white(self):
@@ -2987,15 +2999,12 @@ class TestThemeAndMenu(unittest.TestCase):
         localStorage, so the choice sticks instead of re-migrating (and
         re-showing a "you're on White now" moment) every single page
         load."""
-        head = HTML_CONTENT.split('</head>')[0]
-        inline_script_match = re.search(r'<script[^>]*>(.*?)</script>', head, re.DOTALL)
-        self.assertTrue(inline_script_match, 'Inline script must be present in <head>')
-        inline_script = inline_script_match.group(1).replace(' ', '')
-        self.assertIn("t=='light'", inline_script,
+        boot = self._theme_boot_source().replace(' ', '')
+        self.assertIn("t=='light'", boot,
                       "FOUC script must detect the removed Daylight theme's saved value")
-        self.assertIn("t='white'", inline_script,
+        self.assertIn("t='white'", boot,
                       'FOUC script must remap Daylight to White')
-        self.assertIn("localStorage.setItem('socrates-theme',t='white')", inline_script,
+        self.assertIn("localStorage.setItem('socrates-theme',t='white')", boot,
                       'FOUC script must persist the White migration back to localStorage')
 
     def test_hacker_theme_override_exists(self):

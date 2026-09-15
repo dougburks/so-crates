@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SO-CRATES - Welcome</title>
     <link id="faviconLink" rel="icon" type="image/svg+xml" href="static/favicon.svg">
-    <script>(function(){try{var t=localStorage.getItem('socrates-theme');if(t=='light')localStorage.setItem('socrates-theme',t='white');if(t&&t!='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+    <!-- Parser-blocking on purpose: sets data-theme before first paint. -->
+    <script src="static/theme-boot.js"></script>
     <link rel="stylesheet" href="static/socrates.css">
     <script src="static/d3.min.js"></script>
     <script src="static/d3-sankey.min.js"></script>
