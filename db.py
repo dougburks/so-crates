@@ -814,7 +814,7 @@ def get_event_types_sqlite(db_path, q=None):
         sql = select
         if conditions:
             sql += ' WHERE ' + ' AND '.join(conditions)
-        sql += f' GROUP BY {event_type_col} ORDER BY cnt DESC'
+        sql += f' GROUP BY {event_type_col} ORDER BY cnt DESC, {event_type_col}'  # deterministic tie order
 
         try:
             cursor = conn.execute(sql, params)
@@ -897,7 +897,7 @@ def get_sankey_data_sqlite(db_path, event_type=None, q=None, max_nodes_per_colum
             sql = select
             if conditions:
                 sql += ' WHERE ' + ' AND '.join(conditions)
-            sql += f' GROUP BY {group_by} ORDER BY cnt DESC'
+            sql += f' GROUP BY {group_by} ORDER BY cnt DESC, {group_by}'  # deterministic tie order (see the paginated query's comment)
             try:
                 with _db_connection(db_path) as thread_conn:
                     thread_conn.row_factory = sqlite3.Row
@@ -1539,7 +1539,12 @@ def get_aggregation_data_sqlite(db_path, event_type, q=None, top_n=AGGREGATION_T
             sql = select
             if conditions:
                 sql += ' WHERE ' + ' AND '.join(conditions)
-            sql += ' GROUP BY val ORDER BY cnt DESC LIMIT ? OFFSET ?'
+            # 'val' as the tie-break: bare ORDER BY cnt DESC leaves the
+            # order of equal counts up to SQLite - nondeterministic across
+            # queries, which matters here because each page is its own
+            # query. Without a stable total order, a tied row can appear
+            # on two pages or on neither as the user pages through.
+            sql += ' GROUP BY val ORDER BY cnt DESC, val LIMIT ? OFFSET ?'
             try:
                 with _db_connection(db_path) as thread_conn:
                     rows = thread_conn.execute(sql, list(params) + [top_n, offset]).fetchall()
