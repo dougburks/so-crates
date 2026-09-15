@@ -1487,7 +1487,7 @@ class TestThemeAndMenu(unittest.TestCase):
             var toast = document.querySelector('.socrates-toast');
             window.__jsdom_result = { text: toast ? toast.textContent : null };
         ''')
-        self.assertEqual(result['text'], '3 additional files were in the ZIP and not analyzed')
+        self.assertEqual(result['text'], '3 additional files in the ZIP could not be analyzed')
 
     def test_notifyIfFilesSkipped_singular_wording(self):
         from tests.jsdom_helper import js_statements
@@ -1496,7 +1496,7 @@ class TestThemeAndMenu(unittest.TestCase):
             var toast = document.querySelector('.socrates-toast');
             window.__jsdom_result = { text: toast ? toast.textContent : null };
         ''')
-        self.assertEqual(result['text'], '1 additional file was in the ZIP and not analyzed')
+        self.assertEqual(result['text'], '1 additional file in the ZIP could not be analyzed')
 
     def test_notifyIfFilesSkipped_no_toast_when_absent(self):
         from tests.jsdom_helper import js_statements
@@ -1599,7 +1599,7 @@ class TestThemeAndMenu(unittest.TestCase):
             };
         ''')
         self.assertTrue(result['presentBeforeClick'], 'toast must appear when all three rulesets have no rules')
-        self.assertIn('No rule sets are configured yet', result['toastText'])
+        self.assertIn('No rulesets are configured yet', result['toastText'])
         self.assertEqual(result['linkText'], 'Open Rules')
         self.assertTrue(result['calledShowRulesModal'], 'clicking the action link must open the Rules modal')
         self.assertEqual(result['opacityAfterClick'], '0', 'clicking the action link must start dismissing the toast')
@@ -3381,7 +3381,7 @@ class TestThemeAndMenu(unittest.TestCase):
             });
         ''')
         titles = {r['label']: r['title'] for r in result}
-        self.assertEqual(titles.get('Sample pcap file'), 'Downloads from www.malware-traffic-analysis.net')
+        self.assertEqual(titles.get('Sample PCAP file'), 'Downloads from www.malware-traffic-analysis.net')
         self.assertEqual(titles.get('Sample log file'), 'Downloads from github.com')
         self.assertEqual(titles.get('Sample binary file'), 'Downloads from secure.eicar.org')
 
@@ -6164,7 +6164,7 @@ class TestFiltering(unittest.TestCase):
     def test_has_instructions_in_analysis(self):
         """Analysis instructions must mention filtering options and hexdump."""
         self.assertIn('Start by reviewing all alerts', JS_CONTENT)
-        self.assertIn('Filter using the search bar, sankey diagram, or aggregation tables', JS_CONTENT)
+        self.assertIn('Filter using the search bar, Sankey Diagram, or Aggregation Tables', JS_CONTENT)
         self.assertIn('ASCII transcript and hexdump and optionally download', JS_CONTENT)
         self.assertNotIn('ASCII transcript and optionally download', JS_CONTENT)
 
@@ -14152,8 +14152,8 @@ class TestReanalyzeUI(unittest.TestCase):
             };
         ''')
         self.assertEqual(result['display'], 'block')
-        self.assertIn('WARNING!', result['text'])
-        self.assertIn('destroyed', result['text'])
+        self.assertIn('Warning', result['text'])
+        self.assertIn('deleted', result['text'])
         self.assertTrue(result['btnDanger'], 'Re-analyze button must turn red when row notes would be lost')
 
     def test_row_notes_warning_hidden_when_has_row_notes_false(self):

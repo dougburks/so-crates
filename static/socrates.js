@@ -491,6 +491,8 @@
                         <button class="theme-tile" data-theme-option="${key}"
                                 onmouseenter="previewTheme('${key}')"
                                 onmouseleave="revertTheme()"
+                                onfocus="previewTheme('${key}')"
+                                onblur="revertTheme()"
                                 onclick="commitTheme('${key}')">
                             <span>${THEMES[key].label}</span>
                         </button>`;
@@ -2223,7 +2225,7 @@
                 Any of the above file types can be uploaded inside a .zip archive - every supported file found is extracted and analyzed as its own independent analysis.
             </p>
             <p style="color: var(--text-muted); font-size: 0.95rem; margin-top: 15px;">
-                <span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Want more fun? Try one of our fun <a href="#" onclick="event.preventDefault(); showThemesModal();" style="color: var(--accent); text-decoration: underline; font-weight: 600;">themes</a>!
+                <span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Want more fun? Try one of our Fun <a href="#" onclick="event.preventDefault(); showThemesModal();" style="color: var(--accent); text-decoration: underline; font-weight: 600;">themes</a>!
             </p>
         `; }
         // Full feature comparison, opened via showSecurityOnionModal() -
@@ -2895,7 +2897,7 @@
                 .map(e => e.id);
             if (matchIds.length === 0) return;
             if (truncatedTypes.has(ackInfo.eventType)) {
-                showToast('Only matches within the current query limit were acknowledged - some may remain');
+                showToast('Only matches within the current query limit were acknowledged - some may remain', { sticky: true });
             }
             await fetch('/api/acknowledge-alerts-bulk', {
                 method: 'POST',
@@ -3921,11 +3923,11 @@
                 const isFileOnly = document.body.classList.contains('file-analysis');
                 let helpText;
                 if (isLogFile) {
-                    helpText = `<span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Investigate Sigma Alerts and then review Log Events. Filter using the search bar or aggregation tables.`;
+                    helpText = `<span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Investigate Sigma Alerts and then review Log Events. Filter using the search bar or Aggregation Tables.`;
                 } else if (isFileOnly) {
                     helpText = `<span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Review the FILE INFO section for metadata and then the data table at the bottom for any matches found by the YARA rules.`;
                 } else {
-                    helpText = `<span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Start by reviewing all alerts and then you can change to one of the other data types like DNS, HTTP, or TLS. Filter using the search bar, sankey diagram, or aggregation tables. When you find something interesting, you can drill into the row in the data table at the bottom. This will allow you to see the ASCII transcript and hexdump and optionally download the PCAP file for that stream.`;
+                    helpText = `<span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Start by reviewing all alerts and then you can change to one of the other data types like DNS, HTTP, or TLS. Filter using the search bar, Sankey Diagram, or Aggregation Tables. When you find something interesting, you can drill into the row in the data table at the bottom. This will allow you to see the ASCII transcript and hexdump and optionally download the PCAP file for that stream.`;
                 }
                 modalBody.innerHTML = '<div style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.6;">' + helpText + '</div>';
                 checkboxContainer.style.display = 'none';
@@ -4253,19 +4255,19 @@
                         <div style="background: var(--bg-secondary); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 100%; box-sizing: border-box;">
                             <div style="color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; margin-bottom: 15px; font-weight: 600;">${DOWN_ARROW_ICON_SVG} Select a sample file, import a file from URL, or import a file from your local system</div>
                             <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 15px;">
-                                <div class="sample-card" title="${_sampleCardTitle(DEFAULT_SAMPLE_URL)}" onclick="loadSampleUrl('${DEFAULT_SAMPLE_URL}')">
-                                     <span class="sample-label">Sample pcap file</span>
+                                <div class="sample-card" title="${_sampleCardTitle(DEFAULT_SAMPLE_URL)}" tabindex="0" role="button" aria-label="Analyze the sample PCAP file" onclick="loadSampleUrl('${DEFAULT_SAMPLE_URL}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();loadSampleUrl('${DEFAULT_SAMPLE_URL}');}">
+                                     <span class="sample-label">Sample PCAP file</span>
                                  </div>
-                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_LOG_URL)}" onclick="loadSampleUrl('${SAMPLE_LOG_URL}')">
+                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_LOG_URL)}" tabindex="0" role="button" aria-label="Analyze the sample log file" onclick="loadSampleUrl('${SAMPLE_LOG_URL}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();loadSampleUrl('${SAMPLE_LOG_URL}');}">
                                     <span class="sample-label">Sample log file</span>
                                 </div>
-                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_BINARY_URL)}" onclick="loadSampleUrl('${SAMPLE_BINARY_URL}')">
+                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_BINARY_URL)}" tabindex="0" role="button" aria-label="Analyze the sample binary file" onclick="loadSampleUrl('${SAMPLE_BINARY_URL}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();loadSampleUrl('${SAMPLE_BINARY_URL}');}">
                                     <span class="sample-label">Sample binary file</span>
                                 </div>
                             </div>
                             <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 15px;">
                                 <div style="flex: 1; text-align: center;">
-                                    <a href="https://www.malware-traffic-analysis.net/" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none; font-size: 0.85rem;">More pcap samples ↗</a>
+                                    <a href="https://www.malware-traffic-analysis.net/" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none; font-size: 0.85rem;">More PCAP samples ↗</a>
                                 </div>
                                 <div style="flex: 1; text-align: center;">
                                     <a href="https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none; font-size: 0.85rem;">More log samples ↗</a>
@@ -4281,9 +4283,10 @@
                             </div>
                             <div style="text-align: center; color: var(--text-muted); font-size: 0.9rem; font-weight: 600; text-transform: uppercase; margin-bottom: 15px;">— OR —</div>
                             <input type="file" id="pcapUpload" onchange="uploadPcap()" style="display: none;">
-                            <div id="dropZone" style="background: var(--bg-primary); color: var(--accent); padding: 20px; border-radius: 4px; cursor: pointer; font-size: 0.95rem; border: 2px dashed var(--border-color); text-align: center; transition: border-color 0.2s, background 0.2s;"
+                            <div id="dropZone" tabindex="0" role="button" aria-label="Choose a file to upload, or drag and drop one here" style="background: var(--bg-primary); color: var(--accent); padding: 20px; border-radius: 4px; cursor: pointer; font-size: 0.95rem; border: 2px dashed var(--border-color); text-align: center; transition: border-color 0.2s, background 0.2s;"
                                  ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)"
-                                 onclick="document.getElementById('pcapUpload').click()">
+                                 onclick="document.getElementById('pcapUpload').click()"
+                                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();document.getElementById('pcapUpload').click();}">
                                  <div style="font-size: 1.5rem; margin-bottom: 8px;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><polyline points="2 13 6 9 10 13"></polyline></svg></div>
                                  <div>Choose file or drag and drop here</div>
                              </div>
@@ -5673,7 +5676,7 @@
                 toast.style.cursor = 'pointer';
                 toast.addEventListener('click', dismiss);
             } else {
-                setTimeout(dismiss, 2000);
+                setTimeout(dismiss, 3500);
             }
         }
 
@@ -5685,8 +5688,8 @@
         // still isn't silent.
         function notifyIfFilesSkipped(result) {
             if (result && result.filesSkipped) {
-                const plural = result.filesSkipped === 1 ? 'file was' : 'files were';
-                showToast(`${result.filesSkipped} additional ${plural} in the ZIP and not analyzed`, { sticky: true });
+                const plural = result.filesSkipped === 1 ? 'file' : 'files';
+                showToast(`${result.filesSkipped} additional ${plural} in the ZIP could not be analyzed`, { sticky: true });
             }
         }
 
@@ -5752,7 +5755,7 @@
                     && info.sigma.windows.count === null
                     && info.sigma.linux.count === null;
                 if (noRules) {
-                    showToast('No rule sets are configured yet — Suricata/YARA/Sigma detections will be empty until you set them up.', {
+                    showToast('No rulesets are configured yet — Suricata/YARA/Sigma detections will be empty until you set them up.', {
                         sticky: true,
                         actionLabel: 'Open Rules',
                         onAction: showRulesModal,
@@ -8568,7 +8571,7 @@
             }
             if (isCurrentTabTruncated()) {
                 const fetchedCount = getFetchedLengthForType(getVisibleEventType()).toLocaleString();
-                html += `<div class="filter-bar"><span style="color: var(--badge-warning-text);">⚠ Showing the first ${fetchedCount} matching events for this view — results may be incomplete.</span></div>`;
+                html += `<div class="filter-bar"><span style="color: var(--badge-warning-text);">⚠ Showing the first ${fetchedCount} matching events for this view — results may be incomplete (you can raise the limit in <a href="#" onclick="event.preventDefault(); showSettingsModal();" style="color: var(--accent); text-decoration: underline; font-weight: 600;">Settings</a>).</span></div>`;
             }
             return html;
         }
@@ -11156,6 +11159,16 @@
             const file = droppedFile || fileInput.files[0];
             if (!file) return;
 
+            // Fail fast client-side rather than uploading megabytes just
+            // for the server to reject them - same limit the server
+            // enforces via the X-Max-Upload-Size header below.
+            const maxUploadMB = getUserMaxUploadSizeMB();
+            if (file.size > maxUploadMB * 1024 * 1024) {
+                showError(`File exceeds the maximum upload size (${maxUploadMB.toLocaleString()} MB). You can raise the limit in Settings.`);
+                fileInput.value = '';
+                return;
+            }
+
             showLoading('Uploading file... (0s)');
             const uploadStart = Date.now();
             let uploadInterval = setInterval(() => {
@@ -11392,21 +11405,45 @@
             
             clearInterval(elapsedInterval);
             hideLoading();
-            showError('Analysis timed out. The file may be very large or analysis may have encountered an error.');
+            showError('Analysis is taking longer than expected. It may still finish in the background - check Previous Analyses in a few minutes.');
         }
         
         let pendingDelete = null;
         let pendingReanalyze = null;
-        
+
+        // Minimal focus management for the confirm/error modals (not a
+        // full focus trap): on open, remember what was focused and move
+        // focus to the modal's least-destructive button (Cancel/Close) so
+        // keyboard users can't accidentally activate the destructive
+        // action; on close, put focus back where it was.
+        let modalReturnFocusEl = null;
+        function focusModalDefault(buttonId) {
+            const active = document.activeElement;
+            if (active && active !== document.body) {
+                modalReturnFocusEl = active;
+            }
+            const btn = document.getElementById(buttonId);
+            if (btn) btn.focus();
+        }
+        function restoreModalFocus() {
+            const el = modalReturnFocusEl;
+            modalReturnFocusEl = null;
+            if (el && el.isConnected && typeof el.focus === 'function') {
+                el.focus();
+            }
+        }
+
         function openDeleteAnalysis(md5, name) {
             pendingDelete = { md5, name };
             document.getElementById('deleteFileName').textContent = name;
             document.getElementById('deleteConfirmModal').classList.add('active');
+            focusModalDefault('deleteCancelBtn');
         }
-        
+
         function closeDeleteModal() {
             pendingDelete = null;
             document.getElementById('deleteConfirmModal').classList.remove('active');
+            restoreModalFocus();
         }
         
         function handleDeleteBackdropClick(event) {
@@ -11418,19 +11455,20 @@
         function showError(message) {
             document.getElementById('errorMessage').textContent = message;
             document.getElementById('errorModal').classList.add('active');
+            focusModalDefault('errorCloseBtn');
         }
-        
+
         function closeErrorModal() {
             document.getElementById('errorModal').classList.remove('active');
+            restoreModalFocus();
         }
 
         async function confirmDelete() {
             if (!pendingDelete) return;
             
             const { md5, name } = pendingDelete;
-            pendingDelete = null;
-            document.getElementById('deleteConfirmModal').classList.remove('active');
-            
+            closeDeleteModal();
+
             try {
                 const resp = await fetch('/api/delete-analysis', {
                     method: 'POST',
@@ -11468,11 +11506,13 @@
             pendingDeleteAllCount = count;
             document.getElementById('deleteAllCount').textContent = count;
             document.getElementById('deleteAllConfirmModal').classList.add('active');
+            focusModalDefault('deleteAllCancelBtn');
         }
-        
+
         function closeDeleteAllModal() {
             pendingDeleteAllCount = 0;
             document.getElementById('deleteAllConfirmModal').classList.remove('active');
+            restoreModalFocus();
         }
         
         function handleDeleteAllBackdropClick(event) {
@@ -11483,9 +11523,8 @@
         
         async function confirmDeleteAll() {
             if (!pendingDeleteAllCount) return;
-            pendingDeleteAllCount = 0;
-            document.getElementById('deleteAllConfirmModal').classList.remove('active');
-            
+            closeDeleteAllModal();
+
             try {
                 const resp = await fetch('/api/delete-all-analyses', {
                     method: 'POST',
@@ -11533,11 +11572,13 @@
             document.getElementById('reanalyzeRowNotesWarning').style.display = hasRowNotes ? 'block' : 'none';
             document.querySelector('.reanalyze-confirm-btn').classList.toggle('danger', hasRowNotes);
             document.getElementById('reanalyzeConfirmModal').classList.add('active');
+            focusModalDefault('reanalyzeCancelBtn');
         }
-        
+
         function closeReanalyzeModal() {
             pendingReanalyze = null;
             document.getElementById('reanalyzeConfirmModal').classList.remove('active');
+            restoreModalFocus();
         }
         
         function handleReanalyzeBackdropClick(event) {

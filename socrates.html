@@ -69,7 +69,7 @@
             <div class="loading-modal">
                 <div class="spinner"><div class="spinner-dot"></div></div>
                 <div class="loading-text" id="loadingText">Loading...</div>
-                <div class="loading-subtext">This may take a minute or two depending on file size</div>
+                <div class="loading-subtext">This may take a few minutes depending on file size</div>
             </div>
         </div>
         
@@ -82,7 +82,7 @@
                 <div style="padding: 20px;">
                     <p id="errorMessage" style="color: var(--text-primary); margin-bottom: 20px;"></p>
                     <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                        <button onclick="closeErrorModal()" style="background: var(--bg-hover); color: var(--text-primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Close</button>
+                        <button id="errorCloseBtn" onclick="closeErrorModal()" style="background: var(--bg-hover); color: var(--text-primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Close</button>
                     </div>
                 </div>
             </div>
@@ -95,9 +95,9 @@
                     <button class="modal-close" title="Close (Esc)" onclick="closeDeleteModal()">&times;</button>
                 </div>
                 <div style="padding: 20px;">
-                    <p style="color: var(--text-primary); margin-bottom: 20px; overflow-wrap: break-word;">Are you sure you want to delete <span id="deleteFileName" style="font-weight: 600; color: var(--text-bright);"></span>?</p>
+                    <p style="color: var(--text-primary); margin-bottom: 20px; overflow-wrap: break-word;">Are you sure you want to delete <span id="deleteFileName" style="font-weight: 600; color: var(--text-bright);"></span>? This cannot be undone.</p>
                     <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                        <button onclick="closeDeleteModal()" style="background: var(--bg-hover); color: var(--text-primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Cancel</button>
+                        <button id="deleteCancelBtn" onclick="closeDeleteModal()" style="background: var(--bg-hover); color: var(--text-primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Cancel</button>
                         <button class="delete-modal-confirm-btn" onclick="confirmDelete()" style="padding: 8px 16px; border-radius: 6px; cursor: pointer;">Delete</button>
                     </div>
                 </div>
@@ -113,7 +113,7 @@
                 <div style="padding: 20px;">
                     <p style="color: var(--text-primary); margin-bottom: 20px;">Are you sure you want to delete all <span id="deleteAllCount" style="font-weight: 600; color: var(--text-bright);"></span> previous analyses? This cannot be undone.</p>
                     <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                        <button onclick="closeDeleteAllModal()" style="background: var(--bg-hover); color: var(--text-primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Cancel</button>
+                        <button id="deleteAllCancelBtn" onclick="closeDeleteAllModal()" style="background: var(--bg-hover); color: var(--text-primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Cancel</button>
                         <button class="delete-modal-confirm-btn" onclick="confirmDeleteAll()" style="padding: 8px 16px; border-radius: 6px; cursor: pointer;">Delete All</button>
                     </div>
                 </div>
@@ -128,9 +128,9 @@
                 </div>
                 <div style="padding: 20px;">
                     <p style="color: var(--text-primary); margin-bottom: 20px; overflow-wrap: break-word;">This will delete the existing analysis for <span id="reanalyzeFileName" style="font-weight: 600; color: var(--text-bright);"></span> and re-run the analysis pipeline. The uploaded file will be preserved.</p>
-                    <p id="reanalyzeRowNotesWarning" style="display: none; color: var(--badge-danger-text); font-weight: 600; margin-top: -12px; margin-bottom: 20px; overflow-wrap: break-word;">WARNING! You have one or more notes on a table row and these will be destroyed.</p>
+                    <p id="reanalyzeRowNotesWarning" style="display: none; color: var(--badge-danger-text); font-weight: 600; margin-top: -12px; margin-bottom: 20px; overflow-wrap: break-word;">Warning: this analysis has one or more row notes, which will be deleted.</p>
                     <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                        <button onclick="closeReanalyzeModal()" style="background: var(--bg-hover); color: var(--text-primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Cancel</button>
+                        <button id="reanalyzeCancelBtn" onclick="closeReanalyzeModal()" style="background: var(--bg-hover); color: var(--text-primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Cancel</button>
                         <button class="reanalyze-confirm-btn" onclick="confirmReanalyze()" style="padding: 8px 16px; border-radius: 6px; cursor: pointer;">Re-analyze</button>
                     </div>
                 </div>
@@ -150,7 +150,7 @@
                             <input type="checkbox" id="helpShowAgain" checked>
                             <span class="theme-switch-slider"></span>
                         </span>
-                        Show this message each time I connect
+                        Show this message each time I visit
                     </label>
                     <button onclick="closeHelpModal()" style="background: var(--accent); color: var(--bg-primary); border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-weight: 600;">Got it!</button>
                 </div>
@@ -285,8 +285,8 @@
                 <div id="themePickerControls">
                     <div id="themePreviewHint" style="color: var(--text-muted); font-size: 0.95rem; margin: 0 14px 8px 14px;">Previewing <strong id="themePreviewingLabel" style="color: var(--text-bright);"></strong> theme</div>
                     <iframe class="theme-preview-frame" id="themePreviewFrame" title="Theme preview" tabindex="-1" aria-hidden="true"></iframe>
-                    <div style="color: var(--text-muted); font-size: 0.95rem; margin: 8px 14px 4px 14px;">Hover over a theme name below to preview it in this live preview. Click the theme name to apply the theme to the entire window.</div>
-                    <div style="color: var(--text-muted); font-size: 0.95rem; margin: 0 14px 12px 14px;">You can also press <strong>&lt;</strong>/<strong>&gt;</strong> at any time to cycle through themes.</div>
+                    <div style="color: var(--text-muted); font-size: 0.95rem; margin: 8px 14px 4px 14px;">Hover over (or arrow to) a theme below to see it in the preview above. Click the theme name to apply the theme to the entire window.</div>
+                    <div style="color: var(--text-muted); font-size: 0.95rem; margin: 0 14px 12px 14px;">You can also press <strong>&lt;</strong>/<strong>&gt;</strong> to cycle through themes.</div>
                     <div id="themesModalBody"></div>
                 </div>
             </div>
@@ -332,7 +332,7 @@
                             days
                         </label>
                     </div>
-                    <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 6px;">Shows a notification on the Welcome screen if any ruleset above is showing stale.</div>
+                    <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 6px;">Shows a notification on the Welcome screen if any ruleset above is stale.</div>
                 </div>
                 <div style="border-top: 1px solid var(--bg-hover); margin: 15px 0;"></div>
                 <div style="display: flex; justify-content: flex-end;">
