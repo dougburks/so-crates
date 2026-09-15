@@ -82,7 +82,7 @@ class TestHTMLStructure(unittest.TestCase):
         Escape or picking a result, the same convention every command
         palette (VS Code's Cmd+Shift+P, Spotlight, ...) uses, and none of
         them show a visible X button either."""
-        close_button_count = HTML_CONTENT.count('class="modal-close" title="Close (Esc)" onclick="')
+        close_button_count = HTML_CONTENT.count('class="modal-close" title="Close (Esc)" data-action="')
         close_all_modals_fn = JS_CONTENT.split('function closeAllModals() {')[1].split('\n        }')[0]
         closes_called = len(re.findall(r'close\w*Modal\(\)', close_all_modals_fn))
         closes_called -= close_all_modals_fn.count('closeAutocompleteModal()')
@@ -106,6 +106,17 @@ class TestHTMLStructure(unittest.TestCase):
             snippet = HTML_CONTENT[inline_script.start():inline_script.start()+200]
             if 'data-theme' not in snippet:
                 self.fail('Inline <script> block found in HTML')
+
+    def test_no_inline_event_handler_attributes(self):
+        """socrates.html (the static page shell) must contain no inline
+        on*= event-handler attributes (onclick, onchange, oninput,
+        onkeydown, ...) - a CSP with script-src lacking 'unsafe-inline'
+        blocks them all silently. Static-shell elements are wired via
+        data-action attributes dispatched by the STATIC_ACTIONS registry
+        in socrates.js (or direct addEventListener calls by id) instead."""
+        matches = re.findall(r'\son[a-z]+\s*=', HTML_CONTENT)
+        self.assertEqual(matches, [],
+                         'socrates.html must not contain inline on*= handler attributes: %r' % matches)
 
     def test_static_files_exist(self):
         """static/socrates.css and static/socrates.js must exist on disk."""
@@ -325,8 +336,8 @@ class TestHTMLStructure(unittest.TestCase):
         a_pos = header_section.find('<a')
         svg_pos = header_section.find('<svg')
         self.assertLess(a_pos, svg_pos, '<a> must wrap <svg> in app-header-left')
-        # The <a> must have onclick="showWelcome()"
-        self.assertIn('showWelcome()', header_section, '<a> must call showWelcome()')
+        # The <a> must be wired to the show-welcome action
+        self.assertIn('data-action="show-welcome"', header_section, '<a> must be wired to show-welcome')
 
     def test_has_loading_modal(self):
         self.assertIn('id="loadingModal"', HTML_CONTENT)
@@ -812,7 +823,7 @@ class TestUXFeatures(unittest.TestCase):
 
     def test_back_navigation(self):
         """Back navigation must exist via the app header logo link."""
-        self.assertIn("showWelcome(); return false;", HTML_CONTENT,
+        self.assertIn('data-action="show-welcome"', HTML_CONTENT,
                       'App header logo must link back to welcome screen')
 
     def test_help_modal_lightbulb_uses_template_literal(self):
@@ -881,11 +892,11 @@ class TestUXFeatures(unittest.TestCase):
 
     def test_help_modal_has_backdrop_click_handler(self):
         """Help modal wrapper must close when the dark backdrop is clicked."""
-        self.assertIn('id="helpModal" onclick="handleHelpBackdropClick(event)"', HTML_CONTENT,
+        self.assertIn('id="helpModal" data-action="backdrop" data-arg="close-help-modal"', HTML_CONTENT,
                       'Help modal wrapper must handle backdrop clicks')
         modal_section = HTML_CONTENT.split('id="helpModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('onclick="event.stopPropagation()"', modal_section,
-                      'Help modal content must stop event propagation')
+        self.assertNotIn('stopPropagation', modal_section,
+                         'Help modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
     def test_help_modal_backdrop_handler_closes_modal(self):
         """handleHelpBackdropClick must close the modal only when the backdrop is clicked."""
@@ -1286,21 +1297,23 @@ class TestThemeAndMenu(unittest.TestCase):
         modal, instead of embedding the full (now 26-theme) list inline -
         the inline dropdown list needed a scrollbar to fit on shorter
         viewports, which a modal with a wrapping grid avoids."""
-        self.assertIn('onclick="showThemesModal(); closeMenu();"', HTML_CONTENT,
+        self.assertIn('data-action="menu-themes"', HTML_CONTENT,
                       'Themes menu item must open the themes modal, in the static HTML')
         self.assertIn('>Themes</span>', HTML_CONTENT,
                       'Themes menu item must be labeled in the static HTML')
-        self.assertIn('onclick="showThemesModal(); closeMenu();"', JS_CONTENT,
+        self.assertIn('data-action="menu-themes"', JS_CONTENT,
                       'renderGearMenu must also include a Themes menu item')
+        self.assertIn("'menu-themes': () => { showThemesModal(); closeMenu(); }", JS_CONTENT,
+                      'the menu-themes action must open the themes modal and close the menu')
 
     def test_themes_modal_skeleton_in_html(self):
         self.assertIn('id="themesModal"', HTML_CONTENT,
                       'Themes modal container must exist in HTML')
         self.assertIn('id="themesModalBody"', HTML_CONTENT,
                       'Themes modal body container (populated by renderThemesModalGrid) must exist in HTML')
-        self.assertIn('onclick="handleModalBackdropClick(event, closeThemesModal)"', HTML_CONTENT,
+        self.assertIn('data-action="backdrop" data-arg="close-themes-modal"', HTML_CONTENT,
                       'Themes modal must close on backdrop click')
-        self.assertIn('onclick="closeThemesModal()"', HTML_CONTENT,
+        self.assertIn('data-action="close-themes-modal"', HTML_CONTENT,
                       'Themes modal must have a close button')
 
     def test_themes_modal_has_usage_instructions(self):
@@ -1324,7 +1337,7 @@ class TestThemeAndMenu(unittest.TestCase):
         themes_modal_block = HTML_CONTENT.split('id="themesModal"')[1].split('</div>\n\n        <header')[0]
         self.assertIn('id="syncThemeWithOS"', themes_modal_block,
                       'syncThemeWithOS checkbox must live inside the themes modal')
-        self.assertIn('onchange="handleSyncThemeWithOSChange(this)"', themes_modal_block,
+        self.assertIn("getElementById('syncThemeWithOS').addEventListener('change'", JS_CONTENT,
                       'syncThemeWithOS must apply immediately on change, not require a Save click')
         settings_modal_block = HTML_CONTENT.split('id="settingsModal"')[1].split('id="themesModal"')[0]
         self.assertNotIn('syncThemeWithOS', settings_modal_block,
@@ -1659,7 +1672,7 @@ class TestThemeAndMenu(unittest.TestCase):
 
     def test_checkForStaleRules_opt_in_checkbox_exists(self):
         self.assertIn('id="checkForStaleRules"', HTML_CONTENT)
-        self.assertIn('onchange="handleCheckForStaleRulesChange(this)"', HTML_CONTENT)
+        self.assertIn("getElementById('checkForStaleRules').addEventListener('change'", JS_CONTENT)
         # Styled as a slider toggle (.theme-switch, same component as the
         # OhMyDebn sync toggle and checkForUpdates), not a plain checkbox -
         # applies instantly with no Save step, same shape as those two.
@@ -2199,14 +2212,14 @@ class TestThemeAndMenu(unittest.TestCase):
                              f'{cls} must not appear in JS after removing theme icons')
 
     def test_help_in_menu_not_standalone(self):
-        self.assertIn('onclick="showHelpModal(); closeMenu();"', HTML_CONTENT,
+        self.assertIn('data-action="menu-help"', HTML_CONTENT,
                       'Help button must be inside the menu dropdown')
 
     def test_help_appears_before_themes_item(self):
         """REGRESSION: Help must be at the top of the gear menu, followed
         (after Settings) by the Themes entry."""
-        help_index = HTML_CONTENT.find('onclick="showHelpModal(); closeMenu();"')
-        themes_index = HTML_CONTENT.find('onclick="showThemesModal(); closeMenu();"')
+        help_index = HTML_CONTENT.find('data-action="menu-help"')
+        themes_index = HTML_CONTENT.find('data-action="menu-themes"')
         self.assertGreater(help_index, -1, 'Help button must exist in menu')
         self.assertGreater(themes_index, -1, 'Themes menu item must exist in menu')
         self.assertLess(help_index, themes_index,
@@ -2575,7 +2588,7 @@ class TestThemeAndMenu(unittest.TestCase):
         (it is not a theme item, so the bare ::before rule must not exist)."""
         self.assertNotIn('.app-header-menu-item::before', CSS_CONTENT,
                          'Checkmark space must be scoped to [data-theme-option], not all menu items')
-        help_btn = HTML_CONTENT.split('onclick="showHelpModal(); closeMenu();"')[0].split('<button')[-1]
+        help_btn = HTML_CONTENT.split('data-action="menu-help"')[0].split('<button')[-1]
         self.assertNotIn('data-theme-option', help_btn,
                          'Help menu item must not carry data-theme-option')
 
@@ -5670,7 +5683,7 @@ class TestFiltering(unittest.TestCase):
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
         self.assertIn('id="checkForUpdates"', about_block,
                       'Check-for-updates checkbox must live in the About modal')
-        self.assertIn('onchange="handleCheckForUpdatesChange(this)"', about_block,
+        self.assertIn("getElementById('checkForUpdates').addEventListener('change'", JS_CONTENT,
                       'Checkbox must apply immediately on change, matching the sync-with-OhMyDebn toggle - no Save-button trap')
         # Styled as a slider toggle (reusing .theme-switch, the same
         # component the OhMyDebn sync toggle uses), not a plain checkbox -
@@ -5753,7 +5766,7 @@ class TestFiltering(unittest.TestCase):
 
     def test_check_now_button_exists_in_about_modal(self):
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
-        self.assertIn('onclick="checkForAppUpdateNow()"', about_block,
+        self.assertIn('data-action="check-app-update-now"', about_block,
                       'About must have a manual Check Now button alongside the auto-check checkbox')
 
     def test_check_for_app_update_now_bypasses_opt_in_gate(self):
@@ -5886,15 +5899,15 @@ class TestFiltering(unittest.TestCase):
                           'update both together whenever a menu item changes')
 
     def test_gear_menu_has_about_item_in_both_copies(self):
-        self.assertIn('showAboutModal()', HTML_CONTENT,
+        self.assertIn('data-action="menu-about"', HTML_CONTENT,
                       'the static gear menu in socrates.html must have an About item')
         gear_menu_match = re.search(r'function renderGearMenu\(\) \{\s*return `(.*?)`;\s*\}', JS_CONTENT, re.DOTALL)
         self.assertIsNotNone(gear_menu_match, 'renderGearMenu must exist')
-        self.assertIn('showAboutModal()', gear_menu_match.group(1),
+        self.assertIn('data-action="menu-about"', gear_menu_match.group(1),
                       'renderGearMenu() output must also have an About item')
 
     def test_about_modal_skeleton_has_github_link(self):
-        self.assertIn('id="aboutModal" onclick="handleModalBackdropClick(event, closeAboutModal)"', HTML_CONTENT,
+        self.assertIn('id="aboutModal" data-action="backdrop" data-arg="close-about-modal"', HTML_CONTENT,
                       'aboutModal must exist with a backdrop-click handler wired up')
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
         self.assertIn('href="https://github.com/dougburks/so-crates"', about_block,
@@ -5958,7 +5971,7 @@ class TestFiltering(unittest.TestCase):
         releases page, unchanged - see test_footer_update_badge_skeleton_in_html)."""
         footer = HTML_CONTENT.split('class="footer"')[1]
         version_link = footer.split('id="footerVersionLink"')[0].split('<a ')[-1]
-        self.assertIn('onclick="showAboutModal(); return false;"', version_link)
+        self.assertIn('data-action="show-about-modal"', version_link)
         self.assertNotIn('href="https://github.com', version_link,
                          'the footer version link must no longer navigate directly to GitHub')
 
@@ -9495,7 +9508,7 @@ class TestErrorModal(unittest.TestCase):
         self.assertIn('id="errorModal"', HTML_CONTENT)
 
     def test_error_modal_has_close_button(self):
-        self.assertIn("onclick=\"closeErrorModal()\"", HTML_CONTENT)
+        self.assertIn('data-action="close-error-modal"', HTML_CONTENT)
 
     def test_showError_function_exists(self):
         self.assertIn('function showError(', JS_CONTENT)
@@ -9874,11 +9887,11 @@ class TestAnalysisNotes(unittest.TestCase):
     header icon, edited in a modal, saved via POST /api/analysis-notes."""
 
     def test_notes_modal_skeleton_exists(self):
-        self.assertIn('id="notesModal" onclick="handleModalBackdropClick(event, closeNotesModal)"', HTML_CONTENT,
+        self.assertIn('id="notesModal" data-action="backdrop" data-arg="close-notes-modal"', HTML_CONTENT,
                       'notesModal must exist with a backdrop-click handler wired up')
         self.assertIn('id="analysisNotesInput"', HTML_CONTENT,
                       'notesModal must have a textarea for entering notes')
-        self.assertIn('id="notesSaveBtn" onclick="saveAnalysisNotes()"', HTML_CONTENT,
+        self.assertIn('id="notesSaveBtn" data-action="save-notes"', HTML_CONTENT,
                       'notesModal must have a Save button')
         self.assertIn('id="notesCountHint"', HTML_CONTENT,
                       'notesModal must show a character-count hint')
@@ -13996,20 +14009,18 @@ class TestReanalyzeUI(unittest.TestCase):
     def test_reanalyze_modal_has_cancel_and_reanalyze_buttons(self):
         """Re-analyze modal must have Cancel and Re-analyze buttons."""
         modal_section = HTML_CONTENT.split('id="reanalyzeConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('closeReanalyzeModal()', modal_section,
+        self.assertIn('data-action="close-reanalyze-modal"', modal_section,
                       'Modal must have Cancel button')
-        self.assertIn('confirmReanalyze()', modal_section,
+        self.assertIn('data-action="confirm-reanalyze"', modal_section,
                       'Modal must have Re-analyze button')
 
     def test_reanalyze_modal_has_backdrop_click_handler(self):
         """Re-analyze modal wrapper must close when backdrop is clicked."""
-        self.assertIn('id="reanalyzeConfirmModal" onclick="handleReanalyzeBackdropClick(event)"', HTML_CONTENT,
+        self.assertIn('id="reanalyzeConfirmModal" data-action="backdrop" data-arg="close-reanalyze-modal"', HTML_CONTENT,
                       'Re-analyze modal wrapper must handle backdrop clicks')
         modal_section = HTML_CONTENT.split('id="reanalyzeConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('onclick="event.stopPropagation()"', modal_section,
-                      'Re-analyze modal content must stop event propagation')
-        self.assertIn('function handleReanalyzeBackdropClick(', JS_CONTENT,
-                      'handleReanalyzeBackdropClick must be defined')
+        self.assertNotIn('stopPropagation', modal_section,
+                         'Re-analyze modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
     def test_reanalyze_calls_post_api(self):
         """confirmReanalyze must POST to /api/reanalyze with JSON body."""
@@ -14218,8 +14229,10 @@ class TestDeleteAllAnalysesUI(unittest.TestCase):
         self.assertIn('id="settingsDeleteAllBtn"', HTML_CONTENT,
                       'Settings modal must have a Delete All button')
         danger_zone = HTML_CONTENT.split('id="settingsDangerZoneSection"')[1][:600]
-        self.assertIn('openDeleteAllAnalyses(settingsAnalysisCount)', danger_zone,
-                      'Settings Delete All button must call openDeleteAllAnalyses with the fetched count')
+        self.assertIn('data-action="open-delete-all-analyses"', danger_zone,
+                      'Settings Delete All button must be wired to the open-delete-all-analyses action')
+        self.assertIn("'open-delete-all-analyses': () => openDeleteAllAnalyses(settingsAnalysisCount)", JS_CONTENT,
+                      'the action must call openDeleteAllAnalyses with the fetched count, read at click time')
         self.assertIn('previous-analysis-delete-all', danger_zone,
                       'Delete All button must have styling class')
 
@@ -14302,30 +14315,26 @@ class TestDeleteAllAnalysesUI(unittest.TestCase):
     def test_delete_all_modal_has_cancel_and_delete_buttons(self):
         """Delete All modal must have Cancel and Delete All buttons."""
         modal_section = HTML_CONTENT.split('id="deleteAllConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('closeDeleteAllModal()', modal_section,
+        self.assertIn('data-action="close-delete-all-modal"', modal_section,
                       'Modal must have Cancel button')
-        self.assertIn('confirmDeleteAll()', modal_section,
+        self.assertIn('data-action="confirm-delete-all"', modal_section,
                       'Modal must have Delete All button')
 
     def test_delete_all_modal_has_backdrop_click_handler(self):
         """Delete All modal wrapper must close when backdrop is clicked."""
-        self.assertIn('id="deleteAllConfirmModal" onclick="handleDeleteAllBackdropClick(event)"', HTML_CONTENT,
+        self.assertIn('id="deleteAllConfirmModal" data-action="backdrop" data-arg="close-delete-all-modal"', HTML_CONTENT,
                       'Delete All modal wrapper must handle backdrop clicks')
         modal_section = HTML_CONTENT.split('id="deleteAllConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('onclick="event.stopPropagation()"', modal_section,
-                      'Delete All modal content must stop event propagation')
-        self.assertIn('function handleDeleteAllBackdropClick(', JS_CONTENT,
-                      'handleDeleteAllBackdropClick must be defined')
+        self.assertNotIn('stopPropagation', modal_section,
+                         'Delete All modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
     def test_delete_modal_has_backdrop_click_handler(self):
         """Delete modal wrapper must close when backdrop is clicked."""
-        self.assertIn('id="deleteConfirmModal" onclick="handleDeleteBackdropClick(event)"', HTML_CONTENT,
+        self.assertIn('id="deleteConfirmModal" data-action="backdrop" data-arg="close-delete-modal"', HTML_CONTENT,
                       'Delete modal wrapper must handle backdrop clicks')
         modal_section = HTML_CONTENT.split('id="deleteConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('onclick="event.stopPropagation()"', modal_section,
-                      'Delete modal content must stop event propagation')
-        self.assertIn('function handleDeleteBackdropClick(', JS_CONTENT,
-                      'handleDeleteBackdropClick must be defined')
+        self.assertNotIn('stopPropagation', modal_section,
+                         'Delete modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
     def test_confirm_delete_all_calls_post_api(self):
         """confirmDeleteAll must POST to /api/delete-all-analyses."""
@@ -17097,12 +17106,12 @@ class TestUserConfigurableQueryLimit(unittest.TestCase):
                       'the Save button must be re-enabled in a finally block even if refreshAnalysisData throws')
 
     def test_settings_menu_item_in_static_html(self):
-        self.assertIn('onclick="showSettingsModal(); closeMenu();"', HTML_CONTENT,
+        self.assertIn('data-action="menu-settings"', HTML_CONTENT,
                       'the static header menu markup must include a Settings item')
 
     def test_settings_menu_item_in_renderGearMenu(self):
         func = JS_CONTENT.split('function renderGearMenu()')[1].split('// Subtle code-rain background')[0]
-        self.assertIn('showSettingsModal(); closeMenu();', func,
+        self.assertIn('data-action="menu-settings"', func,
                       'the dynamically-rebuilt header menu template must also include a Settings item')
 
 
@@ -18237,19 +18246,19 @@ class TestRulesModal(unittest.TestCase):
     def test_gear_menu_has_rules_item_in_both_copies(self):
         """The gear menu is duplicated (static HTML for first paint, plus
         renderGearMenu() in JS for re-renders) - both must offer Rules."""
-        self.assertIn('showRulesModal()', HTML_CONTENT,
+        self.assertIn('data-action="menu-rules"', HTML_CONTENT,
                       'the static gear menu in socrates.html must have a Rules item')
         gear_menu_match = re.search(r'function renderGearMenu\(\) \{\s*return `(.*?)`;\s*\}', JS_CONTENT, re.DOTALL)
         self.assertIsNotNone(gear_menu_match, 'renderGearMenu must exist')
-        self.assertIn('showRulesModal()', gear_menu_match.group(1),
+        self.assertIn('data-action="menu-rules"', gear_menu_match.group(1),
                       'renderGearMenu() output must also have a Rules item')
 
     def test_rules_modal_skeleton_exists(self):
-        self.assertIn('id="rulesModal" onclick="handleModalBackdropClick(event, closeRulesModal)"', HTML_CONTENT,
+        self.assertIn('id="rulesModal" data-action="backdrop" data-arg="close-rules-modal"', HTML_CONTENT,
                       'rulesModal must exist with a backdrop-click handler wired up')
         self.assertIn('id="rulesModalBody"', HTML_CONTENT,
                       'rulesModal must have a body element to render per-ruleset status into')
-        self.assertIn('id="updateAllRulesBtn" onclick="triggerRulesetUpdate(\'all\')"', HTML_CONTENT,
+        self.assertIn('id="updateAllRulesBtn" data-action="update-ruleset" data-arg="all"', HTML_CONTENT,
                       'rulesModal must have an Update All button')
 
     def test_showRulesModal_fetches_info_and_status_and_renders(self):
@@ -18906,7 +18915,7 @@ class TestRulesModal(unittest.TestCase):
 
     def test_stale_threshold_days_input_exists(self):
         self.assertIn('id="staleThresholdDaysInput"', HTML_CONTENT)
-        self.assertIn('onchange="handleStaleThresholdDaysChange(this)"', HTML_CONTENT)
+        self.assertIn("getElementById('staleThresholdDaysInput').addEventListener('change'", JS_CONTENT)
         self.assertIn('min="1"', HTML_CONTENT)
         self.assertIn('max="365"', HTML_CONTENT)
 

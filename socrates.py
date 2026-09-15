@@ -618,6 +618,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header('X-Frame-Options', 'DENY')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'self';")
+        # Phase 0 of dropping script-src 'unsafe-inline': report (without
+        # blocking) everything the target policy would refuse, so the
+        # inline-handler migration can be tracked and regressions surface.
+        self.send_header('Content-Security-Policy-Report-Only', "script-src 'self'; report-uri /api/csp-report;")
 
     def end_headers(self):
         self._add_security_headers()
@@ -896,6 +900,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/acknowledge-alert': 'handle_post_acknowledge_alert',
         '/api/acknowledge-alerts-bulk': 'handle_post_acknowledge_alerts_bulk',
         '/api/delete-all-analyses': 'handle_post_delete_all_analyses',
+        '/api/csp-report': 'handle_post_csp_report',
         '/api/update-rules': 'handle_post_update_rules',
     }
 
@@ -1680,6 +1685,41 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(500, 'Could not update acknowledged state')
             return
         self._send_json({'success': True, 'count': len(row_ids)})
+
+    # Dedupe key -> True for CSP violations already logged this run, so a
+    # page with one unconverted inline handler doesn't flood the console on
+    # every click. Bounded: cleared when it grows past a sane size.
+    _CSP_REPORTS_SEEN = {}
+
+    def handle_post_csp_report(self):
+        """Sink for Content-Security-Policy-Report-Only violation reports.
+
+        Browsers POST these with Content-Type: application/csp-report, so
+        this reads the raw body instead of going through _read_json_body's
+        application/json requirement. Reports are logged (deduplicated) for
+        the inline-script migration; the response is always 204.
+        """
+        body = self._read_post_body(65536)
+        if body is None:
+            return
+        try:
+            report = json.loads(body).get('csp-report', {})
+        except (json.JSONDecodeError, AttributeError):
+            report = {}
+        if report:
+            key = (report.get('violated-directive'),
+                   report.get('blocked-uri'),
+                   report.get('source-file'),
+                   report.get('line-number'))
+            if key not in self._CSP_REPORTS_SEEN:
+                if len(self._CSP_REPORTS_SEEN) > 512:
+                    self._CSP_REPORTS_SEEN.clear()
+                self._CSP_REPORTS_SEEN[key] = True
+                print(f"CSP report: {report.get('violated-directive')} "
+                      f"blocked={report.get('blocked-uri')} "
+                      f"at {report.get('source-file')}:{report.get('line-number')}")
+        self.send_response(204)
+        self.end_headers()
 
     def handle_post_delete_all_analyses(self):
         deleted = 0

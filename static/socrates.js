@@ -454,27 +454,27 @@
         function renderGearMenu() {
             return `
                 <div class="app-header-menu">
-                    <button class="app-header-menu-btn" onclick="toggleMenu()" title="Menu" id="appHeaderMenuBtn">
+                    <button class="app-header-menu-btn" data-action="toggle-menu" title="Menu" id="appHeaderMenuBtn">
                         ${GEAR_ICON_SVG}
                     </button>
                     <div class="app-header-menu-dropdown" id="appHeaderMenuDropdown">
-                        <button class="app-header-menu-item" onclick="showHelpModal(); closeMenu();">
+                        <button class="app-header-menu-item" data-action="menu-help">
                             <span><svg class="theme-icon-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
                             <span>Help</span>
                         </button>
-                        <button class="app-header-menu-item" onclick="showSettingsModal(); closeMenu();">
+                        <button class="app-header-menu-item" data-action="menu-settings">
                             <span><svg class="theme-icon-help" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.17 15a1.65 1.65 0 0 0-1.51-1H2a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.17 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.17a1.65 1.65 0 0 0 1-1.51V2a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></span>
                             <span>Settings</span>
                         </button>
-                        <button class="app-header-menu-item" onclick="showThemesModal(); closeMenu();">
+                        <button class="app-header-menu-item" data-action="menu-themes">
                             <span><svg class="theme-icon-help" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"></path></svg></span>
                             <span>Themes</span>
                         </button>
-                        <button class="app-header-menu-item" onclick="showRulesModal(); closeMenu();">
+                        <button class="app-header-menu-item" data-action="menu-rules">
                             <span><svg class="theme-icon-help" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg></span>
                             <span>Rules</span>
                         </button>
-                        <button class="app-header-menu-item" onclick="showAboutModal(); closeMenu();">
+                        <button class="app-header-menu-item" data-action="menu-about">
                             <span><svg class="theme-icon-help" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></span>
                             <span>About</span>
                         </button>
@@ -3801,6 +3801,13 @@
         document.addEventListener('click', function(e) {
             if (e.target.tagName === 'TH') {
                 const th = e.target;
+                // Skip THs inside a modal (e.g. the Help modal's file-types
+                // table) - those clicks used to be blocked from reaching
+                // this document-level listener by a stopPropagation()
+                // handler on every .modal-content div; that shim is gone
+                // (backdrop closing now checks event.target instead), so
+                // keep modal tables non-sortable explicitly.
+                if (th.closest('.modal-content')) return;
                 // Skip if cursor is default (non-sortable table)
                 if (window.getComputedStyle(th).cursor === 'default') return;
                 const thead = th.closest('thead');
@@ -11626,6 +11633,89 @@
                 }
             }, CONFIG.SEARCH_DEBOUNCE_MS);
         });
+
+        // Static-shell event wiring - socrates.html carries no inline on*=
+        // handler attributes (CSP hardening: script-src without
+        // 'unsafe-inline' forbids them). Elements declare a data-action
+        // (plus an optional data-arg) and the delegated click listener
+        // below dispatches to this registry. Delegation also keeps
+        // re-rendered copies of the static markup wired (e.g.
+        // renderGearMenu(), which rebuilds the header menu with the same
+        // data-action attributes).
+        const STATIC_ACTIONS = {
+            'show-welcome': () => showWelcome(),
+            'show-about-modal': () => showAboutModal(),
+            'toggle-menu': () => toggleMenu(),
+            'menu-help': () => { showHelpModal(); closeMenu(); },
+            'menu-settings': () => { showSettingsModal(); closeMenu(); },
+            'menu-themes': () => { showThemesModal(); closeMenu(); },
+            'menu-rules': () => { showRulesModal(); closeMenu(); },
+            'menu-about': () => { showAboutModal(); closeMenu(); },
+            'close-error-modal': () => closeErrorModal(),
+            'close-delete-modal': () => closeDeleteModal(),
+            'close-delete-all-modal': () => closeDeleteAllModal(),
+            'close-reanalyze-modal': () => closeReanalyzeModal(),
+            'close-help-modal': () => closeHelpModal(),
+            'close-settings-modal': () => closeSettingsModal(),
+            'close-about-modal': () => closeAboutModal(),
+            'close-security-onion-modal': () => closeSecurityOnionModal(),
+            'close-themes-modal': () => closeThemesModal(),
+            'close-notes-modal': () => closeNotesModal(),
+            'close-rules-modal': () => closeRulesModal(),
+            'close-autocomplete-modal': () => closeAutocompleteModal(),
+            'confirm-delete': () => confirmDelete(),
+            'confirm-delete-all': () => confirmDeleteAll(),
+            'confirm-reanalyze': () => confirmReanalyze(),
+            'save-custom-lookup-site': () => handleSaveCustomLookupSite(),
+            'cancel-edit-custom-lookup-site': () => cancelEditCustomLookupSite(),
+            // Reads settingsAnalysisCount at click time, not render time -
+            // the real count only arrives after showSettingsModal()'s
+            // async fetch (see the variable's own comment).
+            'open-delete-all-analyses': () => openDeleteAllAnalyses(settingsAnalysisCount),
+            'save-settings': () => saveSettings(),
+            'save-notes': () => saveAnalysisNotes(),
+            'check-app-update-now': () => checkForAppUpdateNow(),
+            'update-ruleset': (el) => triggerRulesetUpdate(el.dataset.arg),
+            'perform-search': () => performSearch(),
+            // Modal backdrop: data-arg names the close action to run. A
+            // click anywhere inside the modal bubbles up through the
+            // backdrop div (the .modal-content stopPropagation shims are
+            // gone), so close only when the click landed on the backdrop
+            // itself - the same event.target === backdrop check the old
+            // handleModalBackdropClick()/handle*BackdropClick() inline
+            // handlers made.
+            'backdrop': (el, e) => {
+                if (e.target !== el) return;
+                const closeFn = STATIC_ACTIONS[el.dataset.arg];
+                if (closeFn) closeFn(el, e);
+            },
+        };
+
+        document.addEventListener('click', e => {
+            const el = e.target.closest('[data-action]');
+            if (!el) return;
+            const fn = STATIC_ACTIONS[el.dataset.action];
+            // Unknown names are someone else's data-action (e.g. the
+            // #previousAnalysesList notes buttons handled by their own
+            // delegated listener above) - leave them alone.
+            if (!fn) return;
+            // The show-welcome / show-about-modal anchors are href="#"
+            // links; preventDefault replaces their old "return false;".
+            if (el.tagName === 'A') e.preventDefault();
+            fn(el, e);
+        });
+
+        // Inputs the static shell used to wire via inline on*= attributes,
+        // bound directly by id - this script tag sits at the end of the
+        // page, so the elements all exist by now.
+        document.getElementById('searchInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') performSearch();
+        });
+        document.getElementById('autocompleteInput').addEventListener('input', () => filterAutocomplete());
+        document.getElementById('checkForUpdates').addEventListener('change', e => handleCheckForUpdatesChange(e.target));
+        document.getElementById('syncThemeWithOS').addEventListener('change', e => handleSyncThemeWithOSChange(e.target));
+        document.getElementById('checkForStaleRules').addEventListener('change', e => handleCheckForStaleRulesChange(e.target));
+        document.getElementById('staleThresholdDaysInput').addEventListener('change', e => handleStaleThresholdDaysChange(e.target));
 
         async function init() {
             try {

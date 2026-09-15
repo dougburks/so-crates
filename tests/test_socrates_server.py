@@ -7310,5 +7310,59 @@ class TestRunCapped(unittest.TestCase):
             server._run_capped(['sleep', '30'], max_bytes=1000, timeout=1)
 
 
+class TestCSPReportOnly(unittest.TestCase):
+    """Phase 0 of removing script-src 'unsafe-inline': a Report-Only header
+    plus a report sink, without changing the enforced policy."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.original_base = server.DATA_DIR
+        server.DATA_DIR = cls.tmpdir
+        cls.port = 20000 + (os.getpid() % 1000)
+        cls.server = server.ThreadedTCPServer(('127.0.0.1', cls.port), server.Handler)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        server.DATA_DIR = cls.original_base
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_report_only_header_present(self):
+        import urllib.request
+        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/socrates.html', timeout=5) as resp:
+            ro = resp.headers.get('Content-Security-Policy-Report-Only', '')
+            enforced = resp.headers.get('Content-Security-Policy', '')
+        self.assertIn("script-src 'self'", ro)
+        self.assertIn('/api/csp-report', ro)
+        self.assertNotIn('unsafe-inline', ro)
+        # enforced policy unchanged in phase 0
+        self.assertIn("'unsafe-inline'", enforced)
+
+    def test_report_endpoint_accepts_csp_content_type(self):
+        import urllib.request
+        body = json.dumps({'csp-report': {
+            'violated-directive': 'script-src', 'blocked-uri': 'inline',
+            'source-file': 'http://x/socrates.html', 'line-number': 1}}).encode()
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{self.port}/api/csp-report', data=body,
+            headers={'Content-Type': 'application/csp-report'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 204)
+
+    def test_report_endpoint_tolerates_garbage(self):
+        import urllib.request
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{self.port}/api/csp-report', data=b'not json',
+            headers={'Content-Type': 'application/csp-report'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 204)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
