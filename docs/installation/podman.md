@@ -10,9 +10,11 @@ sudo apt update && sudo apt -y install podman
 mkdir -p ~/socrates-data
 # Start SO-CRATES
 podman run --userns=keep-id --user $(id -u):$(id -g) \
-  -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+  -v $HOME/socrates-data:/data:Z -p 127.0.0.1:8000:8000 \
   ghcr.io/dougburks/so-crates:main
 ```
+
+This publishes the port on localhost only. To let other machines on your network connect, use `-p 8000:8000` instead.
 
 ## podman compose
 
@@ -59,7 +61,7 @@ Then transfer so-crates.tar to the isolated network via USB or other media. On t
 podman load < so-crates.tar
 mkdir -p ~/socrates-data
 podman run --userns=keep-id --user $(id -u):$(id -g) \
-  -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+  -v $HOME/socrates-data:/data:Z -p 127.0.0.1:8000:8000 \
   ghcr.io/dougburks/so-crates:main
 ```
 
@@ -73,6 +75,6 @@ cd so-crates
 podman build -t so-crates .
 mkdir -p ~/socrates-data
 podman run --userns=keep-id --user $(id -u):$(id -g) \
-  -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+  -v $HOME/socrates-data:/data:Z -p 127.0.0.1:8000:8000 \
   so-crates
 ```

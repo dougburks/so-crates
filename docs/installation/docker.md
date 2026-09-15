@@ -7,8 +7,10 @@
 
 ```bash
 mkdir -p ~/socrates-data
-docker run -v ~/socrates-data:/data -p 8000:8000 ghcr.io/dougburks/so-crates:main
+docker run -v ~/socrates-data:/data -p 127.0.0.1:8000:8000 ghcr.io/dougburks/so-crates:main
 ```
+
+This publishes the port on localhost only. To let other machines on your network connect, use `-p 8000:8000` instead.
 
 ## docker run (Linux)
 
@@ -19,7 +21,7 @@ sudo apt update && sudo apt -y install docker.io && sudo usermod -aG docker $USE
 # Create data directory
 mkdir -p ~/socrates-data
 # Start SO-CRATES
-newgrp docker -c "docker run -v ~/socrates-data:/data -p 8000:8000 ghcr.io/dougburks/so-crates:main"
+newgrp docker -c "docker run -v ~/socrates-data:/data -p 127.0.0.1:8000:8000 ghcr.io/dougburks/so-crates:main"
 ```
 
 ## docker compose (Linux)
@@ -63,7 +65,7 @@ Then transfer `so-crates.tar` to the isolated network via USB or other media. On
 ```bash
 docker load < so-crates.tar
 mkdir -p ~/socrates-data
-docker run -v ~/socrates-data:/data -p 8000:8000 ghcr.io/dougburks/so-crates:main
+docker run -v ~/socrates-data:/data -p 127.0.0.1:8000:8000 ghcr.io/dougburks/so-crates:main
 ```
 
 ## Build Your Own Docker Image
@@ -75,5 +77,5 @@ git clone https://github.com/dougburks/so-crates
 cd so-crates
 docker build -t so-crates .
 mkdir -p ~/socrates-data
-docker run -v ~/socrates-data:/data -p 8000:8000 so-crates
+docker run -v ~/socrates-data:/data -p 127.0.0.1:8000:8000 so-crates
 ```
