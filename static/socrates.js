@@ -3,21 +3,13 @@
             return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
-        function escapeJsString(str) {
-            if (str == null) return '';
-            // Every call site embeds the result inside a single-quoted JS
-            // string literal within a double-quoted HTML onclick="..."
-            // attribute. Escaping only backslash/quote protects the JS
-            // string boundary but leaves the attribute boundary open (a
-            // raw '"' or '<'/'>' would still break out of the attribute),
-            // so also HTML-escape after JS-escaping.
-            const jsEscaped = String(str)
-                .replace(/\\/g, '\\\\')
-                .replace(/'/g, "\\'")
-                .replace(/\n/g, '\\n')
-                .replace(/\r/g, '\\r');
-            return escapeHtml(jsEscaped);
-        }
+        // escapeJsString (JS-string-then-HTML escaping for values embedded
+        // in inline handler attributes) is gone: no generated HTML carries
+        // inline on*= handlers anymore (CSP: script-src without
+        // 'unsafe-inline'). Dynamic values now ride in data-* attributes -
+        // escapeHtml'd scalars, or percent-encoded JSON for structured
+        // payloads (see pivotDataAttrsHtml) - decoded by the delegated
+        // listeners at the bottom of this file.
 
         // Shared by loadAnalysis() (the analysis header) and showWelcome()
         // (the Previous Analyses list) so both render a sample's own event
@@ -487,13 +479,15 @@
             for (const group of THEME_GROUP_ORDER) {
                 html += `<div class="app-header-menu-header">${THEME_GROUP_LABELS[group]}</div><div class="theme-tile-grid">`;
                 for (const key of THEME_MENU_ORDER.filter(k => THEMES[k].group === group)) {
+                    // Hover/focus preview and click-to-commit are delegated
+                    // (see the theme-tile mouseover/mouseout/focusin/focusout
+                    // listeners and the 'commit-theme' STATIC_ACTIONS entry
+                    // near the end of this file), keyed off the same
+                    // data-theme-option attribute the keyboard nav already
+                    // uses - no inline on*= handlers (CSP: script-src
+                    // without 'unsafe-inline' blocks them).
                     html += `
-                        <button class="theme-tile" data-theme-option="${key}"
-                                onmouseenter="previewTheme('${key}')"
-                                onmouseleave="revertTheme()"
-                                onfocus="previewTheme('${key}')"
-                                onblur="revertTheme()"
-                                onclick="commitTheme('${key}')">
+                        <button class="theme-tile" data-theme-option="${key}" data-action="commit-theme">
                             <span>${THEMES[key].label}</span>
                         </button>`;
                 }
@@ -1838,10 +1832,12 @@
             themeTileNavSelection = null;
         }
 
-        // Shared by every modal whose backdrop <div> has onclick="handleModalBackdropClick(event, closeXModal)" -
-        // event.currentTarget is always that backdrop div itself (where the
-        // listener is attached), so a click lands on the backdrop (not a
-        // child element) exactly when target === currentTarget.
+        // Backdrop-click helper: closes exactly when the click landed on
+        // the backdrop div itself (not a child element), i.e. when
+        // target === currentTarget. The static modals now route backdrop
+        // clicks through the delegated 'backdrop' STATIC_ACTIONS entry
+        // instead (same target check), but this helper's logic is still
+        // the reference implementation the tests exercise directly.
         function handleModalBackdropClick(event, closeFn) {
             if (event.target === event.currentTarget) closeFn();
         }
@@ -2183,7 +2179,7 @@
         const ROW_NOTE_MAX_LENGTH = 500; // mirrors config.MAX_ROW_NOTE_LENGTH
         function getWelcomeHelpContent() { return `
             <p style="color: var(--text-muted); font-size: 0.95rem;">
-                <span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Maximum file size is ${getUserMaxUploadSizeMB().toLocaleString()} MB (adjustable in <a href="#" onclick="event.preventDefault(); showSettingsModal();" style="color: var(--accent); text-decoration: underline; font-weight: 600;">Settings</a>).
+                <span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Maximum file size is ${getUserMaxUploadSizeMB().toLocaleString()} MB (adjustable in <a href="#" data-action="show-settings-modal" style="color: var(--accent); text-decoration: underline; font-weight: 600;">Settings</a>).
             </p>
             <p style="color: var(--text-muted); font-size: 0.95rem; margin-top: 15px;">
                 <span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Processing may take a few minutes depending on the size of the file.
@@ -2205,19 +2201,19 @@
                         <td style="padding: 8px 12px;"><strong style="color: var(--accent);">Packet Capture</strong></td>
                         <td style="padding: 8px 12px;">.pcap, .pcapng, .cap, .trace</td>
                         <td style="padding: 8px 12px;">Suricata</td>
-                        <td style="padding: 8px 12px;"><a href="#" onclick="event.preventDefault(); showRulesModal(true);" style="color: var(--accent); text-decoration: underline; font-weight: 600;">Multiple Rulesets</a></td>
+                        <td style="padding: 8px 12px;"><a href="#" data-action="show-rules-modal" data-arg="expand-sources" style="color: var(--accent); text-decoration: underline; font-weight: 600;">Multiple Rulesets</a></td>
                     </tr>
                     <tr style="border-bottom: 1px solid var(--bg-tertiary);">
                         <td style="padding: 8px 12px;"><strong style="color: var(--accent);">Logs</strong></td>
                         <td style="padding: 8px 12px;">.evtx, .json, .jsonl, .csv, .xml, .log</td>
                         <td style="padding: 8px 12px;">Zircolite</td>
-                        <td style="padding: 8px 12px;"><a href="#" onclick="event.preventDefault(); showRulesModal();" style="color: var(--accent); text-decoration: underline; font-weight: 600;">SigmaHQ</a></td>
+                        <td style="padding: 8px 12px;"><a href="#" data-action="show-rules-modal" style="color: var(--accent); text-decoration: underline; font-weight: 600;">SigmaHQ</a></td>
                     </tr>
                     <tr>
                         <td style="padding: 8px 12px;"><strong style="color: var(--accent);">Binary / Other</strong></td>
                         <td style="padding: 8px 12px;">.exe, .dll, .elf, .pdf, etc.</td>
                         <td style="padding: 8px 12px;">YARA</td>
-                        <td style="padding: 8px 12px;"><a href="#" onclick="event.preventDefault(); showRulesModal();" style="color: var(--accent); text-decoration: underline; font-weight: 600;">YARA Forge</a></td>
+                        <td style="padding: 8px 12px;"><a href="#" data-action="show-rules-modal" style="color: var(--accent); text-decoration: underline; font-weight: 600;">YARA Forge</a></td>
                     </tr>
                 </tbody>
             </table>
@@ -2225,7 +2221,7 @@
                 Any of the above file types can be uploaded inside a .zip archive - every supported file found is extracted and analyzed as its own independent analysis.
             </p>
             <p style="color: var(--text-muted); font-size: 0.95rem; margin-top: 15px;">
-                <span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Want more fun? Try one of our Fun <a href="#" onclick="event.preventDefault(); showThemesModal();" style="color: var(--accent); text-decoration: underline; font-weight: 600;">themes</a>!
+                <span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Want more fun? Try one of our Fun <a href="#" data-action="show-themes-modal" style="color: var(--accent); text-decoration: underline; font-weight: 600;">themes</a>!
             </p>
         `; }
         // Full feature comparison, opened via showSecurityOnionModal() -
@@ -2456,21 +2452,13 @@
             if (activeCard) {
                 activeCard.classList.add('tab-active');
             } else {
+                // Every real stat card carries data-section="section-x"
+                // (see buildStats' own template, dispatched via the
+                // 'show-tab' STATIC_ACTIONS entry) - matched via dataset
+                // rather than parsing a handler attribute string.
                 document.querySelectorAll('.stat-card').forEach(card => {
-                    const onclick = card.getAttribute('onclick');
-                    if (onclick && onclick.includes(eventType)) {
-                        // Every real stat card's onclick is actually
-                        // showTab('section-x', this), per buildStats'
-                        // own template. Matching through to the real
-                        // closing paren wherever it falls, rather than
-                        // requiring one immediately after the captured
-                        // id, tolerates that trailing ", this" second
-                        // argument - the old, stricter pattern never
-                        // actually matched anything in practice.
-                        const match = onclick.match(/showTab\('section-([^']+)'.*\)/);
-                        if (match && match[1] === eventType) {
-                            card.classList.add('tab-active');
-                        }
+                    if (card.dataset.section === 'section-' + eventType) {
+                        card.classList.add('tab-active');
                     }
                 });
             }
@@ -2640,12 +2628,12 @@
             const cellIndex = Array.from(tr.children).indexOf(td);
             const pair = pairs[cellIndex];
             if (!pair) return false;
-            // Must not reach the document-level outside-click listener
-            // showPivotMenu()'s menu relies on to close itself - that
-            // listener would otherwise see this same click as "outside"
-            // the menu that was just created (the menu isn't a DOM
-            // ancestor of the row/cell that was clicked) and immediately
-            // remove it again before the user ever sees it.
+            // The menu created below survives this same click because the
+            // document-level outside-click listener that closes pivot
+            // menus is registered EARLIER than the data-action dispatcher
+            // this runs from - it has already fired (closing any previous
+            // menu) by the time showPivotMenu() runs, and never sees the
+            // brand-new menu as "outside".
             event.stopPropagation();
             showPivotMenu(event, 'section-' + tr.dataset.eventType, pair[0], pair[1], false, tr, tr.dataset.communityId);
             return true;
@@ -2745,10 +2733,10 @@
             sigmaalert: { 'Rule Title': 'Rule' },
         };
 
-        // Delegated (not a per-value onclick) since htmlRowText returns a
+        // Delegated (not a per-value listener) since htmlRowText returns a
         // plain HTML string, not a DOM node addEventListener could attach
         // to directly - same reasoning as showPivotMenu's own closures
-        // over onclick-string embedding. Detail-panel fields have no
+        // over inline handler-string embedding. Detail-panel fields have no
         // ready-made column context of their own (unlike a table row,
         // which already carries data-event-type - see pivotDataAttrsHtml),
         // so this resolves it from the detail-row's own preceding
@@ -2827,14 +2815,14 @@
         // Include/Exclude/Only for one row-cell's value (see
         // handleRowCellClick). Built via direct DOM APIs and
         // addEventListener closures over the real col/value, not an
-        // onclick="..." attribute string - col/value can be arbitrary
+        // inline handler attribute string - col/value can be arbitrary
         // attacker-influenced content (a log field, an HTTP header, ...),
-        // and closures sidestep the whole class of onclick-string escaping
+        // and closures sidestep the whole class of handler-string escaping
         // bugs (JSON.stringify-vs-double-quotes, unescaped single quotes)
-        // this codebase otherwise has to guard against explicitly for
-        // every dynamic onclick elsewhere - see TestFilterOnclickQuoting.
-        // Only the visible label text goes through escapeHtml, same as
-        // any other rendered value.
+        // this codebase's generated data-* attributes otherwise guard
+        // against via escapeHtml/encodeURIComponent - see
+        // TestFilterChipDataAttrs. Only the visible label text goes
+        // through escapeHtml, same as any other rendered value.
         // Non-null only for a row that can be acknowledged (a Suricata
         // alert or a sigma_alerts row) - anything else (dns, http, a log
         // row, ...) gets no Acknowledge buttons in showPivotMenu() below.
@@ -3148,7 +3136,7 @@
             // Payload section further down, without losing the section
             // entirely. Expanded by default - this is a "shrink it back
             // down" control, not a "click to reveal" gate.
-            html += `<div class="playbook-questions-toggle" style="grid-column: 1 / -1; color: var(--text-muted); margin-top: 4px; cursor: pointer; user-select: none;" onclick="togglePlaybookQuestions(this)">▾ The following questions might help guide your investigation:</div>`;
+            html += `<div class="playbook-questions-toggle" data-action="toggle-playbook-questions" style="grid-column: 1 / -1; color: var(--text-muted); margin-top: 4px; cursor: pointer; user-select: none;">▾ The following questions might help guide your investigation:</div>`;
             html += `<div class="playbook-questions" style="display: contents;">${questionsHtml}</div>`;
             return html;
         }
@@ -3303,7 +3291,7 @@
                 const data = await resp.json();
                 
                 if (data.packets && data.packets.length > 0) {
-                    let html = '<div class="packet-controls"><button class="packet-control-btn" onclick="expandAllPackets(this.parentNode.parentNode)">Expand All</button><button class="packet-control-btn" onclick="collapseAllPackets(this.parentNode.parentNode)">Collapse All</button></div>';
+                    let html = '<div class="packet-controls"><button class="packet-control-btn" data-action="expand-all-packets">Expand All</button><button class="packet-control-btn" data-action="collapse-all-packets">Collapse All</button></div>';
                     
                     // Packets always start collapsed - expandAllPackets()/
                     // collapseAllPackets()/togglePacket() (bound above and
@@ -3317,7 +3305,7 @@
                         const dirClass = isSrc ? 'src-dir' : 'dst-dir';
                         html += `
                             <div class="packet-block ${dirClass}">
-                                <div class="packet-header" onclick="togglePacket(this)">
+                                <div class="packet-header" data-action="toggle-packet">
                                     <span>▸</span><span>${escapeHtml(pkt.header)}</span>
                                 </div>
                                 <div class="packet-content hidden">
@@ -3371,7 +3359,7 @@
         // this one shared helper all get the detail-panel pivot menu for
         // free, without each needing its own change. data-detail-pivot
         // carries [label, value] as percent-encoded JSON rather than an
-        // onclick="..." string - same reasoning as pivotDataAttrsHtml's
+        // inline handler string - same reasoning as pivotDataAttrsHtml's
         // own data-pivot attribute (a detail value can be arbitrary
         // attacker-influenced content, e.g. a log field or HTTP header).
         // An empty value has nothing meaningful to pivot on, so it's left
@@ -3441,15 +3429,18 @@
 
         function _formatEventPayload(e) {
             if (!e.src_ip || !e.src_port || !e.dest_ip || !e.dest_port) return '';
-            const srcIpJs = escapeJsString(e.src_ip);
-            const dstIpJs = escapeJsString(e.dest_ip);
             const srcIpHtml = escapeHtml(e.src_ip);
             const dstIpHtml = escapeHtml(e.dest_ip);
-            // Ports are embedded unquoted in onclick handlers and raw in data
-            // attributes, so coerce to integers to guarantee they are numeric.
+            // Ports are embedded raw in data attributes, so coerce to
+            // integers to guarantee they are numeric.
             const srcPort = parseInt(e.src_port, 10) || 0;
             const dstPort = parseInt(e.dest_port, 10) || 0;
-            return `<div class="stream-payload" data-src-ip="${srcIpHtml}" data-src-port="${srcPort}" data-dst-ip="${dstIpHtml}" data-dst-port="${dstPort}" style="margin-top: 15px;"><div style="color: var(--text-muted); font-size: 0.85rem; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-bottom: 5px;">Payload</div><div style="display: flex; justify-content: flex-start; align-items: center; margin-bottom: 10px;"><div class="view-tabs"><button class="view-tab active" onclick="switchStreamView('ascii','${srcIpJs}',${srcPort},'${dstIpJs}',${dstPort},this)">ASCII Transcript</button><button class="view-tab" onclick="switchStreamView('hexdump','${srcIpJs}',${srcPort},'${dstIpJs}',${dstPort},this)">Hexdump</button></div><button class="stream-btn" onclick="downloadPcap('${srcIpJs}','${srcPort}','${dstIpJs}','${dstPort}')" style="margin-left: 12px;">Download PCAP</button></div><div class="stream-view-container" style="background: var(--bg-primary); padding: 15px; border-radius: 8px; font-size: 0.8rem; margin: 0;"><div class="ascii-transcript" style="white-space: pre-wrap; overflow-wrap: break-word;"></div><div class="hexdump-content" style="display: none;"></div></div></div>`;
+            // The wrapper's own data-src-ip/data-src-port/data-dst-ip/
+            // data-dst-port attributes are the single source of the stream
+            // endpoints - the 'switch-stream-view'/'download-stream-pcap'
+            // STATIC_ACTIONS entries read them back via closest(), so the
+            // buttons themselves only carry the view name.
+            return `<div class="stream-payload" data-src-ip="${srcIpHtml}" data-src-port="${srcPort}" data-dst-ip="${dstIpHtml}" data-dst-port="${dstPort}" style="margin-top: 15px;"><div style="color: var(--text-muted); font-size: 0.85rem; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-bottom: 5px;">Payload</div><div style="display: flex; justify-content: flex-start; align-items: center; margin-bottom: 10px;"><div class="view-tabs"><button class="view-tab active" data-action="switch-stream-view" data-view="ascii">ASCII Transcript</button><button class="view-tab" data-action="switch-stream-view" data-view="hexdump">Hexdump</button></div><button class="stream-btn" data-action="download-stream-pcap" style="margin-left: 12px;">Download PCAP</button></div><div class="stream-view-container" style="background: var(--bg-primary); padding: 15px; border-radius: 8px; font-size: 0.8rem; margin: 0;"><div class="ascii-transcript" style="white-space: pre-wrap; overflow-wrap: break-word;"></div><div class="hexdump-content" style="display: none;"></div></div></div>`;
         }
 
         // Hidden anchor for an AI Summary field - see
@@ -3874,8 +3865,8 @@
             // also centering that unrelated content away from the filename
             // it describes. This welcome-only tagline is scoped to its own
             // class instead, left untouched at the other #appHeaderMeta call site.
-            document.getElementById('appHeaderMeta').innerHTML = '<a href="#" onclick="event.preventDefault(); showAboutModal();" class="app-header-tagline">Security Onion Containerized Rapid Analysis of Threats, Evil, and Sus</a>';
-            document.getElementById('footerCenterTeaser').innerHTML = '<a href="#" onclick="event.preventDefault(); showSecurityOnionModal();" class="footer-teaser-link">Need more advanced functionality?</a>';
+            document.getElementById('appHeaderMeta').innerHTML = '<a href="#" data-action="show-about-modal" class="app-header-tagline">Security Onion Containerized Rapid Analysis of Threats, Evil, and Sus</a>';
+            document.getElementById('footerCenterTeaser').innerHTML = '<a href="#" data-action="show-security-onion-modal" class="footer-teaser-link">Need more advanced functionality?</a>';
             document.getElementById('appHeaderRight').innerHTML = renderGearMenu();
             updateThemeMenu();
             checkForStaleRules();
@@ -3919,7 +3910,7 @@
 
             const helpModal = document.getElementById('helpModal');
             if (isWelcome) {
-                modalTitle.innerHTML = 'Welcome to <a href="#" onclick="event.preventDefault(); showAboutModal();" style="color: var(--accent); text-decoration: underline;">SO-CRATES</a>!';
+                modalTitle.innerHTML = 'Welcome to <a href="#" data-action="show-about-modal" style="color: var(--accent); text-decoration: underline;">SO-CRATES</a>!';
                 modalBody.innerHTML = getWelcomeHelpContent();
                 checkboxContainer.style.display = 'flex';
                 checkbox.checked = safeStorageGet(localStorage, 'socrates_hideHelp') !== 'true';
@@ -4052,8 +4043,8 @@
                             <div style="color: var(--text-muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(site.urlTemplate)}">${escapeHtml(site.urlTemplate)}</div>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center; flex-shrink: 0;">
-                            <button onclick="startEditCustomLookupSite(${i})" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.8rem; text-decoration: underline;">Edit</button>
-                            <button onclick="handleDeleteCustomLookupSite(${i})" style="background: none; color: var(--badge-danger-text); border: none; padding: 0; cursor: pointer; display: flex;" title="Delete">${DELETE_ICON_SVG}</button>
+                            <button data-action="edit-custom-lookup-site" data-index="${i}" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.8rem; text-decoration: underline;">Edit</button>
+                            <button data-action="delete-custom-lookup-site" data-index="${i}" style="background: none; color: var(--badge-danger-text); border: none; padding: 0; cursor: pointer; display: flex;" title="Delete">${DELETE_ICON_SVG}</button>
                         </div>
                     </div>
                 `).join('');
@@ -4200,7 +4191,7 @@
             // Same footer teaser as the welcome screen (showWelcomeUI) -
             // kept consistent across both modes rather than swapping to a
             // "Need help?" prompt during analysis.
-            document.getElementById('footerCenterTeaser').innerHTML = '<a href="#" onclick="event.preventDefault(); showSecurityOnionModal();" class="footer-teaser-link">Need more advanced functionality?</a>';
+            document.getElementById('footerCenterTeaser').innerHTML = '<a href="#" data-action="show-security-onion-modal" class="footer-teaser-link">Need more advanced functionality?</a>';
         }
 
         async function showWelcome() {
@@ -4243,7 +4234,7 @@
                             ? `<button data-md5="${escapeHtml(a.md5)}" data-action="notes" class="previous-analysis-notes" style="border: none; cursor: pointer; font-size: 1rem; padding: 4px 10px; border-radius: 6px; margin-right: 4px;" title="View/edit notes">${NOTES_ICON_SVG}</button>`
                             : '';
                         return `<div class="previous-analysis-row" style="display: flex; align-items: center; padding: 8px 10px;">
-                            <a href="?file=${escapeHtml(a.md5)}" onclick="event.preventDefault(); loadAnalysis('${escapeJsString(a.md5)}');" style="color: var(--accent); text-decoration: none; flex: 1; display: flex; align-items: baseline; gap: 8px; overflow: hidden;" title="${escapeHtml(rowTitle)}">
+                            <a href="?file=${escapeHtml(a.md5)}" data-action="load-analysis" data-md5="${escapeHtml(a.md5)}" style="color: var(--accent); text-decoration: none; flex: 1; display: flex; align-items: baseline; gap: 8px; overflow: hidden;" title="${escapeHtml(rowTitle)}">
                                 <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${FOLDER_ICON_SVG}${escapeHtml(a.name)}</span>
                             </a>
                             ${notesButtonHtml}
@@ -4262,13 +4253,13 @@
                         <div style="background: var(--bg-secondary); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 100%; box-sizing: border-box;">
                             <div style="color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; margin-bottom: 15px; font-weight: 600;">${DOWN_ARROW_ICON_SVG} Select a sample file, import a file from URL, or import a file from your local system</div>
                             <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 15px;">
-                                <div class="sample-card" title="${_sampleCardTitle(DEFAULT_SAMPLE_URL)}" tabindex="0" role="button" aria-label="Analyze the sample PCAP file" onclick="loadSampleUrl('${DEFAULT_SAMPLE_URL}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();loadSampleUrl('${DEFAULT_SAMPLE_URL}');}">
+                                <div class="sample-card" title="${_sampleCardTitle(DEFAULT_SAMPLE_URL)}" tabindex="0" role="button" aria-label="Analyze the sample PCAP file" data-action="load-sample-url" data-url="${escapeHtml(DEFAULT_SAMPLE_URL)}" data-key-activate="enter-space">
                                      <span class="sample-label">Sample PCAP file</span>
                                  </div>
-                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_LOG_URL)}" tabindex="0" role="button" aria-label="Analyze the sample log file" onclick="loadSampleUrl('${SAMPLE_LOG_URL}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();loadSampleUrl('${SAMPLE_LOG_URL}');}">
+                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_LOG_URL)}" tabindex="0" role="button" aria-label="Analyze the sample log file" data-action="load-sample-url" data-url="${escapeHtml(SAMPLE_LOG_URL)}" data-key-activate="enter-space">
                                     <span class="sample-label">Sample log file</span>
                                 </div>
-                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_BINARY_URL)}" tabindex="0" role="button" aria-label="Analyze the sample binary file" onclick="loadSampleUrl('${SAMPLE_BINARY_URL}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();loadSampleUrl('${SAMPLE_BINARY_URL}');}">
+                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_BINARY_URL)}" tabindex="0" role="button" aria-label="Analyze the sample binary file" data-action="load-sample-url" data-url="${escapeHtml(SAMPLE_BINARY_URL)}" data-key-activate="enter-space">
                                     <span class="sample-label">Sample binary file</span>
                                 </div>
                             </div>
@@ -4285,15 +4276,13 @@
                             </div>
                             <div style="text-align: center; color: var(--text-muted); font-size: 0.9rem; font-weight: 600; text-transform: uppercase; margin-bottom: 15px;">— OR —</div>
                             <div style="display: flex; gap: 8px; margin-bottom: 15px;">
-                                <input type="text" id="pcapUrl" value="${DEFAULT_SAMPLE_URL}" onfocus="this.value=''" onkeydown="if(event.key==='Enter')loadFromUrl()" style="background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 12px; border-radius: 4px; font-size: 0.95rem; flex: 1;">
-                                <button onclick="loadFromUrl()" style="background: var(--accent); color: var(--bg-primary); padding: 8px 20px; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 0.95rem; border: none;">Go</button>
+                                <input type="text" id="pcapUrl" value="${DEFAULT_SAMPLE_URL}" data-clear-on-focus data-enter-action="load-from-url" style="background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 12px; border-radius: 4px; font-size: 0.95rem; flex: 1;">
+                                <button data-action="load-from-url" style="background: var(--accent); color: var(--bg-primary); padding: 8px 20px; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 0.95rem; border: none;">Go</button>
                             </div>
                             <div style="text-align: center; color: var(--text-muted); font-size: 0.9rem; font-weight: 600; text-transform: uppercase; margin-bottom: 15px;">— OR —</div>
-                            <input type="file" id="pcapUpload" onchange="uploadPcap()" style="display: none;">
+                            <input type="file" id="pcapUpload" data-change-action="upload-pcap" style="display: none;">
                             <div id="dropZone" tabindex="0" role="button" aria-label="Choose a file to upload, or drag and drop one here" style="background: var(--bg-primary); color: var(--accent); padding: 20px; border-radius: 4px; cursor: pointer; font-size: 0.95rem; border: 2px dashed var(--border-color); text-align: center; transition: border-color 0.2s, background 0.2s;"
-                                 ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)"
-                                 onclick="document.getElementById('pcapUpload').click()"
-                                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();document.getElementById('pcapUpload').click();}">
+                                 data-action="open-upload-picker" data-key-activate="enter-space">
                                  <div style="font-size: 1.5rem; margin-bottom: 8px;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><polyline points="2 13 6 9 10 13"></polyline></svg></div>
                                  <div>Choose file or drag and drop here</div>
                              </div>
@@ -5224,7 +5213,7 @@
                 } else if (verticalNavSelection.matches('tr.agg-row[data-agg-pivot]') || verticalNavSelection.matches('[data-detail-pivot]')) {
                     openPivotMenuForRow(verticalNavSelection);
                 } else if (verticalNavSelection.classList.contains('filter-chip')) {
-                    // The chip itself carries no onclick (see
+                    // The chip itself carries no click action (see
                     // buildFilterBarHtml()) - only its nested
                     // .filter-chip-remove "x" does, so .click() on the chip
                     // directly would silently do nothing.
@@ -5458,11 +5447,10 @@
         // Scoped to #autocompleteResults itself, not delegated from document
         // like every other click-delegated list in this app (agg-row,
         // filter-chip, ...) - those live directly on the page or in a
-        // fixed-position popup, but this button sits inside .modal-content,
-        // whose own onclick="event.stopPropagation()" (there to keep a
-        // content click from also closing the modal via the backdrop
-        // handler) would stop a document-level bubble-phase listener from
-        // ever seeing it.
+        // fixed-position popup; this one is kept scoped so the palette's
+        // own items stay wired even if a future .modal-content
+        // stopPropagation shim ever comes back (one used to sit between
+        // these buttons and any document-level listener).
         document.getElementById('autocompleteResults').addEventListener('click', function(e) {
             const item = e.target.closest('.autocomplete-item[data-autocomplete-index]');
             if (!item) return;
@@ -5905,7 +5893,7 @@
                 ? `<span class="rule-spinner"></span>Updating… ${startTime ? formatElapsed(Math.max(0, Math.round((Date.now() - startTime) / 1000))) : ''}`
                 : 'Update';
             const logToggle = logText
-                ? `<button onclick="toggleRuleLog('${name}')" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.8rem; text-decoration: underline;">${expanded ? 'Hide Log' : 'View Log'}</button>`
+                ? `<button data-action="toggle-rule-log" data-name="${escapeHtml(name)}" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.8rem; text-decoration: underline;">${expanded ? 'Hide Log' : 'View Log'}</button>`
                 : '';
             const sectionDivider = isLast ? '' : 'margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid var(--bg-hover);';
             // Suricata's heading link opens the sources picker
@@ -5920,7 +5908,7 @@
             // expanded/collapsed state.
             const sourceLink = source
                 ? `<a href="${source.url}" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none; font-size: 0.8rem; margin-left: 6px;">(${source.label})</a>`
-                : `<button onclick="toggleSuricataSources()" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.8rem; margin-left: 6px;">(${suricataSourcesExpanded ? 'Hide Rulesets' : 'Enable/Disable Rulesets'})</button>`;
+                : `<button data-action="toggle-suricata-sources" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.8rem; margin-left: 6px;">(${suricataSourcesExpanded ? 'Hide Rulesets' : 'Enable/Disable Rulesets'})</button>`;
             return `
                 <div style="${sectionDivider}">
                     <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; gap: 10px;">
@@ -5932,7 +5920,7 @@
                         <div style="display: flex; align-items: center; gap: 8px;">
                             ${resultIcon}
                             ${logToggle}
-                            <button onclick="triggerRulesetUpdate('${name}')" ${statusEntry.running ? 'disabled' : ''} style="background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 14px; border-radius: 6px; cursor: pointer; white-space: nowrap;">${updateButtonLabel}</button>
+                            <button data-action="update-ruleset" data-arg="${escapeHtml(name)}" ${statusEntry.running ? 'disabled' : ''} style="background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-color); padding: 6px 14px; border-radius: 6px; cursor: pointer; white-space: nowrap;">${updateButtonLabel}</button>
                         </div>
                     </div>
                     ${expanded && logText ? `<div class="rule-update-log" data-ruleset="${name}">${escapeHtml(logText)}</div>` : ''}
@@ -5972,8 +5960,13 @@
                 // target that shows the same text as a toast, which works
                 // on touch.
                 const noteText = notes.join(' - ');
+                // data-action="show-source-note" (see STATIC_ACTIONS):
+                // preventDefault keeps the click from toggling the
+                // wrapping <label>'s checkbox, and the note text rides in
+                // its own data-note attribute (escapeHtml'd - the HTML
+                // parser decodes it back before dataset ever sees it).
                 const noteHtml = notes.length
-                    ? `<span title="${escapeHtml(noteText)}" onclick="event.preventDefault(); event.stopPropagation(); showToast('${escapeJsString(noteText)}')" style="color: var(--badge-warning-text); font-size: 0.7rem; font-weight: bold; cursor: help; white-space: nowrap;">WARNING!</span>`
+                    ? `<span title="${escapeHtml(noteText)}" data-action="show-source-note" data-note="${escapeHtml(noteText)}" style="color: var(--badge-warning-text); font-size: 0.7rem; font-weight: bold; cursor: help; white-space: nowrap;">WARNING!</span>`
                     : '';
                 // break-inside: avoid keeps one entry from being split
                 // across the column break below.
@@ -5984,11 +5977,11 @@
                 return `
                     <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.85rem; color: var(--text-primary); cursor: pointer; break-inside: avoid;">
                         <span class="theme-switch">
-                            <input type="checkbox" ${checked} onchange="handleSuricataSourceToggle('${name}', this.checked)">
+                            <input type="checkbox" ${checked} data-change-action="suricata-source-toggle" data-name="${escapeHtml(name)}">
                             <span class="theme-switch-slider"></span>
                         </span>
                         <span>${escapeHtml(src.label)}</span>
-                        <a href="${src.url}" target="_blank" rel="noopener noreferrer" style="color: var(--text-muted); font-size: 0.75rem; text-decoration: none;" onclick="event.stopPropagation()">(source)</a>
+                        <a href="${src.url}" target="_blank" rel="noopener noreferrer" style="color: var(--text-muted); font-size: 0.75rem; text-decoration: none;" data-action="stop-propagation">(source)</a>
                         ${noteHtml}
                     </label>`;
             }).join('');
@@ -6007,8 +6000,8 @@
                 : 'Enable All';
             const bulkLinks = `
                 <div style="display: flex; justify-content: center; gap: 10px; margin-bottom: 6px;">
-                    <button onclick="enableAllSuricataSources()" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.75rem; text-decoration: underline;">${escapeHtml(enableAllLabel)}</button>
-                    <button onclick="resetSuricataSourcesToDefault()" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.75rem; text-decoration: underline;">Revert to Default (ET Open)</button>
+                    <button data-action="enable-all-suricata-sources" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.75rem; text-decoration: underline;">${escapeHtml(enableAllLabel)}</button>
+                    <button data-action="reset-suricata-sources" style="background: none; color: var(--accent); border: none; padding: 0; cursor: pointer; font-size: 0.75rem; text-decoration: underline;">Revert to Default (ET Open)</button>
                 </div>`;
             // A classtype-based filter, not a per-source choice - every
             // curated source above bundles an identical copy of Suricata's
@@ -6021,7 +6014,7 @@
                 <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--bg-hover);">
                     <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.85rem; color: var(--text-primary); cursor: pointer;">
                         <span class="theme-switch">
-                            <input type="checkbox" ${showProtocolDecodeAlerts ? 'checked' : ''} onchange="handleShowProtocolDecodeAlertsToggle(this.checked)">
+                            <input type="checkbox" ${showProtocolDecodeAlerts ? 'checked' : ''} data-change-action="protocol-decode-toggle">
                             <span class="theme-switch-slider"></span>
                         </span>
                         <span>Show protocol-anomaly noise alerts <span style="color: var(--text-muted);">("Generic Protocol Command Decode", e.g. excessive retransmissions - off by default)</span></span>
@@ -6589,11 +6582,11 @@
             sankeyPanel.innerHTML = '';
 
             if (!diagramMode) {
-                sankeyPanel.innerHTML = '<div class="section-toggle-bar" onclick="toggleDiagram()">▸ Sankey Diagram</div>';
+                sankeyPanel.innerHTML = '<div class="section-toggle-bar" data-action="toggle-diagram">▸ Sankey Diagram</div>';
                 return;
             }
 
-            sankeyPanel.innerHTML = '<div class="section-toggle-bar" onclick="toggleDiagram()">▾ Sankey Diagram</div><div style="padding:20px;color:var(--text-muted);display:flex;align-items:center;gap:8px;"><span class="ascii-loading"></span>Loading Sankey diagram...</div>';
+            sankeyPanel.innerHTML = '<div class="section-toggle-bar" data-action="toggle-diagram">▾ Sankey Diagram</div><div style="padding:20px;color:var(--text-muted);display:flex;align-items:center;gap:8px;"><span class="ascii-loading"></span>Loading Sankey diagram...</div>';
 
             const visibleSection = document.querySelector('.section:not(.section-hidden):not(.agg-section)');
             const eventType = visibleSection ? visibleSection.id.replace('section-', '') : null;
@@ -6617,16 +6610,16 @@
                 // above and nothing downstream ever ran to replace it.
                 if (isStaleSankeyFetch(gen)) return;
                 console.error('Failed to load Sankey diagram:', e);
-                sankeyPanel.innerHTML = '<div class="section-toggle-bar" onclick="toggleDiagram()">▾ Sankey Diagram</div><div style="padding:20px;color:var(--text-muted);">Error loading Sankey diagram</div>';
+                sankeyPanel.innerHTML = '<div class="section-toggle-bar" data-action="toggle-diagram">▾ Sankey Diagram</div><div style="padding:20px;color:var(--text-muted);">Error loading Sankey diagram</div>';
                 return;
             }
             if (isStaleSankeyFetch(gen)) return;
 
             if (!data || !data.nodes || data.nodes.length === 0) {
-                sankeyPanel.innerHTML = '<div class="section-toggle-bar" onclick="toggleDiagram()">▾ Sankey Diagram</div>';
+                sankeyPanel.innerHTML = '<div class="section-toggle-bar" data-action="toggle-diagram">▾ Sankey Diagram</div>';
                 return;
             }
-            sankeyPanel.innerHTML = '<div class="section-toggle-bar" onclick="toggleDiagram()">▾ Sankey Diagram</div><div class="sankey-content"></div>';
+            sankeyPanel.innerHTML = '<div class="section-toggle-bar" data-action="toggle-diagram">▾ Sankey Diagram</div><div class="sankey-content"></div>';
             const svgContainer = sankeyPanel.querySelector('.sankey-content');
             renderSankeySVG(data, svgContainer);
         }
@@ -6737,15 +6730,21 @@
         // note happens from the expanded detail panel instead (see
         // rowNoteDetailHtml below), not from this collapsed-row cell.
         //
-        // id is passed through escapeJsString like note, not interpolated
+        // id is passed through escapeHtml like note, not interpolated
         // raw, even though it's always a real SQL integer in production -
-        // same "escape every onclick argument regardless of expected type"
+        // same "escape every attribute value regardless of expected type"
         // convention buildLogEventRow/buildSigmaAlertRow already use for
         // their own detailId. openRowNoteEditor parses it back to a number.
+        // The <td>'s own data-action="row-note-cell" (a preventDefault/
+        // stopPropagation no-op in STATIC_ACTIONS) shadows the row's
+        // 'toggle-row' action for clicks that land in the cell but miss
+        // the icon - the dispatcher only ever runs the CLOSEST
+        // data-action - matching the old behavior where such clicks
+        // never expanded the row.
         function rowNoteIconHtml(table, id, note) {
             if (!(note && note.trim())) return '<td class="row-note-cell"></td>';
             const preview = note.slice(0, 200);
-            return `<td class="row-note-cell" onclick="event.preventDefault(); event.stopPropagation();"><span class="row-note-icon" onclick="openRowNoteEditor('${table}', '${escapeJsString(String(id))}', '${escapeJsString(note)}')" title="${escapeHtml(preview)}" style="cursor: pointer; color: var(--accent);">${NOTES_ICON_SVG}</span></td>`;
+            return `<td class="row-note-cell" data-action="row-note-cell"><span class="row-note-icon" data-action="open-row-note-editor" data-table="${escapeHtml(table)}" data-row-id="${escapeHtml(String(id))}" data-note="${escapeHtml(note)}" title="${escapeHtml(preview)}" style="cursor: pointer; color: var(--accent);">${NOTES_ICON_SVG}</span></td>`;
         }
 
         // The value half of the detail panel's Note row, split out from
@@ -6759,9 +6758,7 @@
         // stable hook for that in-place replacement.
         function rowNoteDetailValueHtml(table, id, note) {
             const has = !!(note && note.trim());
-            const idJs = escapeJsString(String(id));
-            const noteJs = escapeJsString(note || '');
-            const editLink = `<a href="#" class="row-note-edit-link" onclick="event.preventDefault(); openRowNoteEditor('${table}', '${idJs}', '${noteJs}');" style="color: var(--accent); text-decoration: none;">${has ? 'Edit' : '+ Add Note'}</a>`;
+            const editLink = `<a href="#" class="row-note-edit-link" data-action="open-row-note-editor" data-table="${escapeHtml(table)}" data-row-id="${escapeHtml(String(id))}" data-note="${escapeHtml(note || '')}" style="color: var(--accent); text-decoration: none;">${has ? 'Edit' : '+ Add Note'}</a>`;
             const value = has ? `${escapeHtml(note)} ${editLink}` : editLink;
             return `<span class="detail-value row-note-detail-value">${value}</span>`;
         }
@@ -6858,7 +6855,7 @@
             // one clicked directly on the Community ID value itself, so it
             // can't rely on that value having been the one clicked.
             const communityIdAttr = e.community_id ? ` data-community-id="${escapeHtml(e.community_id)}"` : '';
-            return `<tr data-id="${escapeHtml(String(e.id))}"${pivotAttrs}${identityAttr}${communityIdAttr} onclick="toggleRow(this, event)"><td class="timestamp">${escapeHtml(ts)}</td><td>${valueDotSpan(DOT_COLORS.PROTO[proto.toUpperCase()])}${escapeHtml(proto)}</td><td class="mono-fixed" title="${escapeHtml(srcIp)}">${escapeHtml(srcIp)}</td><td class="mono-fixed">${escapeHtml(String(srcPort))}</td><td class="mono-fixed" title="${escapeHtml(dstIp)}">${escapeHtml(dstIp)}</td><td class="mono-fixed">${escapeHtml(String(dstPort))}</td>`;
+            return `<tr data-id="${escapeHtml(String(e.id))}"${pivotAttrs}${identityAttr}${communityIdAttr} data-action="toggle-row"><td class="timestamp">${escapeHtml(ts)}</td><td>${valueDotSpan(DOT_COLORS.PROTO[proto.toUpperCase()])}${escapeHtml(proto)}</td><td class="mono-fixed" title="${escapeHtml(srcIp)}">${escapeHtml(srcIp)}</td><td class="mono-fixed">${escapeHtml(String(srcPort))}</td><td class="mono-fixed" title="${escapeHtml(dstIp)}">${escapeHtml(dstIp)}</td><td class="mono-fixed">${escapeHtml(String(dstPort))}</td>`;
         }
 
         function buildRowForEvent(e) {
@@ -7204,7 +7201,7 @@
             const author = fa.author || '';
             const formatted = formatEvent(e);
             const pivotAttrs = pivotDataAttrsHtml(e, 'binary', BINARY_YARA_COLUMNS, extractValue);
-            return `<tr data-id="${escapeHtml(String(e.id))}"${pivotAttrs} onclick="toggleRow(this, event)"><td style="max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(ruleName)}</td><td>${tagsHtml}</td><td>${escapeHtml(author)}</td>${rowNoteIconHtml('events', e.id, e.row_note)}</tr><tr class="detail-row"><td colspan="4"><div class="detail-content">${formatted}</div></td></tr>`;
+            return `<tr data-id="${escapeHtml(String(e.id))}"${pivotAttrs} data-action="toggle-row"><td style="max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(ruleName)}</td><td>${tagsHtml}</td><td>${escapeHtml(author)}</td>${rowNoteIconHtml('events', e.id, e.row_note)}</tr><tr class="detail-row"><td colspan="4"><div class="detail-content">${formatted}</div></td></tr>`;
         }
 
         function buildBinaryYaraTable(events) {
@@ -7271,11 +7268,10 @@
             const detail = getLogEventSmartDetail(jsonData);
             const detailTruncated = detail.length > 120 ? detail.slice(0, 117) + '...' : detail;
             const detailId = 'log-detail-' + (evt.row_id || ++_detailIdCounter);
-            // id attribute needs HTML escaping; the onclick argument also
-            // needs JS-string escaping (escapeHtml alone would let a quote
-            // break out of the JS string after attribute decoding).
+            // Both the detail row's id attribute and the collapsed row's
+            // data-detail-id are plain HTML attribute values now - one
+            // escaping (escapeHtml) covers both.
             const detailIdAttr = escapeHtml(String(detailId));
-            const detailIdJs = escapeJsString(String(detailId));
             const totalCols = 3 + (columns ? columns.length : 0); // Time + [cols] + Detail + Note
 
             // Mirrors getColumnsForType('log')'s own ['Time', ...labels,
@@ -7286,7 +7282,7 @@
             // O(rows) work that must not run again per row).
             const pivotColumns = ['Time', ...(columns || []).map(c => c.label), 'Detail'];
             const pivotAttrs = pivotDataAttrsHtml(evt, 'log', pivotColumns, extractLogValue);
-            let row = `<tr data-id="${escapeHtml(String(evt.id))}"${pivotAttrs} onclick="toggleLogRow(this, '${detailIdJs}', event)">`;
+            let row = `<tr data-id="${escapeHtml(String(evt.id))}"${pivotAttrs} data-action="toggle-log-row" data-detail-id="${detailIdAttr}">`;
             row += `<td class="timestamp">${timestamp}</td>`;
             if (columns) {
                 columns.forEach(c => {
@@ -7339,15 +7335,14 @@
             const mitreHtml = mitreTechniquesHtml(alert.mitre_techniques);
 
             const detailId = 'sigma-detail-' + (alert.id || Math.random().toString(36).substr(2, 9));
-            // See buildLogEventRow: attribute escaping vs JS-string escaping.
+            // See buildLogEventRow: one escapeHtml covers both attribute uses.
             const detailIdAttr = escapeHtml(String(detailId));
-            const detailIdJs = escapeJsString(String(detailId));
 
             const pivotAttrs = pivotDataAttrsHtml(alert, 'sigmaalert', getColumnsForType('sigmaalert'), extractSigmaValue);
             // See rowPrefixCells' own comment - same "bake the matching key
             // into the row at render time" reasoning, for sigma_alerts'
             // rule_id instead of events' signature_id.
-            let row = `<tr data-id="${escapeHtml(String(alert.id))}"${pivotAttrs} data-alert-identity="${ruleId}" onclick="toggleSigmaRow(this, '${detailIdJs}', event)">`;
+            let row = `<tr data-id="${escapeHtml(String(alert.id))}"${pivotAttrs} data-alert-identity="${ruleId}" data-action="toggle-sigma-row" data-detail-id="${detailIdAttr}">`;
             row += `<td class="timestamp">${timestamp}</td>`;
             row += `<td>${valueDotSpan(sevColor)}${escapeHtml(sev.toUpperCase())}</td>`;
             row += `<td><strong>${ruleTitle}</strong>${ruleId ? '<br><span style="color:var(--text-muted);font-size:0.8rem;">' + ruleId + '</span>' : ''}</td>`;
@@ -7579,7 +7574,11 @@
                 // Sub-techniques (e.g. T1055.012) live at a nested MITRE URL
                 // (/techniques/T1055/012/), not a dotted slug.
                 const urlPath = tid.split('.').map(encodeURIComponent).join('/');
-                return `<a href="https://attack.mitre.org/techniques/${urlPath}/" target="_blank" rel="noopener noreferrer" class="mitre-tag" onclick="event.stopPropagation()">${escapeHtml(tid)}</a>`;
+                // data-action="stop-propagation": shadows the row's own
+                // toggle action (the dispatcher runs only the closest
+                // data-action) so clicking the tag opens the MITRE page
+                // without also expanding/collapsing the row.
+                return `<a href="https://attack.mitre.org/techniques/${urlPath}/" target="_blank" rel="noopener noreferrer" class="mitre-tag" data-action="stop-propagation">${escapeHtml(tid)}</a>`;
             }).join('');
         }
 
@@ -7858,7 +7857,6 @@
         }
 
         function dnsHeuristicRowHtml(item) {
-            const domainJs = escapeJsString(item.domain);
             const scoreColor = item.score >= 60 ? 'var(--badge-danger-text)' : item.score >= 35 ? 'var(--badge-warning-text)' : 'var(--text-muted)';
             // data-id is what getVisibleDataTableRows() (the Up/Down
             // keyboard nav item list) selects on - tr[data-id] - without
@@ -7868,9 +7866,11 @@
             // same uniqueness property a real numeric event id has. The
             // only other reader of data-id (acknowledgeableRowInfo, for
             // the pivot menu's Acknowledge button) never runs against
-            // these rows - they have no pivot menu at all, just this plain
-            // onclick - so a non-numeric value here is safe.
-            return `<tr class="dns-heuristic-row" data-id="${escapeHtml(item.domain)}" onclick="viewDnsHeuristicDomain('${domainJs}')" style="cursor:pointer;" title="Click to view matching DNS queries">` +
+            // these rows - they have no pivot menu at all, just the
+            // 'view-dns-heuristic-domain' click action (which reads the
+            // domain back from this same data-id) - so a non-numeric
+            // value here is safe.
+            return `<tr class="dns-heuristic-row" data-id="${escapeHtml(item.domain)}" data-action="view-dns-heuristic-domain" style="cursor:pointer;" title="Click to view matching DNS queries">` +
                 `<td class="mono">${escapeHtml(item.domain)}</td>` +
                 `<td>${valueDotSpan(scoreColor)}${item.score}</td>` +
                 `<td>${escapeHtml(item.reasons.join(', '))}</td>` +
@@ -7894,8 +7894,7 @@
         // cached from an earlier, differently-scoped visit.
         async function viewDnsHeuristicDomain(domain) {
             await huntFilterValue(domain);
-            const card = Array.from(document.querySelectorAll('.stat-card'))
-                .find(c => c.getAttribute('onclick') === "showTab('section-dns', this)");
+            const card = document.querySelector('.stat-card[data-section="section-dns"]');
             showTab('section-dns', card || null);
         }
 
@@ -7917,7 +7916,7 @@
             const arrow = collapsed ? '▸' : '▾';
             const display = collapsed ? 'none' : 'block';
             return `<div class="agg-panel" style="margin-bottom: 15px;">
-                <div class="section-toggle-bar dns-heuristics-info-toggle" onclick="toggleDnsHeuristicsInfo(this)">${arrow} About DNS Heuristics</div>
+                <div class="section-toggle-bar dns-heuristics-info-toggle" data-action="toggle-dns-heuristics-info">${arrow} About DNS Heuristics</div>
                 <div class="dns-heuristics-info-body" style="display:${display}; padding: 16px 20px; color: var(--text-muted); font-size: 0.85rem; line-height: 1.7;">
                     <p style="margin:0 0 10px 0;">This tab groups DNS queries by registrable domain and flags ones that look like DNS tunneling or DGA (Domain Generation Algorithm) malware, based on patterns in <em>this capture only</em>. It's a heuristic, not a rule match - treat a flag as a lead to investigate, not a confirmed verdict.</p>
                     <p style="margin:0 0 6px 0; color: var(--text-bright);">A domain is flagged when it trips one or more of:</p>
@@ -8071,7 +8070,7 @@
         // differently from each other.
         function _renderOneAggTableHtml(sectionId, col, entries, total, page) {
             let html = `<div class="section agg-section" data-col="${escapeHtml(col)}"><div class="section-content"><div class="agg-table">
-                <div class="agg-header"><span>${escapeHtml(col)}</span><button class="agg-close" onclick="hideAggregationTable('${sectionId}', '${escapeJsString(col)}')" title="Hide">&times;</button></div>
+                <div class="agg-header"><span>${escapeHtml(col)}</span><button class="agg-close" data-action="hide-agg-table" data-section-id="${escapeHtml(sectionId)}" data-col="${escapeHtml(col)}" title="Hide">&times;</button></div>
                 <table><thead><tr><th style="width:60px;text-align:right;">Count</th><th>Value</th></tr></thead><tbody>`;
             for (const [val, count] of entries) {
                 const escapedVal = escapeHtml(val);
@@ -8097,9 +8096,9 @@
             if (total > AGG_PAGE_SIZE) {
                 const totalPages = Math.max(1, Math.ceil(total / AGG_PAGE_SIZE));
                 html += `<div class="agg-pagination">
-                    <button type="button" class="agg-page-btn" onclick="changeAggPage('${sectionId}', '${escapeJsString(col)}', -1)" ${page <= 1 ? 'disabled' : ''}>&larr; Prev</button>
+                    <button type="button" class="agg-page-btn" data-action="change-agg-page" data-section-id="${escapeHtml(sectionId)}" data-col="${escapeHtml(col)}" data-delta="-1" ${page <= 1 ? 'disabled' : ''}>&larr; Prev</button>
                     <span class="agg-page-info">Page ${page} of ${totalPages}</span>
-                    <button type="button" class="agg-page-btn" onclick="changeAggPage('${sectionId}', '${escapeJsString(col)}', 1)" ${page >= totalPages ? 'disabled' : ''}>Next &rarr;</button>
+                    <button type="button" class="agg-page-btn" data-action="change-agg-page" data-section-id="${escapeHtml(sectionId)}" data-col="${escapeHtml(col)}" data-delta="1" ${page >= totalPages ? 'disabled' : ''}>Next &rarr;</button>
                 </div>`;
             }
             html += '</div></div></div>';
@@ -8157,11 +8156,11 @@
                 `<option value="${n}"${n === AGG_PAGE_SIZE ? ' selected' : ''}>${n}</option>`
             ).join('');
             return `<div class="agg-page-size-bar"><label for="aggPageSizeSelect">Items per page</label>
-                <select id="aggPageSizeSelect" onchange="changeAggPageSize(this.value)">${options}</select></div>`;
+                <select id="aggPageSizeSelect" data-change-action="change-agg-page-size">${options}</select></div>`;
         }
 
         function _wrapAggPanel(innerHtml) {
-            return '<div class="agg-panel"><div class="section-toggle-bar" onclick="toggleAggregations()">▾ Aggregation Tables</div><div class="agg-content">'
+            return '<div class="agg-panel"><div class="section-toggle-bar" data-action="toggle-aggregations">▾ Aggregation Tables</div><div class="agg-content">'
                 + _aggPageSizeSelectorHtml() + innerHtml + '</div></div>';
         }
 
@@ -8556,11 +8555,11 @@
                 html += `<div class="filter-bar"><span class="filter-label">${SEARCH_ICON_SVG} Active:</span>`;
                 for (let i = 0; i < currentSearch.length; i++) {
                     const term = currentSearch[i];
-                    html += `<span class="filter-chip">${SEARCH_ICON_SVG} "${escapeHtml(term)}" <span class="filter-chip-remove" onclick="clearSearchTerm(${i})">&times;</span></span>`;
+                    html += `<span class="filter-chip">${SEARCH_ICON_SVG} "${escapeHtml(term)}" <span class="filter-chip-remove" data-action="clear-search-term" data-index="${i}">&times;</span></span>`;
                 }
                 for (const [col, spec] of Object.entries(currentFilters)) {
                     if (typeof spec === 'string') {
-                        html += `<span class="filter-chip">${escapeHtml(col)}: ${escapeHtml(spec)} <span class="filter-chip-remove" onclick="clearFilter('${escapeJsString(col)}')">&times;</span></span>`;
+                        html += `<span class="filter-chip">${escapeHtml(col)}: ${escapeHtml(spec)} <span class="filter-chip-remove" data-action="clear-filter" data-col="${escapeHtml(col)}">&times;</span></span>`;
                         continue;
                     }
                     // Object shape (pivot menu's include/exclude) - one
@@ -8568,17 +8567,17 @@
                     // one chip per column, since multiple include/exclude
                     // values can be active on the same column at once.
                     for (const val of (spec.include || [])) {
-                        html += `<span class="filter-chip">${escapeHtml(col)}: ${escapeHtml(val)} <span class="filter-chip-remove" onclick="clearFilterValue('${escapeJsString(col)}', 'include', '${escapeJsString(val)}')">&times;</span></span>`;
+                        html += `<span class="filter-chip">${escapeHtml(col)}: ${escapeHtml(val)} <span class="filter-chip-remove" data-action="clear-filter-value" data-col="${escapeHtml(col)}" data-kind="include" data-value="${escapeHtml(val)}">&times;</span></span>`;
                     }
                     for (const val of (spec.exclude || [])) {
-                        html += `<span class="filter-chip filter-chip-exclude">${escapeHtml(col)} ≠ ${escapeHtml(val)} <span class="filter-chip-remove" onclick="clearFilterValue('${escapeJsString(col)}', 'exclude', '${escapeJsString(val)}')">&times;</span></span>`;
+                        html += `<span class="filter-chip filter-chip-exclude">${escapeHtml(col)} ≠ ${escapeHtml(val)} <span class="filter-chip-remove" data-action="clear-filter-value" data-col="${escapeHtml(col)}" data-kind="exclude" data-value="${escapeHtml(val)}">&times;</span></span>`;
                     }
                 }
-                html += '<button class="filter-clear-all" onclick="clearAllFilters()">Clear All</button></div>';
+                html += '<button class="filter-clear-all" data-action="clear-all-filters">Clear All</button></div>';
             }
             if (isCurrentTabTruncated()) {
                 const fetchedCount = getFetchedLengthForType(getVisibleEventType()).toLocaleString();
-                html += `<div class="filter-bar"><span style="color: var(--badge-warning-text);">⚠ Showing the first ${fetchedCount} matching events for this view — results may be incomplete (you can raise the limit in <a href="#" onclick="event.preventDefault(); showSettingsModal();" style="color: var(--accent); text-decoration: underline; font-weight: 600;">Settings</a>).</span></div>`;
+                html += `<div class="filter-bar"><span style="color: var(--badge-warning-text);">⚠ Showing the first ${fetchedCount} matching events for this view — results may be incomplete (you can raise the limit in <a href="#" data-action="show-settings-modal" style="color: var(--accent); text-decoration: underline; font-weight: 600;">Settings</a>).</span></div>`;
             }
             return html;
         }
@@ -8859,7 +8858,7 @@
                 // real final value immediately so assistive tech isn't
                 // stuck reading "0" or a mid-animation number.
                 return `
-                    <div class="stat-card${activeClass}" onclick="showTab('section-${s.id}', this)">
+                    <div class="stat-card${activeClass}" data-action="show-tab" data-section="section-${s.id}">
                         <div class="stat-number" style="color: ${s.color}" aria-label="${countDisplay}">0</div>
                         <div class="stat-label">${s.label}</div>
                     </div>
@@ -8920,7 +8919,7 @@
             const formatted = formatEvent(e);
             const pivotAttrs = pivotDataAttrsHtml(e, 'all', ALL_EVENTS_COLUMNS, extractAllValue);
             const communityIdAttr = e.community_id ? ` data-community-id="${escapeHtml(e.community_id)}"` : '';
-            return `<tr data-id="${escapeHtml(String(e.id))}"${pivotAttrs}${communityIdAttr} onclick="toggleRow(this, event)"><td class="timestamp">${escapeHtml(ts)}</td><td>${valueDotSpan(COLORS.EVENT[etype])}${escapeHtml(etype.toUpperCase())}</td><td>${valueDotSpan(DOT_COLORS.PROTO[proto.toUpperCase()])}${escapeHtml(proto)}</td><td class="mono-fixed" title="${escapeHtml(srcIp)}">${escapeHtml(srcIp)}</td><td class="mono-fixed">${escapeHtml(String(srcPort))}</td><td class="mono-fixed" title="${escapeHtml(dstIp)}">${escapeHtml(dstIp)}</td><td class="mono-fixed">${escapeHtml(String(dstPort))}</td><td class="mono">${escapeHtml(detail)}</td>${rowNoteIconHtml('events', e.id, e.row_note)}</tr><tr class="detail-row"><td colspan="9"><div class="detail-content">${formatted}</div></td></tr>`;
+            return `<tr data-id="${escapeHtml(String(e.id))}"${pivotAttrs}${communityIdAttr} data-action="toggle-row"><td class="timestamp">${escapeHtml(ts)}</td><td>${valueDotSpan(COLORS.EVENT[etype])}${escapeHtml(etype.toUpperCase())}</td><td>${valueDotSpan(DOT_COLORS.PROTO[proto.toUpperCase()])}${escapeHtml(proto)}</td><td class="mono-fixed" title="${escapeHtml(srcIp)}">${escapeHtml(srcIp)}</td><td class="mono-fixed">${escapeHtml(String(srcPort))}</td><td class="mono-fixed" title="${escapeHtml(dstIp)}">${escapeHtml(dstIp)}</td><td class="mono-fixed">${escapeHtml(String(dstPort))}</td><td class="mono">${escapeHtml(detail)}</td>${rowNoteIconHtml('events', e.id, e.row_note)}</tr><tr class="detail-row"><td colspan="9"><div class="detail-content">${formatted}</div></td></tr>`;
         }
 
         async function buildAllEvents() {
@@ -9840,13 +9839,13 @@
             return `<div class="pagination-bar">
                 <span class="pagination-info">Showing ${start + 1}-${end} of ${totalItems}</span>
                 <div class="pagination-controls">
-                    <button class="pagination-btn" onclick="changeTablePage(-1)" ${currentPage <= 1 ? 'disabled' : ''}>&larr; Prev</button>
+                    <button class="pagination-btn" data-action="change-table-page" data-delta="-1" ${currentPage <= 1 ? 'disabled' : ''}>&larr; Prev</button>
                     <span class="pagination-page">Page
-                        <input type="number" id="paginationPageInput" class="pagination-page-input" min="1" max="${totalPages}" value="${currentPage}" onkeydown="if(event.key==='Enter'){jumpToPage()}">
+                        <input type="number" id="paginationPageInput" class="pagination-page-input" min="1" max="${totalPages}" value="${currentPage}" data-enter-action="jump-to-page">
                         of ${totalPages}
                     </span>
-                    <button class="pagination-btn" onclick="jumpToPage()">Go</button>
-                    <button class="pagination-btn" onclick="changeTablePage(1)" ${currentPage >= totalPages ? 'disabled' : ''}>Next &rarr;</button>
+                    <button class="pagination-btn" data-action="jump-to-page">Go</button>
+                    <button class="pagination-btn" data-action="change-table-page" data-delta="1" ${currentPage >= totalPages ? 'disabled' : ''}>Next &rarr;</button>
                 </div>
             </div>`;
         }
@@ -9918,7 +9917,7 @@
         }
 
         const EMPTY_FILTER_STATE_HTML = `<div style="padding: 40px; text-align: center; color: var(--text-muted); font-size: 0.95rem;">${SEARCH_ICON_SVG} No events match the current filters</div>`;
-        const AGG_COLLAPSED_HTML = '<div class="agg-panel"><div class="section-toggle-bar" onclick="toggleAggregations()">▸ Aggregation Tables</div></div>';
+        const AGG_COLLAPSED_HTML = '<div class="agg-panel"><div class="section-toggle-bar" data-action="toggle-aggregations">▸ Aggregation Tables</div></div>';
 
         function hideAggregationTable(sectionId, col) {
             hiddenAggregations.add(sectionId + ':' + col);
@@ -10777,7 +10776,7 @@
         function notesIconHtml() {
             const color = currentNotes ? 'var(--accent)' : 'var(--text-muted)';
             const title = currentNotes ? 'View/edit notes' : 'Add notes';
-            return `<span id="appHeaderNotesIcon" onclick="showNotesModal()" style="cursor: pointer; white-space: nowrap; color: ${color};" title="${title}">${NOTES_ICON_SVG}</span>`;
+            return `<span id="appHeaderNotesIcon" data-action="show-notes-modal" style="cursor: pointer; white-space: nowrap; color: ${color};" title="${title}">${NOTES_ICON_SVG}</span>`;
         }
 
         // Lets an analyst re-analyze the currently open sample without going
@@ -10785,7 +10784,7 @@
         // openReanalyzeModal() is already self-contained (just md5/name), so
         // this reuses it as-is rather than a second reanalyze code path.
         function reanalyzeIconHtml() {
-            return `<span onclick="openReanalyzeModal(currentMd5, currentFileName)" style="cursor: pointer; white-space: nowrap; color: var(--text-muted);" title="Re-analyze">${REFRESH_ICON_SVG}</span>`;
+            return `<span data-action="open-reanalyze-modal" style="cursor: pointer; white-space: nowrap; color: var(--text-muted);" title="Re-analyze">${REFRESH_ICON_SVG}</span>`;
         }
 
         // Same reasoning as reanalyzeIconHtml() just above - openDeleteAnalysis()
@@ -10793,7 +10792,7 @@
         // handles deleting the currently-open analysis (resets state, returns
         // to the welcome screen), so this reuses that as-is.
         function deleteIconHtml() {
-            return `<span class="app-header-delete-icon" onclick="openDeleteAnalysis(currentMd5, currentFileName)" style="cursor: pointer; white-space: nowrap;" title="Delete">${DELETE_ICON_SVG}</span>`;
+            return `<span class="app-header-delete-icon" data-action="open-delete-analysis" style="cursor: pointer; white-space: nowrap;" title="Delete">${DELETE_ICON_SVG}</span>`;
         }
 
         function updateNotesCountHint() {
@@ -10836,11 +10835,11 @@
             currentRowNoteScope = null;
         }
 
-        // The note-icon's onclick argument is a JS-string-escaped rowId
-        // (see rowNoteIconHtml), not a bare number - HTML attributes are
-        // always strings regardless, and this way the same escaping
-        // discipline covers it as covers the note text itself. Parsed back
-        // to a real number here before it's ever used as row-note state.
+        // The note-icon/edit-link's data-row-id attribute is a string
+        // (HTML attributes always are, and it goes through the same
+        // escapeHtml discipline as the note text itself - see
+        // rowNoteIconHtml/rowNoteDetailValueHtml). Parsed back to a real
+        // number here before it's ever used as row-note state.
         function openRowNoteEditor(table, rowIdStr, note) {
             showNotesModal(table, parseInt(rowIdStr, 10), note);
         }
@@ -11689,7 +11688,126 @@
                 const closeFn = STATIC_ACTIONS[el.dataset.arg];
                 if (closeFn) closeFn(el, e);
             },
+
+            // ---- Generated-content actions ----
+            // Everything below is referenced from HTML strings built at
+            // runtime (welcome screen, data tables, modals' dynamic
+            // bodies, ...) rather than the static socrates.html shell.
+            // Same dispatch mechanism: the delegated listeners below run
+            // the CLOSEST [data-action], so an inner element's action
+            // naturally shadows its row/label ancestor's - which is how
+            // the old inline event.stopPropagation() semantics (e.g. a
+            // MITRE tag not toggling its row) are preserved. Scalar
+            // arguments ride in escapeHtml'd data-* attributes (the HTML
+            // parser decodes them before dataset reads them back);
+            // structured payloads keep using the percent-encoded-JSON
+            // idiom (see pivotDataAttrsHtml).
+
+            // Modal openers for links generated into welcome/help/filter
+            // content ('show-about-modal' above predates these).
+            'show-settings-modal': () => showSettingsModal(),
+            'show-themes-modal': () => showThemesModal(),
+            'show-security-onion-modal': () => showSecurityOnionModal(),
+            'show-rules-modal': (el) => showRulesModal(el.dataset.arg === 'expand-sources'),
+
+            // Welcome screen: sample cards, URL import, upload drop zone,
+            // previous-analyses rows.
+            'load-sample-url': (el) => loadSampleUrl(el.dataset.url),
+            'load-from-url': () => loadFromUrl(),
+            'open-upload-picker': () => document.getElementById('pcapUpload').click(),
+            // Real href (?file=md5) kept for copy-link/middle-click;
+            // normal clicks stay in-app, same as the old inline
+            // preventDefault + loadAnalysis() pair.
+            'load-analysis': (el, e) => { e.preventDefault(); loadAnalysis(el.dataset.md5); },
+
+            // Settings modal: custom lookup sites list.
+            'edit-custom-lookup-site': (el) => startEditCustomLookupSite(Number(el.dataset.index)),
+            'delete-custom-lookup-site': (el) => handleDeleteCustomLookupSite(Number(el.dataset.index)),
+
+            // Themes modal tiles (hover/focus preview is delegated
+            // separately below - only the commit is a click action).
+            'commit-theme': (el) => commitTheme(el.dataset.themeOption),
+
+            // Rules modal.
+            'toggle-rule-log': (el) => toggleRuleLog(el.dataset.name),
+            'toggle-suricata-sources': () => toggleSuricataSources(),
+            'enable-all-suricata-sources': () => enableAllSuricataSources(),
+            'reset-suricata-sources': () => resetSuricataSourcesToDefault(),
+            // preventDefault keeps the wrapping <label> from toggling its
+            // checkbox; stopPropagation matches the old inline handler.
+            'show-source-note': (el, e) => { e.preventDefault(); e.stopPropagation(); showToast(el.dataset.note); },
+
+            // An action that exists purely to SHADOW an ancestor's action
+            // (closest() dispatch stops here), replacing the old inline
+            // event.stopPropagation() on e.g. MITRE tags and the rules
+            // modal's "(source)" links - external anchors, so no
+            // preventDefault: the navigation must still happen.
+            'stop-propagation': (el, e) => e.stopPropagation(),
+
+            // Data-table rows + detail panels.
+            'toggle-row': (el, e) => toggleRow(el, e),
+            'toggle-log-row': (el, e) => toggleLogRow(el, el.dataset.detailId, e),
+            'toggle-sigma-row': (el, e) => toggleSigmaRow(el, el.dataset.detailId, e),
+            'toggle-playbook-questions': (el) => togglePlaybookQuestions(el),
+            'toggle-packet': (el) => togglePacket(el),
+            // this.parentNode.parentNode in the old inline form: the
+            // button's .packet-controls bar's parent, i.e. the hexdump
+            // container all the packet blocks live in.
+            'expand-all-packets': (el) => expandAllPackets(el.parentNode.parentNode),
+            'collapse-all-packets': (el) => collapseAllPackets(el.parentNode.parentNode),
+            'switch-stream-view': (el, e) => {
+                const p = el.closest('.stream-payload');
+                if (p) switchStreamView(el.dataset.view, p.dataset.srcIp, p.dataset.srcPort, p.dataset.dstIp, p.dataset.dstPort, el);
+            },
+            'download-stream-pcap': (el) => {
+                const p = el.closest('.stream-payload');
+                if (p) downloadPcap(p.dataset.srcIp, p.dataset.srcPort, p.dataset.dstIp, p.dataset.dstPort);
+            },
+            // The note-icon <td>: clicks that miss the icon must do
+            // nothing (not toggle the row) - shadowing handles that; the
+            // preventDefault/stopPropagation mirror the old inline pair.
+            'row-note-cell': (el, e) => { e.preventDefault(); e.stopPropagation(); },
+            'open-row-note-editor': (el, e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openRowNoteEditor(el.dataset.table, el.dataset.rowId, el.dataset.note);
+            },
+            'view-dns-heuristic-domain': (el) => viewDnsHeuristicDomain(el.dataset.id),
+            'toggle-dns-heuristics-info': (el) => toggleDnsHeuristicsInfo(el),
+
+            // Sankey / Aggregation panels.
+            'toggle-diagram': () => toggleDiagram(),
+            'toggle-aggregations': () => toggleAggregations(),
+            'hide-agg-table': (el) => hideAggregationTable(el.dataset.sectionId, el.dataset.col),
+            'change-agg-page': (el) => changeAggPage(el.dataset.sectionId, el.dataset.col, Number(el.dataset.delta)),
+
+            // Filter bar chips.
+            'clear-search-term': (el) => clearSearchTerm(Number(el.dataset.index)),
+            'clear-filter': (el) => clearFilter(el.dataset.col),
+            'clear-filter-value': (el) => clearFilterValue(el.dataset.col, el.dataset.kind, el.dataset.value),
+            'clear-all-filters': () => clearAllFilters(),
+
+            // Stat cards + table pagination.
+            'show-tab': (el) => showTab(el.dataset.section, el),
+            'change-table-page': (el) => changeTablePage(Number(el.dataset.delta)),
+            'jump-to-page': () => jumpToPage(),
+
+            // Analysis header icons - all read the current-analysis
+            // globals at click time, same as the old inline handlers did.
+            'show-notes-modal': () => showNotesModal(),
+            'open-reanalyze-modal': () => openReanalyzeModal(currentMd5, currentFileName),
+            'open-delete-analysis': () => openDeleteAnalysis(currentMd5, currentFileName),
         };
+
+        // Change-event actions, dispatched from the delegated 'change'
+        // listener below via data-change-action - kept in the same
+        // registry object so action names stay unique app-wide.
+        Object.assign(STATIC_ACTIONS, {
+            'upload-pcap': () => uploadPcap(),
+            'change-agg-page-size': (el) => changeAggPageSize(el.value),
+            'suricata-source-toggle': (el) => handleSuricataSourceToggle(el.dataset.name, el.checked),
+            'protocol-decode-toggle': (el) => handleShowProtocolDecodeAlertsToggle(el.checked),
+        });
 
         document.addEventListener('click', e => {
             const el = e.target.closest('[data-action]');
@@ -11699,10 +11817,109 @@
             // #previousAnalysesList notes buttons handled by their own
             // delegated listener above) - leave them alone.
             if (!fn) return;
-            // The show-welcome / show-about-modal anchors are href="#"
-            // links; preventDefault replaces their old "return false;".
-            if (el.tagName === 'A') e.preventDefault();
+            // In-page anchors (href="#" links like show-welcome /
+            // show-about-modal) must not scroll-to-top/change the URL;
+            // preventDefault replaces their old "return false;". Anchors
+            // with a REAL href (MITRE tags, the rules modal's "(source)"
+            // links) must keep navigating, so they're left alone - an
+            // action that needs preventDefault despite a real href (e.g.
+            // 'load-analysis') calls it itself.
+            if (el.tagName === 'A' && el.getAttribute('href') === '#') e.preventDefault();
             fn(el, e);
+        });
+
+        // change/keydown/focus/mouse delegation for generated content -
+        // each listener attached ONCE here at startup, so re-rendered
+        // HTML stays wired with no per-render (or per-row) binding work.
+        document.addEventListener('change', e => {
+            const el = e.target.closest('[data-change-action]');
+            if (!el) return;
+            const fn = STATIC_ACTIONS[el.dataset.changeAction];
+            if (fn) fn(el, e);
+        });
+
+        // Capture phase, so a focused card's Enter/Space activation runs
+        // BEFORE the app-wide shortcut keydown handler (a bubble-phase
+        // document listener registered earlier) - the same priority the
+        // old inline onkeydown handlers had by running at the element and
+        // calling stopPropagation, which the enter-space branch below
+        // still does (capture-phase stopPropagation keeps the event from
+        // ever reaching that bubble-phase handler).
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                // Keyboard activation for generated role="button" divs
+                // (sample cards, the upload drop zone) - preventDefault/
+                // stopPropagation mirror the old inline onkeydown added
+                // in the accessibility work (Space must not scroll).
+                const btn = e.target instanceof Element && e.target.closest('[data-key-activate="enter-space"]');
+                if (btn) {
+                    const fn = STATIC_ACTIONS[btn.dataset.action];
+                    if (fn) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        fn(btn, e);
+                    }
+                    return;
+                }
+            }
+            if (e.key === 'Enter') {
+                // Enter-to-submit inputs (URL import box, pagination page
+                // input) - a separate attribute from data-action, since a
+                // plain CLICK on these inputs must not trigger anything.
+                // No preventDefault/stopPropagation, matching the old
+                // inline onkeydown (the app-wide handler already ignores
+                // keystrokes targeted at inputs).
+                const input = e.target instanceof Element && e.target.closest('[data-enter-action]');
+                if (input) {
+                    const fn = STATIC_ACTIONS[input.dataset.enterAction];
+                    if (fn) fn(input, e);
+                }
+            }
+        }, true);
+
+        // Theme-tile hover/focus preview - mouseover/mouseout +
+        // relatedTarget checks emulate the old per-tile mouseenter/
+        // mouseleave (enter/leave don't bubble, so they can't be
+        // delegated directly), and focusin/focusout stand in for the
+        // per-tile focus/blur the keyboard-accessibility work added.
+        function _themeTileFromEvent(e) {
+            const tile = e.target.closest('.theme-tile[data-theme-option]');
+            if (!tile) return null;
+            // Moving between descendants of the same tile is not a real
+            // enter/leave.
+            if (e.relatedTarget instanceof Node && tile.contains(e.relatedTarget)) return null;
+            return tile;
+        }
+        document.addEventListener('mouseover', e => {
+            const tile = _themeTileFromEvent(e);
+            if (tile) previewTheme(tile.dataset.themeOption);
+        });
+        document.addEventListener('mouseout', e => {
+            if (_themeTileFromEvent(e)) revertTheme();
+        });
+        document.addEventListener('focusin', e => {
+            const tile = _themeTileFromEvent(e);
+            if (tile) previewTheme(tile.dataset.themeOption);
+            // Clear-on-focus inputs (the welcome screen's URL box, which
+            // starts prefilled with the sample URL).
+            const clearable = e.target.closest('[data-clear-on-focus]');
+            if (clearable) clearable.value = '';
+        });
+        document.addEventListener('focusout', e => {
+            if (_themeTileFromEvent(e)) revertTheme();
+        });
+
+        // Upload drop zone drag & drop (see showWelcome's #dropZone) -
+        // delegated like everything else since the welcome screen is
+        // re-rendered HTML.
+        document.addEventListener('dragover', e => {
+            if (e.target.closest('#dropZone')) handleDragOver(e);
+        });
+        document.addEventListener('dragleave', e => {
+            if (e.target.closest('#dropZone')) handleDragLeave(e);
+        });
+        document.addEventListener('drop', e => {
+            if (e.target.closest('#dropZone')) handleDrop(e);
         });
 
         // Inputs the static shell used to wire via inline on*= attributes,
