@@ -2,30 +2,6 @@
 
 ## 4.2.0
 
-### Security hardening
-
-The HTTP layer no longer trusts its network position. DNS-name `Host`
-headers other than localhost are rejected to block DNS rebinding (IP
-literals still work; set the new `ALLOWED_HOSTS` environment variable
-for reverse-proxy/hostname deployments), cross-site POSTs are rejected
-via `Origin`/`Sec-Fetch-Site`, and JSON endpoints require
-`Content-Type: application/json` - together blocking CSRF against a
-local instance. Also fixed: an encoded path-traversal read through
-`/static/`, an SSRF bypass via a hostname resolving to `0.0.0.0`, and
-unbounded server-side caches. Analyzer artifact filenames are reserved
-so an upload can't spoof or clobber results, uploaded ZIPs are capped at
-100 members, stream carving no longer buffers unbounded output in
-memory, and both compose files now publish `127.0.0.1:8000:8000` by
-default (the LAN-wide form is left as a comment).
-
-### Strict Content Security Policy
-
-`script-src` no longer allows inline script: every inline handler
-attribute was converted to delegated event listeners and the theme
-bootstrap moved to its own file, so an escaping bug in HTML rendering
-would now produce inert text instead of executing. The policy's
-`report-uri` logs any future violation server-side.
-
 ### DNS Heuristics fixes
 
 The DNS Heuristics card no longer shows a count carried over from a
@@ -52,6 +28,30 @@ the first click after its 2-second poll rebuilds the modal body (seen as
 "Revert to Default, then Update needs two clicks"), aggregation tables
 page deterministically when values have tied counts, and the Security
 Onion comparison modal fits a 1080p display without scrolling.
+
+### Security hardening
+
+The HTTP layer no longer trusts its network position. DNS-name `Host`
+headers other than localhost are rejected to block DNS rebinding (IP
+literals still work; set the new `ALLOWED_HOSTS` environment variable
+for reverse-proxy/hostname deployments), cross-site POSTs are rejected
+via `Origin`/`Sec-Fetch-Site`, and JSON endpoints require
+`Content-Type: application/json` - together blocking CSRF against a
+local instance. Also fixed: an encoded path-traversal read through
+`/static/`, an SSRF bypass via a hostname resolving to `0.0.0.0`, and
+unbounded server-side caches. Analyzer artifact filenames are reserved
+so an upload can't spoof or clobber results, uploaded ZIPs are capped at
+100 members, stream carving no longer buffers unbounded output in
+memory, and both compose files now publish `127.0.0.1:8000:8000` by
+default (the LAN-wide form is left as a comment).
+
+### Strict Content Security Policy
+
+`script-src` no longer allows inline script: every inline handler
+attribute was converted to delegated event listeners and the theme
+bootstrap moved to its own file, so an escaping bug in HTML rendering
+would now produce inert text instead of executing. The policy's
+`report-uri` logs any future violation server-side.
 
 ### Documentation and website
 
