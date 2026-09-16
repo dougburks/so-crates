@@ -4,65 +4,53 @@
 
 ### DNS Heuristics fixes
 
-The DNS Heuristics card no longer shows a count carried over from a
-previously viewed analysis (whose tab then said "No suspicious DNS
-activity detected"), and no longer goes missing until a page reload
-when an analysis is opened while still processing. Two false-positive
-classes are gone: deep-but-ordinary subdomain chains (entropy is now
-scored per label) and long hyphenated word-mashup labels (the tunneling
-check now requires a low vowel ratio, like the DGA check). The
-exclusion list gained the missing Akamai suffixes and common OS/vendor
-domains (Microsoft, Google, Apple, Mozilla, etc.) - DGA and tunneling
-require an attacker-controlled domain, which those are not.
+The DNS Heuristics card now always matches its own tab: it no longer
+shows a count left over from a previously viewed analysis, and no longer
+stays missing until a page reload when you open an analysis that's still
+processing. It also flags far fewer false positives - common
+update/telemetry domains (Microsoft, Google, Apple, Mozilla), Akamai CDN
+names, and long-but-ordinary subdomains no longer score as suspicious.
 
 ### UX and accessibility
 
-Oversized uploads are caught before uploading, with a message naming
-the limit and pointing at Settings. The bulk-acknowledge truncation
-warning no longer auto-dismisses, toasts last 3.5s, the analysis-timeout
-message notes the analysis may still finish in the background, and the
-truncation banner links to Settings. Sample cards and the drop zone are
-keyboard-accessible, theme tiles preview on focus as well as hover, and
-confirm dialogs manage focus properly. The Rules modal no longer eats
-the first click after its 2-second poll rebuilds the modal body (seen as
-"Revert to Default, then Update needs two clicks"), aggregation tables
-page deterministically when values have tied counts, and the Security
-Onion comparison modal fits a 1080p display without scrolling.
+- Uploading a too-large file now tells you the size limit and where to
+  raise it, instead of a cryptic server error
+- Important warnings stay on screen until dismissed, other toasts last
+  longer, and the analysis-timeout message notes the analysis may still
+  finish in the background - check Previous Analyses
+- In the Rules modal, clicking Update right after "Revert to Default"
+  works on the first click
+- Aggregation tables page consistently when values have tied counts
+- The keyboard now reaches everything: sample cards and the drop zone
+  respond to Tab and Enter/Space, theme tiles preview on focus, and
+  confirmation dialogs place focus sensibly
+- The Security Onion comparison fits a 1080p display without scrolling
 
 ### Security hardening
 
-The HTTP layer no longer trusts its network position. DNS-name `Host`
-headers other than localhost are rejected to block DNS rebinding (IP
-literals still work; set the new `ALLOWED_HOSTS` environment variable
-for reverse-proxy/hostname deployments), cross-site POSTs are rejected
-via `Origin`/`Sec-Fetch-Site`, and JSON endpoints require
-`Content-Type: application/json` - together blocking CSRF against a
-local instance. Also fixed: an encoded path-traversal read through
-`/static/`, an SSRF bypass via a hostname resolving to `0.0.0.0`, and
-unbounded server-side caches. Analyzer artifact filenames are reserved
-so an upload can't spoof or clobber results, uploaded ZIPs are capped at
-100 members, stream carving no longer buffers unbounded output in
-memory, and both compose files now publish `127.0.0.1:8000:8000` by
-default (the LAN-wide form is left as a comment).
+This release hardens SO-CRATES against malicious websites attacking your
+local instance from inside your browser, plus several smaller
+server-side issues found in a full security review. Most of it is
+invisible, but three changes might affect you:
 
-### Strict Content Security Policy
+- Serving SO-CRATES behind a reverse proxy or a real hostname now
+  requires listing that hostname in the new `ALLOWED_HOSTS` environment
+  variable (browsing by IP or localhost needs nothing)
+- The Docker/Podman compose files now publish the port on localhost
+  only; to allow other machines on your network, change the port mapping
+  back to `"8000:8000"`
+- Scripts calling the JSON API must send `Content-Type: application/json`
 
-`script-src` no longer allows inline script: every inline handler
-attribute was converted to delegated event listeners and the theme
-bootstrap moved to its own file, so an escaping bug in HTML rendering
-would now produce inert text instead of executing. The policy's
-`report-uri` logs any future violation server-side.
+See the [Security](security.md) page for the full picture.
 
 ### Documentation and website
 
-so-crates.org has a new landing page: hex-rain hero with the SO-CRATES
-artwork, feature cards, the demo video and screenshot tour in
-Linux-style window frames with lightbox zoom, and a theme chooser using
-eight of the app's own palettes. The docs went through a full accuracy
-audit against the code (API reference, configuration, installation,
-architecture), Usage became a section with sub-pages, the Themes
-gallery lazy-loads its screenshots, and credits now cover the
-documentation site's dependencies and the artwork's provenance.
+so-crates.org has a brand-new landing page - demo video, screenshot
+tour, and a live theme chooser using the app's own palettes. The Usage
+guide is reorganized into focused sub-pages (analyzing files, exploring
+results, filtering and drill-down, keyboard and menus), the Themes
+gallery loads much faster, and the docs went through a full accuracy
+review against the code.
 
 ## 4.1.0
 
