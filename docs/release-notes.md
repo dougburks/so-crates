@@ -4,107 +4,65 @@
 
 ### Security hardening
 
-The HTTP layer now defends against cross-site attacks instead of trusting
-its network position. DNS-name `Host` headers other than localhost are
-rejected (IP literals still work, and a comma-separated `ALLOWED_HOSTS`
-environment variable allowlists reverse-proxy/hostname deployments),
-which closes DNS rebinding; cross-site POSTs are rejected via the
-`Origin` and `Sec-Fetch-Site` headers; and JSON endpoints now require
-`Content-Type: application/json` (415 otherwise - the frontend always
-sent it, and browsers cannot send it cross-site without a CORS
-preflight, so this alone blocks "simple request" CSRF). Encoded
-path traversal through `/static/` (`/static/%2e%2e/...`) is closed by
-normalizing before routing. The SSRF blocklist now rejects unspecified/
-link-local/multicast/reserved addresses - a hostname resolving to
-`0.0.0.0` previously reached localhost. Server-side analysis caches are
-bounded and only cache recognized event types/columns. Analyzer artifact
-filenames (`yara_matches.json`, `notes.txt`, ...) are reserved so an
-upload cannot spoof or clobber results - such ZIP members are skipped
-and counted in `filesSkipped` rather than failing the batch. Uploaded
-ZIPs are capped at 100 members (each member is its own analysis, and
-pcaps each spawn a Suricata process). Stream carving no longer buffers
-unbounded tcpdump/tshark output in memory - transcript/hexdump reads cap
-at 4MB and stream downloads over 200MB return 413 instead of a partial
-file. Client-facing analysis error text has server filesystem paths
-redacted. Both compose files now publish `127.0.0.1:8000:8000` by
-default, with the LAN-wide form left as a comment.
+The HTTP layer no longer trusts its network position. DNS-name `Host`
+headers other than localhost are rejected to block DNS rebinding (IP
+literals still work; set the new `ALLOWED_HOSTS` environment variable
+for reverse-proxy/hostname deployments), cross-site POSTs are rejected
+via `Origin`/`Sec-Fetch-Site`, and JSON endpoints require
+`Content-Type: application/json` - together blocking CSRF against a
+local instance. Also fixed: an encoded path-traversal read through
+`/static/`, an SSRF bypass via a hostname resolving to `0.0.0.0`, and
+unbounded server-side caches. Analyzer artifact filenames are reserved
+so an upload can't spoof or clobber results, uploaded ZIPs are capped at
+100 members, stream carving no longer buffers unbounded output in
+memory, and both compose files now publish `127.0.0.1:8000:8000` by
+default (the LAN-wide form is left as a comment).
 
 ### Strict Content Security Policy
 
-`script-src` no longer carries `'unsafe-inline'`: all ~160 inline
-`onclick=`/`onchange=`/&c. handler attributes - in `socrates.html` and in
-every piece of generated HTML - were converted to `data-action`
-attributes dispatched through document-level delegated listeners, the
-theme-flash-prevention bootstrap moved to `static/theme-boot.js` (still
-parser-blocking, so no theme flash), and `escapeJsString()` was deleted
-outright with zero call sites left. An escaping regression in an
-`innerHTML` sink now renders as inert text instead of executing, and the
-enforced policy's `report-uri` keeps `/api/csp-report` as a permanent
-tripwire that both blocks and logs any future violation. Guard tests
-keep the page and generated markup free of inline handlers.
+`script-src` no longer allows inline script: every inline handler
+attribute was converted to delegated event listeners and the theme
+bootstrap moved to its own file, so an escaping bug in HTML rendering
+would now produce inert text instead of executing. The policy's
+`report-uri` logs any future violation server-side.
 
 ### DNS Heuristics fixes
 
-The DNS Heuristics card no longer carries a count computed for a
-different analysis: counts are tagged with the analysis they were
-computed for, in-flight refreshes are discarded when you switch analyses
-mid-fetch, an error payload (analysis still processing) re-arms the
-refresh instead of locking in a wrong zero, and `loadAnalysis()` - the
-path every analysis switch takes - now re-arms the lazy count refreshes
-at all (previously only page load and search/acknowledge did, which was
-the root cause of a card showing another capture's count, whose tab then
-said "No suspicious DNS activity detected", and of a card missing until
-a manual page reload). Scoring also lost two false-positive classes:
-entropy is now scored per subdomain label rather than over the
-dot-stripped prefix (a deep-but-ordinary chain like
-`msedge.b.tlu.dl.delivery.mp.microsoft.com` no longer reads as random),
-and the tunneling check gained the DGA check's vowel-ratio guard (a long
-hyphenated word-mashup like `prod-streaming-video-msn-com` is spared
-while base32/hex/base64 payloads still flag). The exclusion list gained
-the missing Akamai suffixes (`akamaized.net`, `akamaihd.net`,
-`akadns.net`) and ubiquitous OS/vendor domains (Microsoft, Google,
-Apple, Mozilla, and similar update/telemetry endpoints) - DGA and
-tunneling both require an attacker-controlled domain, which those are
-not. The Acknowledged Alerts count received the same lifecycle fixes.
+The DNS Heuristics card no longer shows a count carried over from a
+previously viewed analysis (whose tab then said "No suspicious DNS
+activity detected"), and no longer goes missing until a page reload
+when an analysis is opened while still processing. Two false-positive
+classes are gone: deep-but-ordinary subdomain chains (entropy is now
+scored per label) and long hyphenated word-mashup labels (the tunneling
+check now requires a low vowel ratio, like the DGA check). The
+exclusion list gained the missing Akamai suffixes and common OS/vendor
+domains (Microsoft, Google, Apple, Mozilla, etc.) - DGA and tunneling
+require an attacker-controlled domain, which those are not.
 
 ### UX and accessibility
 
-Oversized uploads are now caught client-side before uploading, with a
-message that names the limit and points at Settings (previously the
-server's raw "Invalid Content-Length" surfaced). The bulk-acknowledge
-truncation warning is sticky instead of vanishing after two seconds, the
-default toast duration rose to 3.5s, the analysis-timeout message says
-the analysis may still finish in the background, and the truncation
-banner links to Settings. Sample cards and the upload drop zone are
-keyboard-accessible (`role="button"`, Tab, Enter/Space); theme tiles
-preview on keyboard focus as well as hover; confirm dialogs move focus
-to their Cancel button on open and restore it on close. The Rules modal
-no longer eats the first click after a poll tick - its body was rebuilt
-every 2 seconds even when nothing changed, and a rebuild landing between
-mousedown and mouseup swallowed the click (reported as "Revert to
-Default, then Update needs two clicks"); an idle modal now skips
-identical re-renders entirely. The Security Onion comparison modal uses
-92vh so it fits without scrolling on 1080p displays, and the two
-Settings section captions are no longer mislabeled as form `<label>`s.
+Oversized uploads are caught before uploading, with a message naming
+the limit and pointing at Settings. The bulk-acknowledge truncation
+warning no longer auto-dismisses, toasts last 3.5s, the analysis-timeout
+message notes the analysis may still finish in the background, and the
+truncation banner links to Settings. Sample cards and the drop zone are
+keyboard-accessible, theme tiles preview on focus as well as hover, and
+confirm dialogs manage focus properly. The Rules modal no longer eats
+the first click after its 2-second poll rebuilds the modal body (seen as
+"Revert to Default, then Update needs two clicks"), aggregation tables
+page deterministically when values have tied counts, and the Security
+Onion comparison modal fits a 1080p display without scrolling.
 
 ### Documentation and website
 
-so-crates.org has a new landing page: a hex-rain hero with the SO-CRATES
+so-crates.org has a new landing page: hex-rain hero with the SO-CRATES
 artwork, feature cards, the demo video and screenshot tour in
-Linux-style window frames with lightbox zoom, and a theme chooser wired
-to eight of the app's own theme palettes (persisted per browser, like
-the app's). The rain renders at ~15fps/half resolution, pauses
-off-screen, and falls back to a static frame on software-rendered
-clients and under `prefers-reduced-motion`; narrow viewports fetch no
-hero image and the video never preloads. The docs themselves went
-through a full accuracy audit against the code - api.md gained the
-missing `/api/aggregation-totals` endpoint, aggregation pagination
-parameters, and multi-file ZIP semantics; configuration/development
-docs no longer claim rules download automatically at startup; the
-data-directory tree reflects multi-source rules; installation pages fix
-two commands that failed as written; credits gained the documentation
-site's own dependencies and the artwork's provenance; and the screenshot
-tour moved from the (no longer rendered) home page body into usage.md.
+Linux-style window frames with lightbox zoom, and a theme chooser using
+eight of the app's own palettes. The docs went through a full accuracy
+audit against the code (API reference, configuration, installation,
+architecture), Usage became a section with sub-pages, the Themes
+gallery lazy-loads its screenshots, and credits now cover the
+documentation site's dependencies and the artwork's provenance.
 
 ## 4.1.0
 
