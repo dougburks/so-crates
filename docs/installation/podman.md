@@ -78,3 +78,13 @@ podman run --userns=keep-id --user $(id -u):$(id -g) \
   -v $HOME/socrates-data:/data:Z -p 127.0.0.1:8000:8000 \
   so-crates
 ```
+
+
+## Cloud and proxied environments
+
+If you access SO-CRATES through a proxy hostname rather than localhost or an IP (e.g. Killercoda, GitHub Codespaces, or your own reverse proxy), add the hostname to the `ALLOWED_HOSTS` environment variable or requests are rejected with "Invalid Host header" (a DNS-rebinding defense). A wildcard covers per-session hostnames:
+
+```bash
+podman run --rm -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+  -e ALLOWED_HOSTS='*.killercoda.com' ghcr.io/dougburks/so-crates:main
+```

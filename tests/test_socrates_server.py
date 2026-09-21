@@ -7204,6 +7204,40 @@ class TestIngressDefenses(unittest.TestCase):
                               body=b'{}')
         self.assertEqual(status, 403)
 
+    def test_wildcard_allowed_hosts_matches_subdomains(self):
+        """REGRESSION: proxied environments (Killercoda, Codespaces) serve
+        the app via per-session hostnames that can't be known in advance -
+        '*.suffix' entries must match the suffix and any subdomain."""
+        with unittest.mock.patch.object(server.Handler, 'ALLOWED_HOSTNAMES',
+                                        frozenset({'*.killercoda.com'})):
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'abc123-8000.spch.r.killercoda.com'})
+            self.assertEqual(status, 200)
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'killercoda.com'})
+            self.assertEqual(status, 200)
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'evil.example.com'})
+            self.assertEqual(status, 403)
+            # suffix must match on a label boundary, not substring
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'evilkillercoda.com'})
+            self.assertEqual(status, 403)
+
+    def test_star_allowed_hosts_accepts_any(self):
+        with unittest.mock.patch.object(server.Handler, 'ALLOWED_HOSTNAMES',
+                                        frozenset({'*'})):
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'anything.example.net'})
+            self.assertEqual(status, 200)
+
+    def test_rejected_host_error_is_actionable(self):
+        status, body = self._raw('GET', '/socrates.html',
+                                 headers={'Host': 'proxy.cloud.example'})
+        self.assertEqual(status, 403)
+        self.assertIn('ALLOWED_HOSTS', body)
+        self.assertIn('proxy.cloud.example', body)
+
     # ---- Origin / Sec-Fetch-Site (CSRF) ----
 
     def test_cross_origin_post_rejected(self):

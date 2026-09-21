@@ -33,9 +33,11 @@ local instance from inside your browser, plus several smaller
 server-side issues found in a full security review. Most of it is
 invisible, but three changes might affect you:
 
-- Serving SO-CRATES behind a reverse proxy or a real hostname now
-  requires listing that hostname in the new `ALLOWED_HOSTS` environment
-  variable (browsing by IP or localhost needs nothing)
+- Serving SO-CRATES behind a reverse proxy or a cloud hostname (e.g.
+  Killercoda) now requires the new `ALLOWED_HOSTS` environment variable,
+  e.g. `-e ALLOWED_HOSTS='*.killercoda.com'` - browsing by IP or
+  localhost needs nothing, and the error page tells you exactly what to
+  set
 - The Docker/Podman compose files now publish the port on localhost
   only; to allow other machines on your network, change the port mapping
   back to `"8000:8000"`

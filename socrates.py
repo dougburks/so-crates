@@ -911,6 +911,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # Hostnames accepted in Host/Origin headers beyond localhost and IP
     # literals; comma-separated env var for reverse-proxy/hostname deployments.
+    # Entries: exact hostnames, '*.suffix' wildcards (matches the suffix
+    # itself and any subdomain of it - the shape proxied environments like
+    # Killercoda/Codespaces need, where the exact per-session hostname
+    # isn't known in advance), or a bare '*' to accept any Host (explicit
+    # opt-out of the DNS-rebinding defense for deployments that accept
+    # that risk).
     ALLOWED_HOSTNAMES = frozenset(
         h.strip().lower()
         for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()
@@ -923,7 +929,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         attacker's domain re-resolving to this server), so a raw IP in Host
         cannot be a rebinding attack, and LAN users legitimately browse to
         the server's IP. Names are limited to localhost (+subdomains) plus
-        the ALLOWED_HOSTS env allowlist.
+        the ALLOWED_HOSTS env allowlist (see ALLOWED_HOSTNAMES above for
+        the wildcard forms).
         """
         if not netloc:
             return True  # non-browser clients (curl, scripts) may omit Host
@@ -933,8 +940,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return False
         if host == 'localhost' or host.endswith('.localhost'):
             return True
-        if host in self.ALLOWED_HOSTNAMES:
-            return True
+        for allowed in self.ALLOWED_HOSTNAMES:
+            if allowed == '*':
+                return True
+            if allowed.startswith('*.'):
+                suffix = allowed[2:]
+                if host == suffix or host.endswith('.' + suffix):
+                    return True
+            elif host == allowed:
+                return True
         try:
             ipaddress.ip_address(host)
             return True
@@ -949,7 +963,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         cross-site "simple request" POSTs that carry neither header.
         """
         if not self._trusted_host(self.headers.get('Host', '')):
-            self._send_error(403, 'Invalid Host header')
+            # Actionable, not a dead end: proxied environments (Killercoda,
+            # Codespaces, reverse proxies) legitimately serve SO-CRATES via
+            # a hostname this instance has never heard of. The hostname is
+            # attacker-influenced text, but it's JSON-encoded by
+            # _send_error and never rendered as HTML.
+            host = (self.headers.get('Host', '') or '').split(':')[0][:200]
+            self._send_error(403,
+                f"Invalid Host header ('{host}'). If you are deliberately serving "
+                f"SO-CRATES via this hostname (e.g. behind a proxy), restart it with "
+                f"the ALLOWED_HOSTS environment variable - for example "
+                f"ALLOWED_HOSTS={host or 'my.host.example'} or a wildcard like "
+                f"ALLOWED_HOSTS=*.example.com")
             return True
         if not is_post:
             return False

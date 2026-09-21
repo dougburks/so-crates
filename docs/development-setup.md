@@ -34,7 +34,7 @@ Then open http://localhost:8000/socrates.html in your browser.
 |---|---|---|
 | `DATA_DIR` | `~/socrates-data` | Directory for analyzed files and Suricata config |
 | `BIND_ADDRESS` | `127.0.0.1` | Address to bind the HTTP server to |
-| `ALLOWED_HOSTS` | unset | Comma-separated extra hostnames accepted in the `Host`/`Origin` headers. Localhost and IP-literal hosts are always accepted; other DNS names are rejected (DNS-rebinding defense), so set this when serving SO-CRATES behind a reverse proxy or a real hostname |
+| `ALLOWED_HOSTS` | unset | Comma-separated hostnames accepted in the `Host`/`Origin` headers, beyond the always-accepted localhost and IP literals (other DNS names are rejected as a DNS-rebinding defense). Entries may be exact names, `*.suffix` wildcards (any subdomain - what proxied environments like Killercoda need, where the per-session hostname isn't known in advance), or a bare `*` to accept any host |
 | `PORT` | `8000` | HTTP server port |
 | `ENABLE_ARP_LOGGING` | unset (disabled) | Set to any non-empty value to enable Suricata's `arp` eve-log output. Off by default since ARP volume can be significant on a live network (Suricata's own default is disabled too, for the same reason) - only enable if you actually want ARP events. |
 | `OHMYDEBN_THEME_DIR` | unset (feature off) | Base OhMyDebn config directory (e.g. `~/.config/ohmydebn`), for the opt-in "Sync theme to OhMyDebn theme" feature - see [Themes](themes.md). No-op for any deployment not launched via OhMyDebn. |
