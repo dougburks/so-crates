@@ -2,14 +2,18 @@
 
 ## Data Storage
 
-All analyzed files are stored in `~/socrates-data/`. Each analysis gets a subdirectory named by its MD5 hash containing:
+All analyzed files are stored in `~/socrates-data/`. It holds a set of shared rule/config directories plus one `<md5>/` subdirectory per analysis:
 
 ```
 ~/socrates-data/
   suricata/
     suricata.yaml          # Copied from /etc/suricata/, rule path rewritten
-    rules/
-      suricata.rules       # Downloaded by suricata-update (online) or copied from baked-in image (offline/air-gapped)
+    rules/                 # Active rules - one file per enabled source (e.g. et-open.rules),
+                           # copied in from the rules-available/ library
+    rules-available/       # Staged per-source rules library, seeded from the baked-in image
+                           # copies; fresh downloads only happen via the Rules modal
+    enabled_sources.json   # Which rule sources are currently enabled
+    show_protocol_decode_alerts.json  # Persisted "show protocol/decoder alerts" setting
     disable.conf
   zircolite/               # Optional: only a fallback zircolite.py copy for manual installs; the app looks
                            # for `zircolite`/`zircolite.py` on PATH first (installed via pip, or baked into
@@ -27,7 +31,7 @@ All analyzed files are stored in `~/socrates-data/`. Each analysis gets a subdir
     name.txt                   # Human-readable display name
     notes.txt                  # Freeform analyst notes (absent unless explicitly added)
     filestore/                 # Extracted files from Suricata file-store (PCAP only)
-    yara_matches.json          # YARA scan results (binary files)
+    yara_matches.json          # YARA scan results (PCAP only; standalone binary uploads write matches straight to events.db)
     sigma_matches.json         # Sigma detection results (log files)
     file_metadata.json         # Hashes/entropy/strings/EXIF (binary files and extracted filestore files)
     fast.log, stats.log, suricata.log  # Suricata's own log output (PCAP only)
@@ -49,6 +53,6 @@ All analyzed files are stored in `~/socrates-data/`. Each analysis gets a subdir
 | `MAX_NOTES_LENGTH` | `10,000 chars` | Maximum length of a per-analysis Notes field |
 | `MAX_ROW_NOTE_LENGTH` | `500 chars` | Maximum length of a per-row note (a short annotation on a single table row) |
 
-Suricata config is auto-generated from `/etc/suricata/` on first run. Rules are downloaded via `suricata-update` when internet access is available; otherwise, the app uses baked-in rules (Docker/Podman) or warns and continues without rules (source).
+Of these, only `PORT` and `DATA_DIR` can be overridden by environment variables (see [Development Setup](development-setup.md#environment-variables)) - they are environment-driven values in `socrates.py` rather than `config.py` constants; the remaining limits are constants in `config.py` and require editing that file.
 
-See [Development Setup](development-setup.md#environment-variables) for the environment variables that override these defaults at startup.
+Suricata config is auto-generated from `/etc/suricata/` on first run. On startup the app seeds rules from the baked-in image copies (Docker/Podman) or warns and continues without rules (source install). Downloading fresh rules via `suricata-update` is an explicit action from the Rules modal - never automatic.

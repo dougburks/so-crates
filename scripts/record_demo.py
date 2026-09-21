@@ -556,6 +556,21 @@ async def main(base_url):
         detail_value_row = page.locator(
             ".agg-row:has-text('STOR PW_tyler-DESKTOP-W7F98GR_2026_02_03_16_13_59.html')"
         ).first
+        # The Detail table pages 10 values at a time (deterministically
+        # ordered by count desc, then value - see db.py's aggregation
+        # tie-break), and this count-1 value sorts behind the digit-prefixed
+        # FTP responses, landing on page 2. Page the Detail table forward
+        # until the row is present rather than assuming page 1.
+        for _ in range(5):
+            if await detail_value_row.count() > 0:
+                break
+            next_btn = page.locator(
+                ".agg-table:has(.agg-header:has-text('Detail')) .agg-page-btn:has-text('Next')"
+            ).first
+            if await next_btn.count() == 0 or not await next_btn.is_enabled():
+                break
+            await next_btn.click()
+            await page.wait_for_timeout(900)
         await detail_value_row.scroll_into_view_if_needed()
         await caption(page, "Clicking a Detail value to filter down to a single matching event", detail_value_row)
         await page.wait_for_timeout(4200)

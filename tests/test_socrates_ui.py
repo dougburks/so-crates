@@ -82,7 +82,7 @@ class TestHTMLStructure(unittest.TestCase):
         Escape or picking a result, the same convention every command
         palette (VS Code's Cmd+Shift+P, Spotlight, ...) uses, and none of
         them show a visible X button either."""
-        close_button_count = HTML_CONTENT.count('class="modal-close" title="Close (Esc)" onclick="')
+        close_button_count = HTML_CONTENT.count('class="modal-close" title="Close (Esc)" data-action="')
         close_all_modals_fn = JS_CONTENT.split('function closeAllModals() {')[1].split('\n        }')[0]
         closes_called = len(re.findall(r'close\w*Modal\(\)', close_all_modals_fn))
         closes_called -= close_all_modals_fn.count('closeAutocompleteModal()')
@@ -99,13 +99,55 @@ class TestHTMLStructure(unittest.TestCase):
         self.assertNotIn('</style>', HTML_CONTENT, 'Inline </style> tag found in HTML')
 
     def test_no_inline_script_block(self):
-        """HTML must not contain inline <script> blocks after split."""
-        inline_script = re.search(r'<script[^>]*>(?!\s*</script>)', HTML_CONTENT)
-        if inline_script:
-            # Allow the small FOUC-prevention theme script in <head>
-            snippet = HTML_CONTENT[inline_script.start():inline_script.start()+200]
-            if 'data-theme' not in snippet:
-                self.fail('Inline <script> block found in HTML')
+        """HTML must not contain inline <script> blocks at all - the theme
+        FOUC-prevention bootstrap lives in static/theme-boot.js so the CSP
+        can be a strict script-src 'self' with no inline carve-outs."""
+        for m in re.finditer(r'<script([^>]*)>', HTML_CONTENT):
+            self.assertIn('src=', m.group(1),
+                          'Inline <script> block found in HTML: ' + m.group(0))
+
+    def test_theme_boot_script_is_parser_blocking(self):
+        """The theme bootstrap must run before first paint: referenced from
+        <head> without defer/async so the parser blocks on it."""
+        m = re.search(r'<script[^>]*theme-boot\.js[^>]*>', HTML_CONTENT)
+        self.assertIsNotNone(m, 'theme-boot.js script tag missing')
+        self.assertNotIn('defer', m.group(0))
+        self.assertNotIn('async', m.group(0))
+
+    def test_no_inline_event_handler_attributes(self):
+        """socrates.html (the static page shell) must contain no inline
+        on*= event-handler attributes (onclick, onchange, oninput,
+        onkeydown, ...) - a CSP with script-src lacking 'unsafe-inline'
+        blocks them all silently. Static-shell elements are wired via
+        data-action attributes dispatched by the STATIC_ACTIONS registry
+        in socrates.js (or direct addEventListener calls by id) instead."""
+        matches = re.findall(r'\son[a-z]+\s*=', HTML_CONTENT)
+        self.assertEqual(matches, [],
+                         'socrates.html must not contain inline on*= handler attributes: %r' % matches)
+
+    def test_no_inline_event_handler_attributes_in_generated_js_html(self):
+        """Phase 2 of the same CSP hardening: static/socrates.js builds a
+        lot of HTML as strings (welcome screen, data tables, modals'
+        dynamic bodies, ...) and none of it may carry inline on*=
+        handler attributes either - the same script-src (no
+        'unsafe-inline') CSP silently blocks them all. Generated elements
+        are wired via data-action/data-change-action/data-enter-action/
+        data-key-activate attributes dispatched by the delegated
+        listeners at the bottom of socrates.js. The regex uses a
+        handler-name allowlist (not bare \\son[a-z]+=) so ordinary words
+        ending in 'on' followed by '=' in JS code can't false-positive,
+        and requires an opening quote so property assignments like
+        `el.onclick = startRenameAnalysis` (real listeners, CSP-fine)
+        don't match."""
+        pattern = re.compile(
+            r'\bon(?:click|dblclick|change|input|keydown|keyup|keypress'
+            r'|mouse[a-z]+|focus|blur|submit|reset|error|load|unload'
+            r'|drag[a-z]*|drop|contextmenu|wheel|scroll|select'
+            r'|touch[a-z]+|pointer[a-z]+|animation[a-z]+|transitionend'
+            r')\s*=\s*["\']')
+        matches = [m.group(0) for m in pattern.finditer(JS_CONTENT)]
+        self.assertEqual(matches, [],
+                         'socrates.js must not embed inline on*= handler attributes in generated HTML: %r' % matches)
 
     def test_static_files_exist(self):
         """static/socrates.css and static/socrates.js must exist on disk."""
@@ -325,8 +367,8 @@ class TestHTMLStructure(unittest.TestCase):
         a_pos = header_section.find('<a')
         svg_pos = header_section.find('<svg')
         self.assertLess(a_pos, svg_pos, '<a> must wrap <svg> in app-header-left')
-        # The <a> must have onclick="showWelcome()"
-        self.assertIn('showWelcome()', header_section, '<a> must call showWelcome()')
+        # The <a> must be wired to the show-welcome action
+        self.assertIn('data-action="show-welcome"', header_section, '<a> must be wired to show-welcome')
 
     def test_has_loading_modal(self):
         self.assertIn('id="loadingModal"', HTML_CONTENT)
@@ -812,7 +854,7 @@ class TestUXFeatures(unittest.TestCase):
 
     def test_back_navigation(self):
         """Back navigation must exist via the app header logo link."""
-        self.assertIn("showWelcome(); return false;", HTML_CONTENT,
+        self.assertIn('data-action="show-welcome"', HTML_CONTENT,
                       'App header logo must link back to welcome screen')
 
     def test_help_modal_lightbulb_uses_template_literal(self):
@@ -854,15 +896,15 @@ class TestUXFeatures(unittest.TestCase):
     def test_welcome_help_settings_is_a_hyperlink(self):
         """The max-file-size tip's 'Settings' mention must be a clickable
         link that opens the Settings modal directly, not just plain text."""
-        self.assertIn('adjustable in <a href="#" onclick="event.preventDefault(); showSettingsModal();"', JS_CONTENT,
-                      'Settings mention in the welcome help tip must link directly to showSettingsModal()')
+        self.assertIn('adjustable in <a href="#" data-action="show-settings-modal"', JS_CONTENT,
+                      'Settings mention in the welcome help tip must be wired to the show-settings-modal action')
 
     def test_welcome_help_settings_link_opens_settings_modal(self):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             document.getElementById('helpModalBody').innerHTML = getWelcomeHelpContent();
             var link = [...document.querySelectorAll('a')].find(a => a.textContent === 'Settings');
-            link.onclick({ preventDefault: function() {} });
+            link.click();
             window.__jsdom_result = {
                 found: !!link,
                 settingsModalOpen: document.getElementById('settingsModal').classList.contains('active')
@@ -881,11 +923,11 @@ class TestUXFeatures(unittest.TestCase):
 
     def test_help_modal_has_backdrop_click_handler(self):
         """Help modal wrapper must close when the dark backdrop is clicked."""
-        self.assertIn('id="helpModal" onclick="handleHelpBackdropClick(event)"', HTML_CONTENT,
+        self.assertIn('id="helpModal" data-action="backdrop" data-arg="close-help-modal"', HTML_CONTENT,
                       'Help modal wrapper must handle backdrop clicks')
         modal_section = HTML_CONTENT.split('id="helpModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('onclick="event.stopPropagation()"', modal_section,
-                      'Help modal content must stop event propagation')
+        self.assertNotIn('stopPropagation', modal_section,
+                         'Help modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
     def test_help_modal_backdrop_handler_closes_modal(self):
         """handleHelpBackdropClick must close the modal only when the backdrop is clicked."""
@@ -937,10 +979,10 @@ class TestUXFeatures(unittest.TestCase):
         """Upload area must have a visible drop zone for drag-and-drop."""
         self.assertIn('id="dropZone"', JS_CONTENT,
                       'Drop zone element must exist')
-        self.assertIn('ondragover', JS_CONTENT,
-                      'Drop zone must handle dragover event')
-        self.assertIn('ondrop', JS_CONTENT,
-                      'Drop zone must handle drop event')
+        self.assertIn("document.addEventListener('dragover'", JS_CONTENT,
+                      'Drop zone must handle dragover via a delegated listener')
+        self.assertIn("document.addEventListener('drop'", JS_CONTENT,
+                      'Drop zone must handle drop via a delegated listener')
 
     def test_drag_and_drop_css_feedback(self):
         """Drop zone must have CSS class for visual feedback on drag."""
@@ -980,10 +1022,8 @@ class TestUXFeatures(unittest.TestCase):
         input_match = re.search(r'id="pcapUrl"[^>]*>', JS_CONTENT)
         self.assertIsNotNone(input_match, 'pcapUrl input must exist')
         input_tag = input_match.group(0)
-        self.assertIn("onkeydown", input_tag,
-                      'pcapUrl input must have onkeydown handler')
-        self.assertIn("loadFromUrl()", input_tag,
-                      'pcapUrl onkeydown must call loadFromUrl')
+        self.assertIn('data-enter-action="load-from-url"', input_tag,
+                      'pcapUrl input must be wired to the load-from-url Enter action')
 
     def test_diagram_toggle_exists(self):
         """Sankey panel must include a collapsible heading bar."""
@@ -1052,7 +1092,7 @@ class TestUXFeatures(unittest.TestCase):
     def test_sankey_empty_events_shows_header(self):
         """REGRESSION: updateSankeyDiagram must render the toggle header even when events are empty."""
         func = JS_CONTENT.split('function updateSankeyDiagram(')[1].split('function ')[0]
-        self.assertIn("sankeyPanel.innerHTML = '<div class=\"section-toggle-bar\" onclick=\"toggleDiagram()\">▾ Sankey Diagram</div>'", func,
+        self.assertIn("sankeyPanel.innerHTML = '<div class=\"section-toggle-bar\" data-action=\"toggle-diagram\">▾ Sankey Diagram</div>'", func,
                       'updateSankeyDiagram must render header bar for empty events')
 
     def test_getSankeyEvents_exists(self):
@@ -1158,7 +1198,7 @@ class TestUXFeatures(unittest.TestCase):
 
     def test_hexdump_button_in_detail_row(self):
         self.assertIn('Hexdump', JS_CONTENT)
-        self.assertIn("onclick=\"switchStreamView(", JS_CONTENT)
+        self.assertIn('data-action="switch-stream-view" data-view="hexdump"', JS_CONTENT)
         self.assertIn('.view-tabs', CSS_CONTENT)
         self.assertIn('.view-tab', CSS_CONTENT)
 
@@ -1226,6 +1266,20 @@ class TestUXFeatures(unittest.TestCase):
         self.assertIn("loadTabData(eventTypes[0])", func,
                       'loadAnalysis must call loadTabData after buildSections')
 
+    def test_loadAnalysis_rearms_lazy_stat_card_counts(self):
+        """REGRESSION: switching analyses goes through loadAnalysis(), which
+        never re-armed the lazy Acknowledged Alerts / DNS Heuristics count
+        refreshes (only page load and refreshAnalysisData() did). The
+        previous analysis's counts therefore carried over: a DNS Heuristics
+        card showing another capture's number (whose tab then said 'No
+        suspicious DNS activity detected'), or - with the md5 tag gating -
+        no card at all until a manual page reload recomputed it."""
+        func = JS_CONTENT.split('async function loadAnalysis')[1].split('async function')[0]
+        self.assertIn('dnsHeuristicsCountStale = true;', func,
+                      'loadAnalysis must re-arm the DNS Heuristics count refresh')
+        self.assertIn('acknowledgedAlertsCountStale = true;', func,
+                      'loadAnalysis must re-arm the Acknowledged Alerts count refresh')
+
     def test_loadAnalysis_uses_showAnalysisUI(self):
         """loadAnalysis must call showAnalysisUI after rebuilding the analysis view."""
         func = JS_CONTENT.split('async function loadAnalysis')[1].split('async function')[0]
@@ -1286,21 +1340,23 @@ class TestThemeAndMenu(unittest.TestCase):
         modal, instead of embedding the full (now 26-theme) list inline -
         the inline dropdown list needed a scrollbar to fit on shorter
         viewports, which a modal with a wrapping grid avoids."""
-        self.assertIn('onclick="showThemesModal(); closeMenu();"', HTML_CONTENT,
+        self.assertIn('data-action="menu-themes"', HTML_CONTENT,
                       'Themes menu item must open the themes modal, in the static HTML')
         self.assertIn('>Themes</span>', HTML_CONTENT,
                       'Themes menu item must be labeled in the static HTML')
-        self.assertIn('onclick="showThemesModal(); closeMenu();"', JS_CONTENT,
+        self.assertIn('data-action="menu-themes"', JS_CONTENT,
                       'renderGearMenu must also include a Themes menu item')
+        self.assertIn("'menu-themes': () => { showThemesModal(); closeMenu(); }", JS_CONTENT,
+                      'the menu-themes action must open the themes modal and close the menu')
 
     def test_themes_modal_skeleton_in_html(self):
         self.assertIn('id="themesModal"', HTML_CONTENT,
                       'Themes modal container must exist in HTML')
         self.assertIn('id="themesModalBody"', HTML_CONTENT,
                       'Themes modal body container (populated by renderThemesModalGrid) must exist in HTML')
-        self.assertIn('onclick="handleModalBackdropClick(event, closeThemesModal)"', HTML_CONTENT,
+        self.assertIn('data-action="backdrop" data-arg="close-themes-modal"', HTML_CONTENT,
                       'Themes modal must close on backdrop click')
-        self.assertIn('onclick="closeThemesModal()"', HTML_CONTENT,
+        self.assertIn('data-action="close-themes-modal"', HTML_CONTENT,
                       'Themes modal must have a close button')
 
     def test_themes_modal_has_usage_instructions(self):
@@ -1324,7 +1380,7 @@ class TestThemeAndMenu(unittest.TestCase):
         themes_modal_block = HTML_CONTENT.split('id="themesModal"')[1].split('</div>\n\n        <header')[0]
         self.assertIn('id="syncThemeWithOS"', themes_modal_block,
                       'syncThemeWithOS checkbox must live inside the themes modal')
-        self.assertIn('onchange="handleSyncThemeWithOSChange(this)"', themes_modal_block,
+        self.assertIn("getElementById('syncThemeWithOS').addEventListener('change'", JS_CONTENT,
                       'syncThemeWithOS must apply immediately on change, not require a Save click')
         settings_modal_block = HTML_CONTENT.split('id="settingsModal"')[1].split('id="themesModal"')[0]
         self.assertNotIn('syncThemeWithOS', settings_modal_block,
@@ -1487,7 +1543,7 @@ class TestThemeAndMenu(unittest.TestCase):
             var toast = document.querySelector('.socrates-toast');
             window.__jsdom_result = { text: toast ? toast.textContent : null };
         ''')
-        self.assertEqual(result['text'], '3 additional files were in the ZIP and not analyzed')
+        self.assertEqual(result['text'], '3 additional files in the ZIP could not be analyzed')
 
     def test_notifyIfFilesSkipped_singular_wording(self):
         from tests.jsdom_helper import js_statements
@@ -1496,7 +1552,7 @@ class TestThemeAndMenu(unittest.TestCase):
             var toast = document.querySelector('.socrates-toast');
             window.__jsdom_result = { text: toast ? toast.textContent : null };
         ''')
-        self.assertEqual(result['text'], '1 additional file was in the ZIP and not analyzed')
+        self.assertEqual(result['text'], '1 additional file in the ZIP could not be analyzed')
 
     def test_notifyIfFilesSkipped_no_toast_when_absent(self):
         from tests.jsdom_helper import js_statements
@@ -1599,7 +1655,7 @@ class TestThemeAndMenu(unittest.TestCase):
             };
         ''')
         self.assertTrue(result['presentBeforeClick'], 'toast must appear when all three rulesets have no rules')
-        self.assertIn('No rule sets are configured yet', result['toastText'])
+        self.assertIn('No rulesets are configured yet', result['toastText'])
         self.assertEqual(result['linkText'], 'Open Rules')
         self.assertTrue(result['calledShowRulesModal'], 'clicking the action link must open the Rules modal')
         self.assertEqual(result['opacityAfterClick'], '0', 'clicking the action link must start dismissing the toast')
@@ -1659,7 +1715,7 @@ class TestThemeAndMenu(unittest.TestCase):
 
     def test_checkForStaleRules_opt_in_checkbox_exists(self):
         self.assertIn('id="checkForStaleRules"', HTML_CONTENT)
-        self.assertIn('onchange="handleCheckForStaleRulesChange(this)"', HTML_CONTENT)
+        self.assertIn("getElementById('checkForStaleRules').addEventListener('change'", JS_CONTENT)
         # Styled as a slider toggle (.theme-switch, same component as the
         # OhMyDebn sync toggle and checkForUpdates), not a plain checkbox -
         # applies instantly with no Save step, same shape as those two.
@@ -2140,18 +2196,23 @@ class TestThemeAndMenu(unittest.TestCase):
                          'the preview must still update to the new current theme without reloading')
 
     def test_theme_options_in_rendered_themes_modal(self):
-        """renderThemesModalGrid() must generate a tile with preview/commit
-        handlers for every theme in the THEMES registry."""
+        """renderThemesModalGrid() must generate a commit-wired tile for
+        every theme in the THEMES registry. Hover/focus preview is
+        delegated off the same data-theme-option attribute (see the
+        theme-tile mouseover/focusin listeners), so per-tile preview
+        handlers no longer exist to assert on - the preview behavior
+        itself is covered by the hover tests in this class."""
         from tests.jsdom_helper import js_statements
         themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player']
         result = js_statements(f'''
-            var html = renderThemesModalGrid();
+            var div = document.createElement('div');
+            div.innerHTML = renderThemesModalGrid();
             var missing = [];
             var themes = {json.dumps(themes)};
             themes.forEach(function(t) {{
-                if (html.indexOf('data-theme-option="' + t + '"') === -1) missing.push('data-theme-option:' + t);
-                if (html.indexOf("commitTheme('" + t + "')") === -1) missing.push('commitTheme:' + t);
-                if (html.indexOf("previewTheme('" + t + "')") === -1) missing.push('previewTheme:' + t);
+                var tile = div.querySelector('.theme-tile[data-theme-option="' + t + '"]');
+                if (!tile) missing.push('data-theme-option:' + t);
+                else if (tile.dataset.action !== 'commit-theme') missing.push('commit-action:' + t);
             }});
             window.__jsdom_result = missing;
         ''')
@@ -2199,14 +2260,14 @@ class TestThemeAndMenu(unittest.TestCase):
                              f'{cls} must not appear in JS after removing theme icons')
 
     def test_help_in_menu_not_standalone(self):
-        self.assertIn('onclick="showHelpModal(); closeMenu();"', HTML_CONTENT,
+        self.assertIn('data-action="menu-help"', HTML_CONTENT,
                       'Help button must be inside the menu dropdown')
 
     def test_help_appears_before_themes_item(self):
         """REGRESSION: Help must be at the top of the gear menu, followed
         (after Settings) by the Themes entry."""
-        help_index = HTML_CONTENT.find('onclick="showHelpModal(); closeMenu();"')
-        themes_index = HTML_CONTENT.find('onclick="showThemesModal(); closeMenu();"')
+        help_index = HTML_CONTENT.find('data-action="menu-help"')
+        themes_index = HTML_CONTENT.find('data-action="menu-themes"')
         self.assertGreater(help_index, -1, 'Help button must exist in menu')
         self.assertGreater(themes_index, -1, 'Themes menu item must exist in menu')
         self.assertLess(help_index, themes_index,
@@ -2219,7 +2280,7 @@ class TestThemeAndMenu(unittest.TestCase):
         grid_html = js_statements('window.__jsdom_result = renderThemesModalGrid();')
         dark_index = grid_html.find('>Dark Themes</div>')
         light_index = grid_html.find('>Light Themes</div>')
-        light_btn_index = grid_html.find("commitTheme('white')")
+        light_btn_index = grid_html.find('data-theme-option="white"')
         self.assertGreater(dark_index, -1, 'Dark Themes header must exist')
         self.assertGreater(light_index, -1, 'Light Themes header must exist')
         self.assertGreater(light_btn_index, -1, 'White theme button must exist')
@@ -2238,7 +2299,7 @@ class TestThemeAndMenu(unittest.TestCase):
         grid_html = js_statements('window.__jsdom_result = renderThemesModalGrid();')
         light_index = grid_html.find('>Light Themes</div>')
         fun_index = grid_html.find('>Fun Themes</div>')
-        sguil_btn_index = grid_html.find("commitTheme('sguil')")
+        sguil_btn_index = grid_html.find('data-theme-option="sguil"')
         self.assertGreater(sguil_btn_index, light_index,
                            'Sguil button must appear after the Light Themes header')
         self.assertLess(sguil_btn_index, fun_index,
@@ -2254,7 +2315,7 @@ class TestThemeAndMenu(unittest.TestCase):
         fun_index = grid_html.find('>Fun Themes</div>')
         dark_index = grid_html.find('>Dark Themes</div>')
         light_index = grid_html.find('>Light Themes</div>')
-        hacker_btn_index = grid_html.find("commitTheme('hacker')")
+        hacker_btn_index = grid_html.find('data-theme-option="hacker"')
         self.assertGreater(fun_index, -1, 'Fun Themes header must exist')
         self.assertLess(dark_index, fun_index,
                         'Fun Themes header must appear after Dark Themes header')
@@ -2359,10 +2420,10 @@ class TestThemeAndMenu(unittest.TestCase):
                 return b.textContent.trim() === 'White';
             });
             var frame = document.getElementById('themePreviewFrame');
-            lightBtn.onmouseenter();
+            lightBtn.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
             var previewFrameTheme = frame.contentDocument.documentElement.getAttribute('data-theme');
             var realThemeDuringHover = document.documentElement.getAttribute('data-theme');
-            lightBtn.onmouseleave();
+            lightBtn.dispatchEvent(new MouseEvent('mouseout', {bubbles: true}));
             var revertedFrameTheme = frame.contentDocument.documentElement.getAttribute('data-theme');
             window.__jsdom_result = {
                 realThemeBeforeHover: realThemeBeforeHover,
@@ -2398,7 +2459,7 @@ class TestThemeAndMenu(unittest.TestCase):
             var nordBtn = Array.from(buttons).find(function(b) {
                 return b.textContent.trim() === 'Nord';
             });
-            nordBtn.onmouseenter();
+            nordBtn.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
             window.__jsdom_result = document.getElementById('themePreviewingLabel').textContent;
         ''')
         self.assertEqual(result, 'Nord', "hovering Nord must show 'Previewing Nord'")
@@ -2412,8 +2473,8 @@ class TestThemeAndMenu(unittest.TestCase):
             var cgaBtn = Array.from(buttons).find(function(b) {
                 return b.textContent.trim() === 'CGA';
             });
-            cgaBtn.onmouseenter();
-            cgaBtn.onmouseleave();
+            cgaBtn.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
+            cgaBtn.dispatchEvent(new MouseEvent('mouseout', {bubbles: true}));
             window.__jsdom_result = document.getElementById('themePreviewingLabel').textContent;
         ''')
         self.assertEqual(result, 'Midnight', 'leaving the tile must revert the label to the dark baseline theme')
@@ -2575,7 +2636,7 @@ class TestThemeAndMenu(unittest.TestCase):
         (it is not a theme item, so the bare ::before rule must not exist)."""
         self.assertNotIn('.app-header-menu-item::before', CSS_CONTENT,
                          'Checkmark space must be scoped to [data-theme-option], not all menu items')
-        help_btn = HTML_CONTENT.split('onclick="showHelpModal(); closeMenu();"')[0].split('<button')[-1]
+        help_btn = HTML_CONTENT.split('data-action="menu-help"')[0].split('<button')[-1]
         self.assertNotIn('data-theme-option', help_btn,
                          'Help menu item must not carry data-theme-option')
 
@@ -2609,7 +2670,7 @@ class TestThemeAndMenu(unittest.TestCase):
             var lightBtn = Array.from(buttons).find(function(b) {
                 return b.textContent.trim() === 'White';
             });
-            lightBtn.onclick();
+            lightBtn.click();
             var committed = document.documentElement.getAttribute('data-theme') || 'dark';
             var stored = localStorage.getItem('socrates-theme');
             var modal = document.getElementById('themesModal');
@@ -2638,12 +2699,12 @@ class TestThemeAndMenu(unittest.TestCase):
             function findTile(label) {
                 return Array.from(buttons).find(function(b) { return b.textContent.trim() === label; });
             }
-            findTile('Nord').onclick();
+            findTile('Nord').click();
             var lumonBtn = findTile('Lumon');
             var frame = document.getElementById('themePreviewFrame');
-            lumonBtn.onmouseenter();
+            lumonBtn.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
             var previewedLumon = frame.contentDocument.documentElement.getAttribute('data-theme');
-            lumonBtn.onmouseleave();
+            lumonBtn.dispatchEvent(new MouseEvent('mouseout', {bubbles: true}));
             window.__jsdom_result = {
                 previewedLumon: previewedLumon,
                 revertedAfterLeave: frame.contentDocument.documentElement.getAttribute('data-theme')
@@ -2928,14 +2989,19 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn('data-theme', HTML_CONTENT,
                       'HTML must have FOUC-prevention theme script')
 
+    def _theme_boot_source(self):
+        # The FOUC-prevention bootstrap lives in static/theme-boot.js (not
+        # inline) so the CSP can be a strict script-src 'self'.
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            '..', 'static', 'theme-boot.js')
+        with open(path) as f:
+            return f.read()
+
     def test_fouc_prevention_script_is_fault_tolerant(self):
-        head = HTML_CONTENT.split('</head>')[0]
-        inline_script_match = re.search(r'<script[^>]*>(.*?)</script>', head, re.DOTALL)
-        self.assertTrue(inline_script_match, 'Inline script must be present in <head>')
-        inline_script = inline_script_match.group(1)
-        self.assertIn('try{', inline_script.replace(' ', ''),
+        boot = self._theme_boot_source().replace(' ', '').replace('\n', '')
+        self.assertIn('try{', boot,
                       'FOUC script must guard theme read in try block')
-        self.assertIn('catch(e){}', inline_script.replace(' ', ''),
+        self.assertIn('catch(e){}', boot,
                       'FOUC script must swallow localStorage errors')
 
     def test_fouc_script_migrates_daylight_to_white(self):
@@ -2947,15 +3013,12 @@ class TestThemeAndMenu(unittest.TestCase):
         localStorage, so the choice sticks instead of re-migrating (and
         re-showing a "you're on White now" moment) every single page
         load."""
-        head = HTML_CONTENT.split('</head>')[0]
-        inline_script_match = re.search(r'<script[^>]*>(.*?)</script>', head, re.DOTALL)
-        self.assertTrue(inline_script_match, 'Inline script must be present in <head>')
-        inline_script = inline_script_match.group(1).replace(' ', '')
-        self.assertIn("t=='light'", inline_script,
+        boot = self._theme_boot_source().replace(' ', '')
+        self.assertIn("t=='light'", boot,
                       "FOUC script must detect the removed Daylight theme's saved value")
-        self.assertIn("t='white'", inline_script,
+        self.assertIn("t='white'", boot,
                       'FOUC script must remap Daylight to White')
-        self.assertIn("localStorage.setItem('socrates-theme',t='white')", inline_script,
+        self.assertIn("localStorage.setItem('socrates-theme',t='white')", boot,
                       'FOUC script must persist the White migration back to localStorage')
 
     def test_hacker_theme_override_exists(self):
@@ -3381,7 +3444,7 @@ class TestThemeAndMenu(unittest.TestCase):
             });
         ''')
         titles = {r['label']: r['title'] for r in result}
-        self.assertEqual(titles.get('Sample pcap file'), 'Downloads from www.malware-traffic-analysis.net')
+        self.assertEqual(titles.get('Sample PCAP file'), 'Downloads from www.malware-traffic-analysis.net')
         self.assertEqual(titles.get('Sample log file'), 'Downloads from github.com')
         self.assertEqual(titles.get('Sample binary file'), 'Downloads from secure.eicar.org')
 
@@ -3976,9 +4039,9 @@ class TestThemeAndMenu(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             document.getElementById('statsGrid').innerHTML = `
-                <div class="stat-card tab-active" onclick="showTab('section-alert', this)"><div class="stat-number">1</div></div>
-                <div class="stat-card" onclick="showTab('section-all', this)"><div class="stat-number">2</div></div>
-                <div class="stat-card" onclick="showTab('section-dns', this)"><div class="stat-number">3</div></div>
+                <div class="stat-card tab-active" data-action="show-tab" data-section="section-alert"><div class="stat-number">1</div></div>
+                <div class="stat-card" data-action="show-tab" data-section="section-all"><div class="stat-number">2</div></div>
+                <div class="stat-card" data-action="show-tab" data-section="section-dns"><div class="stat-number">3</div></div>
             `;
             document.body.insertAdjacentHTML('beforeend', '<div class="section" id="section-alert"></div><div class="section section-hidden" id="section-all"></div><div class="section section-hidden" id="section-dns"></div>');
             var cards = document.querySelectorAll('#statsGrid .stat-card');
@@ -4016,9 +4079,9 @@ class TestThemeAndMenu(unittest.TestCase):
             var calls = [];
             window.loadSampleUrl = function(url) { calls.push(url); };
             document.getElementById('inputBoxes').innerHTML = `
-                <div class="sample-card" onclick="loadSampleUrl('pcap-url')"><span>Sample pcap file</span></div>
-                <div class="sample-card" onclick="loadSampleUrl('log-url')"><span>Sample log file</span></div>
-                <div class="sample-card" onclick="loadSampleUrl('binary-url')"><span>Sample binary file</span></div>
+                <div class="sample-card" data-action="load-sample-url" data-url="pcap-url"><span>Sample pcap file</span></div>
+                <div class="sample-card" data-action="load-sample-url" data-url="log-url"><span>Sample log file</span></div>
+                <div class="sample-card" data-action="load-sample-url" data-url="binary-url"><span>Sample binary file</span></div>
             `;
             document.getElementById('inputBoxes').style.display = 'block';
             var cards = document.querySelectorAll('.sample-card');
@@ -4049,9 +4112,9 @@ class TestThemeAndMenu(unittest.TestCase):
             var commitCalls = [];
             window.commitTheme = function(name) { commitCalls.push(name); };
             document.getElementById('themesModalBody').innerHTML = `
-                <button class="theme-tile" data-theme-option="dark" onclick="commitTheme('dark')"><span>Midnight</span></button>
-                <button class="theme-tile" data-theme-option="hacker" onclick="commitTheme('hacker')"><span>Hacker</span></button>
-                <button class="theme-tile" data-theme-option="cga" onclick="commitTheme('cga')"><span>CGA</span></button>
+                <button class="theme-tile" data-theme-option="dark" data-action="commit-theme"><span>Midnight</span></button>
+                <button class="theme-tile" data-theme-option="hacker" data-action="commit-theme"><span>Hacker</span></button>
+                <button class="theme-tile" data-theme-option="cga" data-action="commit-theme"><span>CGA</span></button>
             `;
             document.getElementById('themesModal').classList.add('active');
             function press(key) {
@@ -4096,7 +4159,7 @@ class TestThemeAndMenu(unittest.TestCase):
             var sampleCalls = [];
             window.loadSampleUrl = function(url) { sampleCalls.push(url); };
             document.getElementById('inputBoxes').innerHTML = `
-                <div class="sample-card" onclick="loadSampleUrl('pcap-url')"><span>Sample pcap file</span></div>
+                <div class="sample-card" data-action="load-sample-url" data-url="pcap-url"><span>Sample pcap file</span></div>
             `;
             document.getElementById('inputBoxes').style.display = 'block';
             document.getElementById('themesModalBody').innerHTML = `
@@ -4213,8 +4276,8 @@ class TestThemeAndMenu(unittest.TestCase):
             var calls = [];
             window.loadAnalysis = function(md5) { calls.push(md5); };
             document.getElementById('inputBoxes').innerHTML = `
-                <div class="previous-analysis-row"><a href="?file=aaa" onclick="event.preventDefault(); loadAnalysis('aaa');">A</a></div>
-                <div class="previous-analysis-row"><a href="?file=bbb" onclick="event.preventDefault(); loadAnalysis('bbb');">B</a></div>
+                <div class="previous-analysis-row"><a href="?file=aaa" data-action="load-analysis" data-md5="aaa">A</a></div>
+                <div class="previous-analysis-row"><a href="?file=bbb" data-action="load-analysis" data-md5="bbb">B</a></div>
             `;
             document.getElementById('inputBoxes').style.display = 'block';
             var rows = document.querySelectorAll('.previous-analysis-row');
@@ -4242,15 +4305,15 @@ class TestThemeAndMenu(unittest.TestCase):
             document.body.insertAdjacentHTML('beforeend', `
                 <div class="section" id="section-alert">
                     <table><tbody>
-                        <tr data-id="1" onclick="toggleRow(this, event)"><td>row1</td></tr>
+                        <tr data-id="1" data-action="toggle-row"><td>row1</td></tr>
                         <tr class="detail-row"><td>detail1</td></tr>
-                        <tr data-id="2" onclick="toggleRow(this, event)"><td>row2</td></tr>
+                        <tr data-id="2" data-action="toggle-row"><td>row2</td></tr>
                         <tr class="detail-row"><td>detail2</td></tr>
                     </tbody></table>
                 </div>
                 <div class="section section-hidden" id="section-all">
                     <table><tbody>
-                        <tr data-id="99" onclick="toggleRow(this, event)"><td>hidden-row</td></tr>
+                        <tr data-id="99" data-action="toggle-row"><td>hidden-row</td></tr>
                     </tbody></table>
                 </div>
             `);
@@ -4282,9 +4345,9 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             document.getElementById('sections').innerHTML = `
                 <div class="section-content"><table><tbody>
-                    <tr data-id="1" onclick="toggleRow(this, event)"><td>rule1</td></tr>
+                    <tr data-id="1" data-action="toggle-row"><td>rule1</td></tr>
                     <tr class="detail-row"><td>detail1</td></tr>
-                    <tr data-id="2" onclick="toggleRow(this, event)"><td>rule2</td></tr>
+                    <tr data-id="2" data-action="toggle-row"><td>rule2</td></tr>
                     <tr class="detail-row"><td>detail2</td></tr>
                 </tbody></table></div>
             `;
@@ -4315,7 +4378,7 @@ class TestThemeAndMenu(unittest.TestCase):
             document.getElementById('inputBoxes').style.display = 'none';
             document.getElementById('sections').innerHTML = `
                 <div class="section-content"><table><tbody>
-                    <tr data-id="1" onclick="toggleRow(this, event)"><td>rule1</td></tr>
+                    <tr data-id="1" data-action="toggle-row"><td>rule1</td></tr>
                     <tr class="detail-row"><td>detail1</td></tr>
                 </tbody></table></div>
             `;
@@ -4784,7 +4847,7 @@ class TestThemeAndMenu(unittest.TestCase):
             document.getElementById('inputBoxes').style.display = 'none';
             var sankeyPanel = document.getElementById('sankeyPanel');
             sankeyPanel.style.display = 'block';
-            sankeyPanel.innerHTML = '<div class="section-toggle-bar" onclick="toggleDiagram()">\\u25b8 Sankey Diagram</div>';
+            sankeyPanel.innerHTML = '<div class="section-toggle-bar" data-action="toggle-diagram">\\u25b8 Sankey Diagram</div>';
             window.__diagramToggled = 0;
             window.toggleDiagram = function() { window.__diagramToggled++; };
             document.dispatchEvent(new KeyboardEvent('keydown', {key: 's', bubbles: true, cancelable: true}));
@@ -4810,7 +4873,7 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             document.getElementById('inputBoxes').style.display = 'none';
             var aggContainer = document.getElementById('aggregations');
-            aggContainer.innerHTML = '<div class="agg-panel"><div class="section-toggle-bar" onclick="toggleAggregations()">\\u25b8 Aggregation Tables</div></div>';
+            aggContainer.innerHTML = '<div class="agg-panel"><div class="section-toggle-bar" data-action="toggle-aggregations">\\u25b8 Aggregation Tables</div></div>';
             window.__aggToggled = 0;
             window.toggleAggregations = function() { window.__aggToggled++; };
             document.dispatchEvent(new KeyboardEvent('keydown', {key: 'a', bubbles: true, cancelable: true}));
@@ -5005,8 +5068,8 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             document.getElementById('inputBoxes').style.display = 'none';
             var grid = document.getElementById('statsGrid');
-            grid.innerHTML = '<div class="stat-card tab-active" onclick="showTab(\\'section-all\\', this)"><div class="stat-label">All Events</div></div>' +
-                              '<div class="stat-card" onclick="showTab(\\'section-dns\\', this)"><div class="stat-label">DNS</div></div>';
+            grid.innerHTML = '<div class="stat-card tab-active" data-action="show-tab" data-section="section-all"><div class="stat-label">All Events</div></div>' +
+                              '<div class="stat-card" data-action="show-tab" data-section="section-dns"><div class="stat-label">DNS</div></div>';
             window.__calls = [];
             window.showTab = function(id) { window.__calls.push(id); };
             document.dispatchEvent(new KeyboardEvent('keydown', {key: 'd', bubbles: true, cancelable: true}));
@@ -5042,9 +5105,9 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             document.getElementById('inputBoxes').style.display = 'none';
             var grid = document.getElementById('statsGrid');
-            grid.innerHTML = '<div class="stat-card" onclick="showTab(\\'section-alert\\', this)"><div class="stat-label">Network Alerts</div></div>' +
-                              '<div class="stat-card" onclick="showTab(\\'section-filealerts\\', this)"><div class="stat-label">File Alerts</div></div>' +
-                              '<div class="stat-card tab-active" onclick="showTab(\\'section-dns\\', this)"><div class="stat-label">DNS</div></div>';
+            grid.innerHTML = '<div class="stat-card" data-action="show-tab" data-section="section-alert"><div class="stat-label">Network Alerts</div></div>' +
+                              '<div class="stat-card" data-action="show-tab" data-section="section-filealerts"><div class="stat-label">File Alerts</div></div>' +
+                              '<div class="stat-card tab-active" data-action="show-tab" data-section="section-dns"><div class="stat-label">DNS</div></div>';
             document.dispatchEvent(new KeyboardEvent('keydown', {key: 'a', bubbles: true, cancelable: true}));
             var input = document.getElementById('autocompleteInput');
             'lerts'.split('').forEach(function(ch) {
@@ -5592,8 +5655,8 @@ class TestAggregationTables(unittest.TestCase):
         """Each aggregation table header must include a close button to hide the table."""
         self.assertIn('agg-close', CSS_CONTENT,
                       'agg-close CSS class must exist')
-        self.assertIn("hideAggregationTable('${sectionId}'", JS_CONTENT,
-                      'Aggregation header must call hideAggregationTable')
+        self.assertIn('data-action="hide-agg-table"', JS_CONTENT,
+                      'Aggregation header must be wired to the hide-agg-table action')
 
     def test_hide_aggregation_table_function_exists(self):
         """JavaScript must define hideAggregationTable to track hidden aggregation tables."""
@@ -5670,7 +5733,7 @@ class TestFiltering(unittest.TestCase):
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
         self.assertIn('id="checkForUpdates"', about_block,
                       'Check-for-updates checkbox must live in the About modal')
-        self.assertIn('onchange="handleCheckForUpdatesChange(this)"', about_block,
+        self.assertIn("getElementById('checkForUpdates').addEventListener('change'", JS_CONTENT,
                       'Checkbox must apply immediately on change, matching the sync-with-OhMyDebn toggle - no Save-button trap')
         # Styled as a slider toggle (reusing .theme-switch, the same
         # component the OhMyDebn sync toggle uses), not a plain checkbox -
@@ -5753,7 +5816,7 @@ class TestFiltering(unittest.TestCase):
 
     def test_check_now_button_exists_in_about_modal(self):
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
-        self.assertIn('onclick="checkForAppUpdateNow()"', about_block,
+        self.assertIn('data-action="check-app-update-now"', about_block,
                       'About must have a manual Check Now button alongside the auto-check checkbox')
 
     def test_check_for_app_update_now_bypasses_opt_in_gate(self):
@@ -5886,15 +5949,15 @@ class TestFiltering(unittest.TestCase):
                           'update both together whenever a menu item changes')
 
     def test_gear_menu_has_about_item_in_both_copies(self):
-        self.assertIn('showAboutModal()', HTML_CONTENT,
+        self.assertIn('data-action="menu-about"', HTML_CONTENT,
                       'the static gear menu in socrates.html must have an About item')
         gear_menu_match = re.search(r'function renderGearMenu\(\) \{\s*return `(.*?)`;\s*\}', JS_CONTENT, re.DOTALL)
         self.assertIsNotNone(gear_menu_match, 'renderGearMenu must exist')
-        self.assertIn('showAboutModal()', gear_menu_match.group(1),
+        self.assertIn('data-action="menu-about"', gear_menu_match.group(1),
                       'renderGearMenu() output must also have an About item')
 
     def test_about_modal_skeleton_has_github_link(self):
-        self.assertIn('id="aboutModal" onclick="handleModalBackdropClick(event, closeAboutModal)"', HTML_CONTENT,
+        self.assertIn('id="aboutModal" data-action="backdrop" data-arg="close-about-modal"', HTML_CONTENT,
                       'aboutModal must exist with a backdrop-click handler wired up')
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
         self.assertIn('href="https://github.com/dougburks/so-crates"', about_block,
@@ -5958,7 +6021,7 @@ class TestFiltering(unittest.TestCase):
         releases page, unchanged - see test_footer_update_badge_skeleton_in_html)."""
         footer = HTML_CONTENT.split('class="footer"')[1]
         version_link = footer.split('id="footerVersionLink"')[0].split('<a ')[-1]
-        self.assertIn('onclick="showAboutModal(); return false;"', version_link)
+        self.assertIn('data-action="show-about-modal"', version_link)
         self.assertNotIn('href="https://github.com', version_link,
                          'the footer version link must no longer navigate directly to GitHub')
 
@@ -6040,7 +6103,7 @@ class TestFiltering(unittest.TestCase):
             showWelcomeUI();
             window.__jsdom_result = { teaserHtml: document.getElementById('footerCenterTeaser').innerHTML };
         ''')
-        self.assertIn('showSecurityOnionModal()', result['teaserHtml'])
+        self.assertIn('data-action="show-security-onion-modal"', result['teaserHtml'])
         self.assertIn('>Need more advanced functionality?</a>', result['teaserHtml'],
                       'the entire phrase must be the link, not just part of it')
         self.assertNotIn('SO-CRATES provides basic analysis', result['teaserHtml'],
@@ -6060,7 +6123,7 @@ class TestFiltering(unittest.TestCase):
             showAnalysisUI();
             window.__jsdom_result = { teaserHtml: document.getElementById('footerCenterTeaser').innerHTML };
         ''')
-        self.assertIn('showSecurityOnionModal()', result['teaserHtml'])
+        self.assertIn('data-action="show-security-onion-modal"', result['teaserHtml'])
         self.assertIn('>Need more advanced functionality?</a>', result['teaserHtml'],
                       'the entire phrase must be the link, not just part of it')
         self.assertNotIn('showHelpModal', result['teaserHtml'],
@@ -6164,7 +6227,7 @@ class TestFiltering(unittest.TestCase):
     def test_has_instructions_in_analysis(self):
         """Analysis instructions must mention filtering options and hexdump."""
         self.assertIn('Start by reviewing all alerts', JS_CONTENT)
-        self.assertIn('Filter using the search bar, sankey diagram, or aggregation tables', JS_CONTENT)
+        self.assertIn('Filter using the search bar, Sankey Diagram, or Aggregation Tables', JS_CONTENT)
         self.assertIn('ASCII transcript and hexdump and optionally download', JS_CONTENT)
         self.assertNotIn('ASCII transcript and optionally download', JS_CONTENT)
 
@@ -6321,37 +6384,88 @@ class TestAdvancedToggle(unittest.TestCase):
         self.assertIn("toggleAggregations()", JS_CONTENT)
 
 
-class TestFilterOnclickQuoting(unittest.TestCase):
-    """Regression tests for JSON.stringify double-quote collision in onclick attributes.
+class TestFilterChipDataAttrs(unittest.TestCase):
+    """Successor to the old TestFilterOnclickQuoting suite. Filter chips
+    used to embed their column/value arguments inside inline onclick
+    handler strings (with escapeJsString guarding two nested boundaries);
+    they now carry them in escapeHtml'd data-* attributes read back via
+    dataset by the delegated 'clear-filter'/'clear-filter-value' actions
+    (no inline handlers - CSP script-src without 'unsafe-inline'). The
+    underlying injection-safety property is unchanged and still tested
+    here: attacker-controlled column names/values must not break out of
+    the attribute, and the dataset round-trip must reproduce the exact
+    original string so the right filter gets cleared."""
 
-    JSON.stringify() produces double-quoted strings like "Source IP", which break
-    when embedded in double-quoted onclick attributes. All onclick handlers must
-    use single-quoted string arguments with escaped internal single quotes instead.
-    """
+    def test_filter_chips_use_data_attributes_not_inline_handlers(self):
+        chips = re.findall(r'<span class="filter-chip-remove"[^>]*>', JS_CONTENT)
+        self.assertTrue(chips, 'filter-chip-remove spans must exist in buildFilterBarHtml')
+        for chip in chips:
+            self.assertNotIn('onclick', chip,
+                             f'filter chips must not use inline onclick handlers: {chip}')
+            self.assertIn('data-action=', chip,
+                          f'filter chips must be wired via data-action: {chip}')
 
-    def test_no_json_stringify_in_clear_filter_onclick(self):
-        """clearFilter onclick must not use JSON.stringify (causes double-quote collision)"""
-        clear_filter_matches = re.findall(r'onclick="clearFilter\([^"]*\)"', JS_CONTENT)
-        for match in clear_filter_matches:
-            self.assertNotIn('JSON.stringify', match,
-                f'clearFilter onclick uses JSON.stringify which breaks in double-quoted onclick: {match[:80]}')
+    def test_malicious_column_name_cannot_break_out_of_chip_attribute(self):
+        """A hostile column name (e.g. a crafted log field) must render as
+        inert text - no element breakout - and still round-trip exactly
+        through the chip's data-col attribute."""
+        from tests.jsdom_helper import js_statements
+        payload = '"><img src=x onerror=alert(1)>'
+        result = js_statements(f'''
+            currentFilters[{json.dumps(payload)}] = 'v';
+            var div = document.createElement('div');
+            div.innerHTML = buildFilterBarHtml();
+            document.body.appendChild(div);
+            var chip = div.querySelector('.filter-chip-remove[data-action="clear-filter"]');
+            window.__jsdom_result = {{
+                imgCount: div.querySelectorAll('img').length,
+                roundTrip: chip ? chip.dataset.col : null,
+            }};
+        ''')
+        self.assertEqual(result['imgCount'], 0,
+                         'a double-quote payload must not break out of the data-col attribute')
+        self.assertEqual(result['roundTrip'], payload,
+                         'the exact column name must survive the attribute round-trip')
 
-    def test_clear_filter_uses_single_quoted_args(self):
-        """clearFilter onclick should use single-quoted string argument"""
-        self.assertRegex(JS_CONTENT, r"onclick=\"clearFilter\('\$\{[^}]+\}'\)\"",
-            'clearFilter onclick should use single-quoted template expression')
+    def test_filter_value_with_quotes_round_trips_through_dataset(self):
+        """Single quotes, double quotes and backslashes (all of which the
+        old escapeJsString had to handle for the JS-string boundary) must
+        survive the data-attribute round-trip byte-for-byte."""
+        from tests.jsdom_helper import js_statements
+        payload = 'a"b\'c\\d ${weird}'
+        result = js_statements(f'''
+            currentFilters['Source IP'] = {{ include: [{json.dumps(payload)}], exclude: [] }};
+            var div = document.createElement('div');
+            div.innerHTML = buildFilterBarHtml();
+            var chip = div.querySelector('.filter-chip-remove[data-action="clear-filter-value"]');
+            window.__jsdom_result = {{
+                col: chip ? chip.dataset.col : null,
+                kind: chip ? chip.dataset.kind : null,
+                value: chip ? chip.dataset.value : null,
+            }};
+        ''')
+        self.assertEqual(result['col'], 'Source IP')
+        self.assertEqual(result['kind'], 'include')
+        self.assertEqual(result['value'], payload)
 
-    def test_agg_row_onclick_has_escaped_quotes(self):
-        """agg-row onclick handlers must escape single quotes in values via escapeJsString"""
-        self.assertIn('escapeJsString', JS_CONTENT,
-            'onclick handlers must use escapeJsString for JS-context escaping')
-
-    def test_no_bare_json_stringify_in_onclick_templates(self):
-        """No template literal should embed JSON.stringify directly into an onclick attribute"""
-        lines = JS_CONTENT.split('\n')
-        for i, line in enumerate(lines):
-            if 'onclick=' in line and 'JSON.stringify' in line:
-                self.fail(f'Line {i+1} has JSON.stringify inside onclick template: {line.strip()}')
+    def test_clicking_chip_remove_dispatches_exact_original_value(self):
+        """End to end through the delegated dispatcher: clicking a chip's
+        remove control must call clearFilterValue with the exact original
+        column/kind/value, even when the value contains quotes."""
+        from tests.jsdom_helper import js_statements
+        payload = 'It\'s a "test" value'
+        result = js_statements(f'''
+            var calls = [];
+            window.clearFilterValue = function(col, kind, value) {{ calls.push([col, kind, value]); }};
+            currentFilters['Alert'] = {{ include: [], exclude: [{json.dumps(payload)}] }};
+            var div = document.createElement('div');
+            div.innerHTML = buildFilterBarHtml();
+            document.body.appendChild(div);
+            div.querySelector('.filter-chip-remove[data-action="clear-filter-value"]').click();
+            window.__jsdom_result = calls;
+        ''')
+        self.assertEqual(result, [['Alert', 'exclude', payload]],
+                         'the dispatcher must pass the exact original value back to clearFilterValue')
 
 
 class TestAdvancedModeFilterBar(unittest.TestCase):
@@ -6962,14 +7076,17 @@ class TestPivotFilterLogic(unittest.TestCase):
     def test_filter_bar_chip_remove_calls_clearFilterValue(self):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
+            var calls = [];
+            window.clearFilterValue = function(col, kind, value) { calls.push([col, kind, value]); };
             currentFilters = { 'Source IP': { include: ['1.1.1.1'], exclude: [] } };
             currentSearch = [];
-            var html = buildFilterBarHtml();
-            window.__jsdom_result = {
-                hasCall: html.indexOf("clearFilterValue('Source IP', 'include', '1.1.1.1')") >= 0
-            };
+            var div = document.createElement('div');
+            div.innerHTML = buildFilterBarHtml();
+            document.body.appendChild(div);
+            div.querySelector('.filter-chip-remove[data-action="clear-filter-value"]').click();
+            window.__jsdom_result = { calls: calls };
         ''')
-        self.assertTrue(result['hasCall'])
+        self.assertEqual(result['calls'], [['Source IP', 'include', '1.1.1.1']])
 
     def test_filter_bar_old_string_shape_still_renders_via_clearFilter(self):
         """REGRESSION: the pre-existing plain-string shape's own chip
@@ -6978,16 +7095,19 @@ class TestPivotFilterLogic(unittest.TestCase):
         branch added alongside it."""
         from tests.jsdom_helper import js_statements
         result = js_statements('''
+            var calls = [];
+            window.clearFilter = function(col) { calls.push(col); };
             currentFilters = { 'Protocol': 'TCP' };
             currentSearch = [];
-            var html = buildFilterBarHtml();
-            window.__jsdom_result = {
-                hasChip: html.indexOf('Protocol: TCP') >= 0,
-                hasCall: html.indexOf("clearFilter('Protocol')") >= 0
-            };
+            var div = document.createElement('div');
+            div.innerHTML = buildFilterBarHtml();
+            document.body.appendChild(div);
+            var hasChip = div.innerHTML.indexOf('Protocol: TCP') >= 0;
+            div.querySelector('.filter-chip-remove[data-action="clear-filter"]').click();
+            window.__jsdom_result = { hasChip: hasChip, calls: calls };
         ''')
         self.assertTrue(result['hasChip'])
-        self.assertTrue(result['hasCall'])
+        self.assertEqual(result['calls'], ['Protocol'])
 
 
 class TestPivotDataAttrs(unittest.TestCase):
@@ -8869,7 +8989,7 @@ class TestAggregationKeyboardNav(unittest.TestCase):
         """activateKeyboardSelection()'s generic verticalNavSelection.click()
         fallback (used for toggle bars/data rows too - see its own comment)
         needs no change for .agg-page-btn: it's a plain <button
-        onclick="changeAggPage(...)">, so the fallback already fires it."""
+        data-action="change-agg-page">, so the fallback already fires it."""
         from tests.jsdom_helper import js_statements
         html = self._agg_table_html('Source IP', 2, with_pagination=True, page=1, total_pages=3)
         result = js_statements(self._bootstrap_js(html) + '''
@@ -8894,7 +9014,7 @@ class TestAggregationKeyboardNav(unittest.TestCase):
 
         Uses the real _renderOneAggTableHtml (not this class's own
         hand-rolled _agg_table_html helper) - this test needs the actual
-        onclick="changeAggPage(...)" attribute that function bakes in,
+        change-agg-page data-action wiring that function bakes in,
         which _agg_table_html's fixture markup deliberately doesn't bother
         with since every other test here only needs plain, inert buttons to
         exercise pure navigation logic."""
@@ -9239,7 +9359,7 @@ class TestCustomLookupSites(unittest.TestCase):
             await new Promise(r => setTimeout(r, 50));
             saveCustomLookupSite(null, 'My SIEM', 'https://siem.example.com/search?q={value}');
             showSettingsModal();
-            document.querySelector('#customLookupSitesList button[onclick^="startEditCustomLookupSite"]').click();
+            document.querySelector('#customLookupSitesList button[data-action="edit-custom-lookup-site"]').click();
             var prefilledName = document.getElementById('customLookupNameInput').value;
             var saveBtnText = document.getElementById('customLookupSaveBtn').textContent;
             document.getElementById('customLookupUrlInput').value = 'https://siem2.example.com/search?q={value}';
@@ -9260,7 +9380,7 @@ class TestCustomLookupSites(unittest.TestCase):
             await new Promise(r => setTimeout(r, 50));
             saveCustomLookupSite(null, 'My SIEM', 'https://siem.example.com/search?q={value}');
             showSettingsModal();
-            document.querySelector('#customLookupSitesList button[onclick^="startEditCustomLookupSite"]').click();
+            document.querySelector('#customLookupSitesList button[data-action="edit-custom-lookup-site"]').click();
             document.getElementById('customLookupUrlInput').value = 'https://should-not-save.example.com/{value}';
             document.getElementById('customLookupCancelBtn').click();
             window.__jsdom_result = {
@@ -9279,7 +9399,7 @@ class TestCustomLookupSites(unittest.TestCase):
             await new Promise(r => setTimeout(r, 50));
             saveCustomLookupSite(null, 'My SIEM', 'https://siem.example.com/search?q={value}');
             showSettingsModal();
-            document.querySelector('#customLookupSitesList button[onclick^="handleDeleteCustomLookupSite"]').click();
+            document.querySelector('#customLookupSitesList button[data-action="delete-custom-lookup-site"]').click();
             window.__jsdom_result = {
                 sites: getCustomLookupSites(),
                 html: document.getElementById('customLookupSitesList').innerHTML
@@ -9495,7 +9615,7 @@ class TestErrorModal(unittest.TestCase):
         self.assertIn('id="errorModal"', HTML_CONTENT)
 
     def test_error_modal_has_close_button(self):
-        self.assertIn("onclick=\"closeErrorModal()\"", HTML_CONTENT)
+        self.assertIn('data-action="close-error-modal"', HTML_CONTENT)
 
     def test_showError_function_exists(self):
         self.assertIn('function showError(', JS_CONTENT)
@@ -9542,56 +9662,68 @@ class TestEscapeHtmlCompleteness(unittest.TestCase):
                       'escapeHtml must escape single quotes for defense-in-depth')
 
 
-class TestEscapeJsStringCompleteness(unittest.TestCase):
-    """REGRESSION: escapeJsString is always used to embed a value inside a
-    single-quoted JS string literal within a double-quoted HTML onclick="..."
-    attribute (e.g. onclick="fn('${escapeJsString(x)}')"). Escaping only
-    backslash/single-quote protects the JS-string boundary but leaves a raw
-    '"' free to break out of the surrounding HTML attribute -- discovered via
-    a jsdom exploit test that created a live <img> element through exactly
-    this gap. escapeJsString must also HTML-escape so both boundaries hold."""
+class TestEscapeJsStringRemoved(unittest.TestCase):
+    """escapeJsString existed solely to embed values inside inline
+    onclick="fn('...')" handler attributes (two nested boundaries: the JS
+    string and the HTML attribute). With every inline handler in generated
+    HTML replaced by data-action/data-* wiring (CSP: script-src without
+    'unsafe-inline'), the function has zero call sites and is deleted -
+    a lone definition would invite new inline handlers back in. The
+    injection-safety property it enforced now lives in the data-*
+    attributes and is covered behaviorally by TestFilterChipDataAttrs and
+    TestGeneratedDataAttrEscaping."""
 
-    def test_escapeJsString_neutralizes_double_quote_breakout(self):
+    def test_escapeJsString_function_removed(self):
+        self.assertNotIn('function escapeJsString', JS_CONTENT,
+                         'escapeJsString must stay deleted - generated HTML carries no inline handlers to escape for')
+
+    def test_no_escapeJsString_call_sites(self):
+        self.assertNotIn('escapeJsString(', JS_CONTENT,
+                         'no code may call escapeJsString - values belong in escapeHtml\'d data-* attributes')
+
+
+class TestGeneratedDataAttrEscaping(unittest.TestCase):
+    """The attribute-breakout exploit the old escapeJsString jsdom test
+    demonstrated (a '">' payload materializing a live <img>) must stay
+    impossible for the data-* attributes that replaced inline handlers."""
+
+    def test_row_note_attribute_neutralizes_double_quote_breakout(self):
         from tests.jsdom_helper import js_statements
         payload = '"><img src=x onerror=alert(1)>'
         result = js_statements(f'''
-            var escaped = escapeJsString({json.dumps(payload)});
-            var div = document.createElement('div');
-            div.innerHTML = '<button onclick="fn(\\'' + escaped + '\\')">x</button>';
-            document.body.appendChild(div);
+            var table = document.createElement('table');
+            var tr = document.createElement('tr');
+            table.appendChild(tr);
+            tr.innerHTML = rowNoteIconHtml('events', 7, {json.dumps(payload)});
+            document.body.appendChild(table);
+            var icon = table.querySelector('.row-note-icon');
             window.__jsdom_result = {{
-                imgCount: div.querySelectorAll('img').length,
-                buttonCount: div.querySelectorAll('button').length,
+                imgCount: table.querySelectorAll('img').length,
+                roundTrip: icon ? icon.dataset.note : null,
             }};
         ''')
-        self.assertEqual(result['imgCount'], 0, 'a double-quote must not break out of the onclick attribute')
-        self.assertEqual(result['buttonCount'], 1, 'the button element itself must survive intact')
+        self.assertEqual(result['imgCount'], 0,
+                         'a double-quote payload must not break out of the data-note attribute')
+        self.assertEqual(result['roundTrip'], payload,
+                         'the exact note text must survive the attribute round-trip')
 
-    def test_escapeJsString_still_escapes_backslash_and_single_quote(self):
+    def test_row_note_newlines_survive_attribute_round_trip(self):
+        """The old escapeJsString had to escape \\n/\\r for the JS-string
+        boundary; a data attribute needs no such escaping, but the
+        round-trip must still preserve them exactly (multi-line notes)."""
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            window.__jsdom_result = {
-                backslash: escapeJsString('a\\\\b'),
-                quote: escapeJsString("a'b"),
-            };
+        payload = 'line one\nline two\r\nline three'
+        result = js_statements(f'''
+            var table = document.createElement('table');
+            var tr = document.createElement('tr');
+            table.appendChild(tr);
+            tr.innerHTML = rowNoteIconHtml('events', 8, {json.dumps(payload)});
+            var icon = table.querySelector('.row-note-icon');
+            window.__jsdom_result = icon ? icon.dataset.note : null;
         ''')
-        self.assertEqual(result['backslash'], 'a\\\\b')
-        self.assertEqual(result['quote'], "a\\&#39;b")
-
-    def test_escapeJsString_escapes_newlines_and_carriage_returns(self):
-        from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            window.__jsdom_result = {
-                newline: escapeJsString('a\\nb'),
-                cr: escapeJsString('a\\rb'),
-                crlf: escapeJsString('a\\r\\nb'),
-            };
-        ''')
-        self.assertNotIn('\n', result['newline'], 'newline must be escaped')
-        self.assertNotIn('\r', result['cr'], 'carriage return must be escaped')
-        self.assertNotIn('\r\n', result['crlf'], 'CRLF must be escaped')
-        self.assertIn('\\n', result['newline'], 'newline must appear as escaped \\\\n')
-        self.assertIn('\\r', result['cr'], 'carriage return must appear as escaped \\\\r')
+        # The HTML parser normalizes \r\n and \r to \n inside attribute
+        # values (HTML5 preprocessing) - semantically the same note text.
+        self.assertEqual(result, 'line one\nline two\nline three')
 
 
 class TestInlineHtmlEscaping(unittest.TestCase):
@@ -9602,8 +9734,8 @@ class TestInlineHtmlEscaping(unittest.TestCase):
         show_welcome = JS_CONTENT.split('async function showWelcome')[1].split('async function')[0]
         self.assertIn('href="?file=${escapeHtml(a.md5)}"', show_welcome,
                       'previous analysis md5 must be escaped in query link')
-        self.assertIn("loadAnalysis('${escapeJsString(a.md5)}')", show_welcome,
-                      'previous analysis md5 must be escaped in inline onclick handler')
+        self.assertIn('data-action="load-analysis" data-md5="${escapeHtml(a.md5)}"', show_welcome,
+                      'previous analysis md5 must be escaped in the load-analysis data attribute')
 
     def test_previous_analysis_md5_escaped_in_data_attrs(self):
         """The notes button is the only per-row action left on the welcome
@@ -9874,11 +10006,11 @@ class TestAnalysisNotes(unittest.TestCase):
     header icon, edited in a modal, saved via POST /api/analysis-notes."""
 
     def test_notes_modal_skeleton_exists(self):
-        self.assertIn('id="notesModal" onclick="handleModalBackdropClick(event, closeNotesModal)"', HTML_CONTENT,
+        self.assertIn('id="notesModal" data-action="backdrop" data-arg="close-notes-modal"', HTML_CONTENT,
                       'notesModal must exist with a backdrop-click handler wired up')
         self.assertIn('id="analysisNotesInput"', HTML_CONTENT,
                       'notesModal must have a textarea for entering notes')
-        self.assertIn('id="notesSaveBtn" onclick="saveAnalysisNotes()"', HTML_CONTENT,
+        self.assertIn('id="notesSaveBtn" data-action="save-notes"', HTML_CONTENT,
                       'notesModal must have a Save button')
         self.assertIn('id="notesCountHint"', HTML_CONTENT,
                       'notesModal must show a character-count hint')
@@ -10116,7 +10248,7 @@ class TestHeaderReanalyzeIcon(unittest.TestCase):
             currentFileName = 'sample.pcap';
             window.__jsdom_result = { html: reanalyzeIconHtml() };
         ''')
-        self.assertIn("onclick=\"openReanalyzeModal(currentMd5, currentFileName)\"", result['html'])
+        self.assertIn('data-action="open-reanalyze-modal"', result['html'])
         self.assertIn('title="Re-analyze"', result['html'])
 
     def test_reanalyze_icon_renders_in_header_after_loading_an_analysis(self):
@@ -10126,7 +10258,7 @@ class TestHeaderReanalyzeIcon(unittest.TestCase):
             window.__jsdom_result = {
                 metaHtml: meta.innerHTML,
                 notesIndex: meta.innerHTML.indexOf('id="appHeaderNotesIcon"'),
-                reanalyzeIndex: meta.innerHTML.indexOf('openReanalyzeModal(currentMd5, currentFileName)')
+                reanalyzeIndex: meta.innerHTML.indexOf('data-action="open-reanalyze-modal"')
             };
         ''')
         self.assertNotEqual(result['reanalyzeIndex'], -1, 'the reanalyze icon must render in the header after loading an analysis')
@@ -10136,7 +10268,7 @@ class TestHeaderReanalyzeIcon(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements(self._load(md5='b' * 32, file_name='evidence.pcap') + '''
             var icon = Array.from(document.querySelectorAll('#appHeaderMeta span')).find(function(s) {
-                return s.getAttribute('onclick') === 'openReanalyzeModal(currentMd5, currentFileName)';
+                return s.dataset.action === 'open-reanalyze-modal';
             });
             icon.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
             await new Promise(function(r) { setTimeout(r, 10); });
@@ -10166,7 +10298,7 @@ class TestHeaderReanalyzeIcon(unittest.TestCase):
             currentFileName = 'sample.pcap';
             window.__jsdom_result = { html: deleteIconHtml() };
         ''')
-        self.assertIn("onclick=\"openDeleteAnalysis(currentMd5, currentFileName)\"", result['html'])
+        self.assertIn('data-action="open-delete-analysis"', result['html'])
         self.assertIn('title="Delete"', result['html'])
         self.assertIn('class="app-header-delete-icon"', result['html'],
                       'must carry the themed danger-red class, same as .previous-analysis-delete on the main screen')
@@ -10187,8 +10319,8 @@ class TestHeaderReanalyzeIcon(unittest.TestCase):
         result = js_statements(self._load() + '''
             var meta = document.getElementById('appHeaderMeta');
             window.__jsdom_result = {
-                reanalyzeIndex: meta.innerHTML.indexOf('openReanalyzeModal(currentMd5, currentFileName)'),
-                deleteIndex: meta.innerHTML.indexOf('openDeleteAnalysis(currentMd5, currentFileName)')
+                reanalyzeIndex: meta.innerHTML.indexOf('data-action="open-reanalyze-modal"'),
+                deleteIndex: meta.innerHTML.indexOf('data-action="open-delete-analysis"')
             };
         ''')
         self.assertNotEqual(result['deleteIndex'], -1, 'the delete icon must render in the header after loading an analysis')
@@ -10198,7 +10330,7 @@ class TestHeaderReanalyzeIcon(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements(self._load(md5='b' * 32, file_name='evidence.pcap') + '''
             var icon = Array.from(document.querySelectorAll('#appHeaderMeta span')).find(function(s) {
-                return s.getAttribute('onclick') === 'openDeleteAnalysis(currentMd5, currentFileName)';
+                return s.dataset.action === 'open-delete-analysis';
             });
             icon.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
             await new Promise(function(r) { setTimeout(r, 10); });
@@ -10601,7 +10733,7 @@ class TestRowNoteIconState(unittest.TestCase):
 
     def test_note_preview_truncated_to_200_chars(self):
         """Only the title= hover preview is capped at 200 chars - the
-        onclick argument must still carry the full note so the editor
+        data-note attribute must still carry the full note so the editor
         opens pre-populated with the complete text, not a truncated copy."""
         from tests.jsdom_helper import js_statements
         long_note = 'x' * 300
@@ -10610,7 +10742,8 @@ class TestRowNoteIconState(unittest.TestCase):
             window.__jsdom_result = { html: rowNoteIconHtml('events', 1, note) };
         ''')
         self.assertIn('title="' + 'x' * 200 + '"', result['html'])
-        self.assertIn('x' * 300, result['html'], 'the onclick argument must carry the full, untruncated note')
+        self.assertIn('data-note="' + 'x' * 300 + '"', result['html'],
+                      'the data-note attribute must carry the full, untruncated note')
 
 
 class TestRowNoteDetailPanel(unittest.TestCase):
@@ -10650,12 +10783,12 @@ class TestRowNoteDetailPanel(unittest.TestCase):
         self.assertIn('>Edit<', result['html'])
         self.assertNotIn('+ Add Note', result['html'])
 
-    def test_onclick_opens_editor_with_correct_args(self):
+    def test_edit_link_carries_correct_editor_args(self):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             window.__jsdom_result = { html: rowNoteDetailHtml('sigma_alerts', 42, null) };
         ''')
-        self.assertIn("openRowNoteEditor('sigma_alerts', '42', '')", result['html'])
+        self.assertIn('data-action="open-row-note-editor" data-table="sigma_alerts" data-row-id="42" data-note=""', result['html'])
 
     def test_formatEvent_includes_note_row(self):
         """formatEvent() backs buildRowForEvent/buildAllEventRow/
@@ -10666,7 +10799,7 @@ class TestRowNoteDetailPanel(unittest.TestCase):
             window.__jsdom_result = { html: formatEvent(''' + json.dumps(event) + ''') };
         ''')
         self.assertIn('+ Add Note', result['html'])
-        self.assertIn("openRowNoteEditor('events', '8', '')", result['html'])
+        self.assertIn('data-action="open-row-note-editor" data-table="events" data-row-id="8" data-note=""', result['html'])
 
     def test_formatSigmaAlertDetail_includes_note_row(self):
         from tests.jsdom_helper import js_statements
@@ -10679,7 +10812,7 @@ class TestRowNoteDetailPanel(unittest.TestCase):
             window.__jsdom_result = { html: formatSigmaAlertDetail(''' + json.dumps(alert) + ''') };
         ''')
         self.assertIn('+ Add Note', result['html'])
-        self.assertIn("openRowNoteEditor('sigma_alerts', '11', '')", result['html'])
+        self.assertIn('data-action="open-row-note-editor" data-table="sigma_alerts" data-row-id="11" data-note=""', result['html'])
 
     def test_formatSigmaAlertDetail_nested_matched_event_has_no_note_row(self):
         """The 'Matched Event' sub-section reuses formatLogEventDetail to
@@ -10707,7 +10840,7 @@ class TestRowNoteDetailPanel(unittest.TestCase):
             window.__jsdom_result = { html: buildLogEventRow(''' + json.dumps(evt) + ''', []) };
         ''')
         self.assertIn('+ Add Note', result['html'])
-        self.assertIn("openRowNoteEditor('events', '21', '')", result['html'])
+        self.assertIn('data-action="open-row-note-editor" data-table="events" data-row-id="21" data-note=""', result['html'])
 
 
 class TestRowNoteEditor(unittest.TestCase):
@@ -10975,6 +11108,48 @@ class TestDnsHeuristicsScoring(unittest.TestCase):
 
     def _dns_event(self, rrname, rrtype='A', src_ip='10.0.0.5', timestamp='2026-01-01T00:00:00'):
         return {'event_type': 'dns', 'timestamp': timestamp, 'src_ip': src_ip, 'dns': {'rrname': rrname, 'rrtype': rrtype}}
+
+    def test_wordy_hyphenated_label_is_not_flagged_as_high_entropy(self):
+        """REGRESSION: prod-streaming-video-msn-com.akamaized.net (a real
+        false positive) - a long hyphenated word-mashup label clears the
+        raw entropy threshold, but words carry ~30-40% vowels while
+        encoded tunneling payloads sit under 20%, so the subdomain check
+        requires both (mirroring the DGA check's vowel guard)."""
+        from tests.jsdom_helper import js_statements
+        events = [self._dns_event('prod-streaming-video-msn-com.example-cdn.example')]
+        result = js_statements('''
+            window.__jsdom_result = { items: computeDnsHeuristics(''' + json.dumps(events) + ''') };
+        ''')
+        reasons = [r for i in result['items'] for r in i['reasons']]
+        self.assertNotIn('High-entropy subdomain', reasons,
+                         'a hyphenated word-mashup label must not read as a tunneling payload')
+
+    def test_encoded_payload_label_still_flags_after_vowel_guard(self):
+        """The vowel guard must not blind the tunneling check to actual
+        encoded payloads: a base32-style label (low vowel ratio, high
+        entropy) still flags."""
+        from tests.jsdom_helper import js_statements
+        events = [self._dns_event('mzxw6ytb0i2gk3tp0jsw65df.exfil-parent.example')]
+        result = js_statements('''
+            window.__jsdom_result = { items: computeDnsHeuristics(''' + json.dumps(events) + ''') };
+        ''')
+        reasons = [r for i in result['items'] for r in i['reasons']]
+        self.assertIn('High-entropy subdomain', reasons)
+
+    def test_akamaized_and_vendor_suffixes_are_excluded(self):
+        """REGRESSION: akamaized.net (Akamai CDN) and vendor domains like
+        microsoft.com/google.com must be excluded before scoring."""
+        from tests.jsdom_helper import js_statements
+        events = [
+            self._dns_event('prod-streaming-video-msn-com.akamaized.net'),
+            self._dns_event('msedge.b.tlu.dl.delivery.mp.microsoft.com'),
+            self._dns_event('ogads-pa.clients6.google.com'),
+        ]
+        result = js_statements('''
+            window.__jsdom_result = { items: computeDnsHeuristics(''' + json.dumps(events) + ''') };
+        ''')
+        self.assertEqual(result['items'], [],
+                         'CDN and vendor telemetry domains must never be scored')
 
     def test_dnsRegistrableSuffix_basic_two_label(self):
         from tests.jsdom_helper import js_statements
@@ -12429,7 +12604,7 @@ class TestDnsHeuristicsTab(unittest.TestCase):
             await new Promise(function(r) { setTimeout(r, 50); });
 
             var dnsHeuristicsCard = Array.from(document.querySelectorAll('.stat-card')).find(function(c) {
-                return c.getAttribute('onclick') === "showTab('section-dns_heuristics', this)";
+                return c.dataset.section === 'section-dns_heuristics';
             });
             dnsHeuristicsCard.click();
             await new Promise(function(r) { setTimeout(r, 50); });
@@ -12600,7 +12775,7 @@ class TestDnsHeuristicsTab(unittest.TestCase):
             await refreshAnalysisData();
             await new Promise(function(r) { setTimeout(r, 50); });
             var dnsHeuristicsCard = Array.from(document.querySelectorAll('.stat-card')).find(function(c) {
-                return c.getAttribute('onclick') === "showTab('section-dns_heuristics', this)";
+                return c.dataset.section === 'section-dns_heuristics';
             });
             dnsHeuristicsCard.click();
             await new Promise(function(r) { setTimeout(r, 50); });
@@ -12729,7 +12904,7 @@ class TestDnsHeuristicsTab(unittest.TestCase):
         result = js_statements(self._refresh_stats_js({'dns': 1}, dns_events=events) + '''
             var grid = document.getElementById('statsGrid');
             var card = Array.from(grid.querySelectorAll('.stat-card')).find(function(c) {
-                return c.getAttribute('onclick') === "showTab('section-dns_heuristics', this)";
+                return c.dataset.section === 'section-dns_heuristics';
             });
             window.__jsdom_result = {
                 found: !!card,
@@ -12744,11 +12919,172 @@ class TestDnsHeuristicsTab(unittest.TestCase):
         result = js_statements(self._refresh_stats_js({'http': 10}) + '''
             var grid = document.getElementById('statsGrid');
             var card = Array.from(grid.querySelectorAll('.stat-card')).find(function(c) {
-                return c.getAttribute('onclick') === "showTab('section-dns_heuristics', this)";
+                return c.dataset.section === 'section-dns_heuristics';
             });
             window.__jsdom_result = { found: !!card };
         ''')
         self.assertFalse(result['found'], 'the card must not show when the analysis has no DNS events at all')
+
+    def test_stale_count_from_previous_analysis_never_renders_a_card(self):
+        """REGRESSION: viewing analysis A (with flagged domains) and then
+        switching to analysis B (with none) used to leave A's nonzero
+        flagged-count rendering a DNS Heuristics card on B - whose tab then
+        showed 'No suspicious DNS activity detected'. The count is now
+        tagged with the analysis it was computed for, and buildStats()
+        renders 0 (no card) whenever the tag doesn't match currentMd5.
+
+        (State is driven purely through functions/DOM: socrates.js's
+        top-level `let` variables are invisible to test-scope eval.)"""
+        from tests.jsdom_helper import js_statements
+        flagged = [{'event_type': 'dns', 'timestamp': '2026-01-01T00:00:00', 'src_ip': '10.0.0.5',
+                    'dns': {'rrname': '08kcbghk807qtl9.top', 'rrtype': 'A'}}]
+        result = js_statements(self._refresh_stats_js({'dns': 1}, dns_events=flagged) + '''
+            var findCard = function() {
+                return Array.from(document.querySelectorAll('#statsGrid .stat-card')).find(function(c) {
+                    return c.dataset.section === 'section-dns_heuristics';
+                });
+            };
+            var cardOnA = !!findCard();
+            // Switch to a different analysis and re-render synchronously -
+            // before any refresh for it could land, analysis A's count is
+            // the only thing in memory and must NOT produce a card here.
+            currentMd5 = 'analysis-b-md5';
+            buildStats(null);
+            var cardOnBImmediately = !!findCard();
+            window.__jsdom_result = { cardOnA: cardOnA, cardOnBImmediately: cardOnBImmediately };
+        ''')
+        self.assertTrue(result['cardOnA'], 'sanity: analysis A must show the card')
+        self.assertFalse(result['cardOnBImmediately'],
+                         "analysis A's flagged-count must not render a card on analysis B")
+
+    def test_acknowledged_count_shares_the_analysis_tag_gating(self):
+        """Parity with the DNS Heuristics tests above: the Acknowledged
+        Alerts count got the identical race fixes, so its stale count from
+        a previously viewed analysis must not render a card either. (Lives
+        here to reuse _refresh_stats_js; the flow under test is the same
+        buildStats() gating.)"""
+        from tests.jsdom_helper import js_statements
+        # dns_events non-empty makes the mocked /api/count return a nonzero
+        # acknowledged count for the initial analysis
+        events = [{'event_type': 'dns', 'timestamp': '2026-01-01T00:00:00', 'src_ip': '10.0.0.5',
+                   'dns': {'rrname': 'www.example.com', 'rrtype': 'A'}}]
+        result = js_statements(self._refresh_stats_js({'dns': 1, 'alert': 2}, dns_events=events) + '''
+            var findCard = function() {
+                return Array.from(document.querySelectorAll('#statsGrid .stat-card')).find(function(c) {
+                    return c.dataset.section === 'section-acknowledged';
+                });
+            };
+            var cardOnA = !!findCard();
+            currentMd5 = 'analysis-b-md5';
+            buildStats(null);
+            window.__jsdom_result = { cardOnA: cardOnA, cardOnBImmediately: !!findCard() };
+        ''')
+        self.assertTrue(result['cardOnA'], 'sanity: analysis A must show the Acknowledged Alerts card')
+        self.assertFalse(result['cardOnBImmediately'],
+                         "analysis A's acknowledged count must not render a card on analysis B")
+
+    def test_refresh_discards_result_when_analysis_switches_mid_flight(self):
+        """REGRESSION: refreshDnsHeuristicsCount() is fire-and-forget; if
+        the user switches analyses while its fetch is in flight, the result
+        belongs to the old analysis. It must be discarded (no card on the
+        new analysis) and the stale flag re-armed so the next buildStats()
+        recomputes against the new analysis - verified behaviorally via a
+        follow-up buildStats() whose re-fetch then lands correctly."""
+        from tests.jsdom_helper import js_statements
+        flagged = [{'event_type': 'dns', 'timestamp': '2026-01-01T00:00:00', 'src_ip': '10.0.0.5',
+                    'dns': {'rrname': '08kcbghk807qtl9.top', 'rrtype': 'A'}}]
+        result = js_statements(self._refresh_stats_js({'dns': 1}) + '''
+            var findCard = function() {
+                return Array.from(document.querySelectorAll('#statsGrid .stat-card')).find(function(c) {
+                    return c.dataset.section === 'section-dns_heuristics';
+                });
+            };
+            var flagged = ''' + json.dumps(flagged) + ''';
+            // A controllable in-flight fetch for the count refresh.
+            var resolveFetch = null;
+            window.fetch = function(url) {
+                var u = String(url);
+                if (u.indexOf('/api/events') >= 0 && u.indexOf('type=dns') >= 0) {
+                    return new Promise(function(resolve) {
+                        resolveFetch = function(payload) {
+                            resolve({ ok: true, json: function() { return Promise.resolve(payload); } });
+                        };
+                    });
+                }
+                return Promise.resolve({ ok: true, json: function() { return Promise.resolve({ count: 0 }); } });
+            };
+            currentMd5 = 'analysis-a';
+            var p = refreshDnsHeuristicsCount();
+            // switch analyses while the fetch is still pending, then let
+            // the old analysis's flagged result arrive late
+            currentMd5 = 'analysis-b';
+            resolveFetch(flagged);
+            await p;
+            // Working fetch for analysis B before the next buildStats()
+            // consumes the re-armed stale flag and fires its refresh.
+            window.fetch = function(url) {
+                var u = String(url);
+                if (u.indexOf('/api/events') >= 0 && u.indexOf('type=dns') >= 0) {
+                    return Promise.resolve({ ok: true, json: function() { return Promise.resolve(flagged); } });
+                }
+                return Promise.resolve({ ok: true, json: function() { return Promise.resolve({ count: 0 }); } });
+            };
+            buildStats(null);
+            // Synchronous check: the refresh fired by that buildStats()
+            // hasn't landed yet, so any card here could only come from
+            // the discarded in-flight result.
+            var cardAfterLateResult = !!findCard();
+            await new Promise(function(r) { setTimeout(r, 50); });
+            var cardAfterRetry = !!findCard();
+            window.__jsdom_result = { cardAfterLateResult: cardAfterLateResult, cardAfterRetry: cardAfterRetry };
+        ''')
+        self.assertFalse(result['cardAfterLateResult'],
+                         "a result that arrived after switching analyses must not render a card")
+        self.assertTrue(result['cardAfterRetry'],
+                        'the stale flag must re-arm so the next buildStats() recomputes for the new analysis')
+
+    def test_error_payload_rearms_refresh_instead_of_locking_in_zero(self):
+        """REGRESSION: while an analysis is still processing, /api/events
+        can return an error object instead of an array. That used to lock
+        in a wrong 0 (stale flag already consumed), leaving the card
+        missing until a manual page refresh. A non-array payload must
+        re-arm the lazy refresh so a later buildStats() retries - verified
+        behaviorally: after the error, a buildStats() with a working fetch
+        makes the card appear."""
+        from tests.jsdom_helper import js_statements
+        flagged = [{'event_type': 'dns', 'timestamp': '2026-01-01T00:00:00', 'src_ip': '10.0.0.5',
+                    'dns': {'rrname': '08kcbghk807qtl9.top', 'rrtype': 'A'}}]
+        result = js_statements(self._refresh_stats_js({'dns': 1}) + '''
+            var findCard = function() {
+                return Array.from(document.querySelectorAll('#statsGrid .stat-card')).find(function(c) {
+                    return c.dataset.section === 'section-dns_heuristics';
+                });
+            };
+            var flagged = ''' + json.dumps(flagged) + ''';
+            // Analysis still processing: the events endpoint errors.
+            window.fetch = function(url) {
+                return Promise.resolve({ ok: false, json: function() {
+                    return Promise.resolve({ error: 'still processing' });
+                } });
+            };
+            await refreshDnsHeuristicsCount();
+            // Analysis finished: the endpoint works now. The next
+            // buildStats() must retry (re-armed stale flag) and render
+            // the card - pre-fix it never retried and the card stayed
+            // missing until a manual page refresh.
+            window.fetch = function(url) {
+                var u = String(url);
+                if (u.indexOf('/api/events') >= 0 && u.indexOf('type=dns') >= 0) {
+                    return Promise.resolve({ ok: true, json: function() { return Promise.resolve(flagged); } });
+                }
+                return Promise.resolve({ ok: true, json: function() { return Promise.resolve({ count: 0 }); } });
+            };
+            buildStats(null);
+            await new Promise(function(r) { setTimeout(r, 50); });
+            window.__jsdom_result = { cardAfterRetry: !!findCard() };
+        ''')
+        self.assertTrue(result['cardAfterRetry'],
+                        'after an error payload, the next buildStats() must retry and render the card')
 
     def test_buildStats_card_count_is_flagged_domains_not_raw_dns_count(self):
         """REGRESSION GUARD: the actual bug report - a capture with 157 DNS
@@ -12764,7 +13100,7 @@ class TestDnsHeuristicsTab(unittest.TestCase):
         result = js_statements(self._refresh_stats_js({'dns': len(events)}, dns_events=events) + '''
             var grid = document.getElementById('statsGrid');
             var card = Array.from(grid.querySelectorAll('.stat-card')).find(function(c) {
-                return c.getAttribute('onclick') === "showTab('section-dns_heuristics', this)";
+                return c.dataset.section === 'section-dns_heuristics';
             });
             window.__jsdom_result = { ariaLabel: card ? card.querySelector('.stat-number').getAttribute('aria-label') : null };
         ''')
@@ -12777,7 +13113,7 @@ class TestDnsHeuristicsTab(unittest.TestCase):
         result = js_statements(self._refresh_stats_js({'dns': 10}, dns_events=events) + '''
             var grid = document.getElementById('statsGrid');
             var card = Array.from(grid.querySelectorAll('.stat-card')).find(function(c) {
-                return c.getAttribute('onclick') === "showTab('section-dns_heuristics', this)";
+                return c.dataset.section === 'section-dns_heuristics';
             });
             window.__jsdom_result = { found: !!card };
         ''')
@@ -12904,7 +13240,7 @@ class TestDnsHeuristicsTab(unittest.TestCase):
             await new Promise(function(r) { setTimeout(r, 50); });
             var grid = document.getElementById('statsGrid');
             var card = Array.from(grid.querySelectorAll('.stat-card')).find(function(c) {
-                return c.getAttribute('onclick') === "showTab('section-dns_heuristics', this)";
+                return c.dataset.section === 'section-dns_heuristics';
             });
             window.__jsdom_result = {
                 cardFound: !!card,
@@ -13145,7 +13481,7 @@ class TestPlaybookSectionLazyLoad(unittest.TestCase):
             table.innerHTML = buildSigmaAlertRow(alert);
             document.body.appendChild(table);
             var tr = table.querySelector('tr[data-pivot]');
-            var detailId = tr.getAttribute('onclick').match(/toggleSigmaRow\\(this, '([^']+)'/)[1];
+            var detailId = tr.dataset.detailId;
         '''
 
     def test_expanding_alert_row_fetches_playbook_and_shows_it(self):
@@ -13533,7 +13869,7 @@ class TestAiSummaryLazyLoad(unittest.TestCase):
             table.innerHTML = buildSigmaAlertRow(alert);
             document.body.appendChild(table);
             var tr = table.querySelector('tr[data-pivot]');
-            var detailId = tr.getAttribute('onclick').match(/toggleSigmaRow\\(this, '([^']+)'/)[1];
+            var detailId = tr.dataset.detailId;
         '''
 
     def test_expanding_alert_row_fetches_ai_summary_and_shows_it(self):
@@ -13811,7 +14147,7 @@ class TestSearchUI(unittest.TestCase):
         """buildFilterBarHtml must render one chip per search term."""
         self.assertIn('for (let i = 0; i < currentSearch.length; i++)', JS_CONTENT,
                       'buildFilterBarHtml must iterate search terms')
-        self.assertIn('onclick="clearSearchTerm(', JS_CONTENT,
+        self.assertIn('data-action="clear-search-term"', JS_CONTENT,
                       'Each search chip must call clearSearchTerm with index')
 
     def test_search_chip_shows_full_query(self):
@@ -13822,9 +14158,9 @@ class TestSearchUI(unittest.TestCase):
     def test_filter_chip_escapes_malicious_column_name(self):
         """REGRESSION: buildFilterBarHtml renders currentFilters keys (column
         names, which can originate from attacker-controlled log field names
-        applied as a filter) both as visible text and inside a
-        clearFilter('...') onclick attribute. A malicious key must not
-        create a live element via either sink."""
+        applied as a filter) both as visible text and inside the chip's
+        data-col attribute. A malicious key must not create a live element
+        via either sink."""
         from tests.jsdom_helper import js_statements
         malicious_col = '"><img src=x onerror=alert(1)>'
         result = js_statements(f'''
@@ -13996,20 +14332,18 @@ class TestReanalyzeUI(unittest.TestCase):
     def test_reanalyze_modal_has_cancel_and_reanalyze_buttons(self):
         """Re-analyze modal must have Cancel and Re-analyze buttons."""
         modal_section = HTML_CONTENT.split('id="reanalyzeConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('closeReanalyzeModal()', modal_section,
+        self.assertIn('data-action="close-reanalyze-modal"', modal_section,
                       'Modal must have Cancel button')
-        self.assertIn('confirmReanalyze()', modal_section,
+        self.assertIn('data-action="confirm-reanalyze"', modal_section,
                       'Modal must have Re-analyze button')
 
     def test_reanalyze_modal_has_backdrop_click_handler(self):
         """Re-analyze modal wrapper must close when backdrop is clicked."""
-        self.assertIn('id="reanalyzeConfirmModal" onclick="handleReanalyzeBackdropClick(event)"', HTML_CONTENT,
+        self.assertIn('id="reanalyzeConfirmModal" data-action="backdrop" data-arg="close-reanalyze-modal"', HTML_CONTENT,
                       'Re-analyze modal wrapper must handle backdrop clicks')
         modal_section = HTML_CONTENT.split('id="reanalyzeConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('onclick="event.stopPropagation()"', modal_section,
-                      'Re-analyze modal content must stop event propagation')
-        self.assertIn('function handleReanalyzeBackdropClick(', JS_CONTENT,
-                      'handleReanalyzeBackdropClick must be defined')
+        self.assertNotIn('stopPropagation', modal_section,
+                         'Re-analyze modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
     def test_reanalyze_calls_post_api(self):
         """confirmReanalyze must POST to /api/reanalyze with JSON body."""
@@ -14152,8 +14486,8 @@ class TestReanalyzeUI(unittest.TestCase):
             };
         ''')
         self.assertEqual(result['display'], 'block')
-        self.assertIn('WARNING!', result['text'])
-        self.assertIn('destroyed', result['text'])
+        self.assertIn('Warning', result['text'])
+        self.assertIn('deleted', result['text'])
         self.assertTrue(result['btnDanger'], 'Re-analyze button must turn red when row notes would be lost')
 
     def test_row_notes_warning_hidden_when_has_row_notes_false(self):
@@ -14218,8 +14552,10 @@ class TestDeleteAllAnalysesUI(unittest.TestCase):
         self.assertIn('id="settingsDeleteAllBtn"', HTML_CONTENT,
                       'Settings modal must have a Delete All button')
         danger_zone = HTML_CONTENT.split('id="settingsDangerZoneSection"')[1][:600]
-        self.assertIn('openDeleteAllAnalyses(settingsAnalysisCount)', danger_zone,
-                      'Settings Delete All button must call openDeleteAllAnalyses with the fetched count')
+        self.assertIn('data-action="open-delete-all-analyses"', danger_zone,
+                      'Settings Delete All button must be wired to the open-delete-all-analyses action')
+        self.assertIn("'open-delete-all-analyses': () => openDeleteAllAnalyses(settingsAnalysisCount)", JS_CONTENT,
+                      'the action must call openDeleteAllAnalyses with the fetched count, read at click time')
         self.assertIn('previous-analysis-delete-all', danger_zone,
                       'Delete All button must have styling class')
 
@@ -14302,30 +14638,26 @@ class TestDeleteAllAnalysesUI(unittest.TestCase):
     def test_delete_all_modal_has_cancel_and_delete_buttons(self):
         """Delete All modal must have Cancel and Delete All buttons."""
         modal_section = HTML_CONTENT.split('id="deleteAllConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('closeDeleteAllModal()', modal_section,
+        self.assertIn('data-action="close-delete-all-modal"', modal_section,
                       'Modal must have Cancel button')
-        self.assertIn('confirmDeleteAll()', modal_section,
+        self.assertIn('data-action="confirm-delete-all"', modal_section,
                       'Modal must have Delete All button')
 
     def test_delete_all_modal_has_backdrop_click_handler(self):
         """Delete All modal wrapper must close when backdrop is clicked."""
-        self.assertIn('id="deleteAllConfirmModal" onclick="handleDeleteAllBackdropClick(event)"', HTML_CONTENT,
+        self.assertIn('id="deleteAllConfirmModal" data-action="backdrop" data-arg="close-delete-all-modal"', HTML_CONTENT,
                       'Delete All modal wrapper must handle backdrop clicks')
         modal_section = HTML_CONTENT.split('id="deleteAllConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('onclick="event.stopPropagation()"', modal_section,
-                      'Delete All modal content must stop event propagation')
-        self.assertIn('function handleDeleteAllBackdropClick(', JS_CONTENT,
-                      'handleDeleteAllBackdropClick must be defined')
+        self.assertNotIn('stopPropagation', modal_section,
+                         'Delete All modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
     def test_delete_modal_has_backdrop_click_handler(self):
         """Delete modal wrapper must close when backdrop is clicked."""
-        self.assertIn('id="deleteConfirmModal" onclick="handleDeleteBackdropClick(event)"', HTML_CONTENT,
+        self.assertIn('id="deleteConfirmModal" data-action="backdrop" data-arg="close-delete-modal"', HTML_CONTENT,
                       'Delete modal wrapper must handle backdrop clicks')
         modal_section = HTML_CONTENT.split('id="deleteConfirmModal"')[1].split('</div>\n        </div>')[0]
-        self.assertIn('onclick="event.stopPropagation()"', modal_section,
-                      'Delete modal content must stop event propagation')
-        self.assertIn('function handleDeleteBackdropClick(', JS_CONTENT,
-                      'handleDeleteBackdropClick must be defined')
+        self.assertNotIn('stopPropagation', modal_section,
+                         'Delete modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
     def test_confirm_delete_all_calls_post_api(self):
         """confirmDeleteAll must POST to /api/delete-all-analyses."""
@@ -15428,11 +15760,15 @@ class TestXSSPreventionLogAnalysis(unittest.TestCase):
         ''')
         self.assertFalse(result['hasUnescapedScript'])
 
-    def test_buildLogAggregations_escapes_values_in_onclick(self):
-        """buildLogAggregations must not allow double quotes in aggregation values to break onclick."""
+    def test_buildLogAggregations_escapes_values_in_attributes(self):
+        """buildLogAggregations must not allow double quotes in aggregation
+        values to break out of any attribute (they used to threaten inline
+        onclick handlers; the same payload must now stay inert in the
+        percent-encoded data-agg-pivot attribute and round-trip exactly)."""
         from tests.jsdom_helper import js_statements
+        payload = 'test"onclick="alert(1)'
         events = [
-            {'timestamp': '2024-01-01T00:00:00Z', 'json_data': {'Channel': 'test"onclick="alert(1)'}}
+            {'timestamp': '2024-01-01T00:00:00Z', 'json_data': {'Channel': payload}}
         ]
         result = js_statements(f'''
             advancedMode = true;
@@ -15444,29 +15780,28 @@ class TestXSSPreventionLogAnalysis(unittest.TestCase):
             }}
             var events = {json.dumps(events)};
             buildLogAggregations(events, 'section-log');
-            var html = agg.innerHTML;
-            // Find the onclick attribute and check if it contains unescaped double quotes
-            var onclickMatch = html.match(/onclick="([^"]*)"([^>]*)/);
-            var hasBrokenAttr = false;
-            if (onclickMatch) {{
-                // If there's content after the first closing quote but before the tag end,
-                // the attribute was broken
-                hasBrokenAttr = onclickMatch[2].trim().length > 0 && onclickMatch[2].indexOf('>') === -1;
-            }}
+            var row = agg.querySelector('tr.agg-row[data-agg-pivot]');
+            var decoded = row ? JSON.parse(decodeURIComponent(row.dataset.aggPivot)) : null;
             window.__jsdom_result = {{
-                hasUnescapedScript: html.indexOf('<script>') >= 0,
-                hasBrokenOnclick: hasBrokenAttr
+                hasUnescapedScript: agg.innerHTML.indexOf('<script>') >= 0,
+                inlineHandlerCount: agg.querySelectorAll('[onclick]').length,
+                decodedValue: decoded ? decoded[2] : null
             }};
         ''')
         self.assertFalse(result['hasUnescapedScript'])
-        self.assertFalse(result['hasBrokenOnclick'],
-                         'onclick attribute must not be breakable by double quotes in user data')
+        self.assertEqual(result['inlineHandlerCount'], 0,
+                         'aggregation tables must not render inline onclick attributes at all')
+        self.assertEqual(result['decodedValue'], payload,
+                         'the exact value (quotes included) must survive the data-agg-pivot round-trip')
 
-    def test_buildSigmaAlertAggregations_escapes_values_in_onclick(self):
-        """buildSigmaAlertAggregations must not allow double quotes in rule titles to break onclick."""
+    def test_buildSigmaAlertAggregations_escapes_values_in_attributes(self):
+        """buildSigmaAlertAggregations must not allow double quotes in rule
+        titles to break out of any attribute - same successor semantics as
+        the log-aggregation test above."""
         from tests.jsdom_helper import js_statements
+        payload = 'test"onclick="alert(1)'
         alerts = [
-            {'severity': 'high', 'rule_title': 'test"onclick="alert(1)', 'mitre_techniques': '[]',
+            {'severity': 'high', 'rule_title': payload, 'mitre_techniques': '[]',
              'logsource': 'windows', 'original_log': '{}'}
         ]
         result = js_statements(f'''
@@ -15479,23 +15814,24 @@ class TestXSSPreventionLogAnalysis(unittest.TestCase):
             }}
             var alerts = {json.dumps(alerts)};
             buildSigmaAlertAggregations(alerts, 'section-sigmaalert');
-            var html = agg.innerHTML;
-            var onclickMatch = html.match(/onclick="([^"]*)"([^>]*)/);
-            var hasBrokenAttr = false;
-            if (onclickMatch) {{
-                hasBrokenAttr = onclickMatch[2].trim().length > 0 && onclickMatch[2].indexOf('>') === -1;
-            }}
+            var rows = Array.from(agg.querySelectorAll('tr.agg-row[data-agg-pivot]'));
+            var decodedValues = rows.map(function(r) {{ return JSON.parse(decodeURIComponent(r.dataset.aggPivot))[2]; }});
             window.__jsdom_result = {{
-                hasUnescapedScript: html.indexOf('<script>') >= 0,
-                hasBrokenOnclick: hasBrokenAttr
+                hasUnescapedScript: agg.innerHTML.indexOf('<script>') >= 0,
+                inlineHandlerCount: agg.querySelectorAll('[onclick]').length,
+                hasPayloadValue: decodedValues.indexOf({json.dumps(payload)}) >= 0
             }};
         ''')
         self.assertFalse(result['hasUnescapedScript'])
-        self.assertFalse(result['hasBrokenOnclick'],
-                         'onclick attribute must not be breakable by double quotes in rule titles')
+        self.assertEqual(result['inlineHandlerCount'], 0,
+                         'aggregation tables must not render inline onclick attributes at all')
+        self.assertTrue(result['hasPayloadValue'],
+                        'the exact rule title (quotes included) must survive the data-agg-pivot round-trip')
 
     def test_buildLogEventRow_detail_id_with_quotes(self):
-        """buildLogEventRow must handle row_id containing quotes without breaking onclick."""
+        """buildLogEventRow must handle row_id containing quotes without
+        letting it break out of the data-detail-id attribute (the attack
+        that used to target its inline toggleLogRow onclick handler)."""
         from tests.jsdom_helper import js_statements
         event = {
             'row_id': 'test"onclick="alert(1)',
@@ -15504,22 +15840,29 @@ class TestXSSPreventionLogAnalysis(unittest.TestCase):
         }
         result = js_statements(f'''
             var event = {json.dumps(event)};
-            var cols = [];
-            var html = buildLogEventRow(event, cols);
-            var onclickMatch = html.match(/onclick="([^"]*)"([^>]*)/);
-            var hasBrokenAttr = false;
-            if (onclickMatch) {{
-                hasBrokenAttr = onclickMatch[2].trim().length > 0 && onclickMatch[2].indexOf('>') === -1;
-            }}
+            var html = buildLogEventRow(event, []);
+            var table = document.createElement('table');
+            var tbody = document.createElement('tbody');
+            table.appendChild(tbody);
+            tbody.innerHTML = html;
+            var row = tbody.querySelector('tr[data-action="toggle-log-row"]');
+            var detailRow = tbody.querySelector('tr.detail-row');
             window.__jsdom_result = {{
-                hasBrokenOnclick: hasBrokenAttr
+                inlineHandlerCount: table.querySelectorAll('[onclick]').length,
+                detailId: row ? row.dataset.detailId : null,
+                detailRowId: detailRow ? detailRow.getAttribute('id') : null
             }};
         ''')
-        self.assertFalse(result['hasBrokenOnclick'],
-                         'detailId in onclick must not be breakable by quotes')
+        self.assertEqual(result['inlineHandlerCount'], 0,
+                         'a quoted row_id must not materialize any onclick attribute')
+        self.assertEqual(result['detailId'], 'log-detail-test"onclick="alert(1)',
+                         'the exact detail id must survive the data-detail-id round-trip')
+        self.assertEqual(result['detailRowId'], result['detailId'],
+                         "the collapsed row's data-detail-id must match the detail row's id")
 
     def test_buildSigmaAlertRow_detail_id_with_quotes(self):
-        """buildSigmaAlertRow must handle alert.id containing quotes without breaking onclick."""
+        """buildSigmaAlertRow must handle alert.id containing quotes without
+        letting it break out of the data-detail-id attribute."""
         from tests.jsdom_helper import js_statements
         alert = {
             'id': 'test"onclick="alert(1)',
@@ -15534,17 +15877,24 @@ class TestXSSPreventionLogAnalysis(unittest.TestCase):
         result = js_statements(f'''
             var alert = {json.dumps(alert)};
             var html = buildSigmaAlertRow(alert);
-            var onclickMatch = html.match(/onclick="([^"]*)"([^>]*)/);
-            var hasBrokenAttr = false;
-            if (onclickMatch) {{
-                hasBrokenAttr = onclickMatch[2].trim().length > 0 && onclickMatch[2].indexOf('>') === -1;
-            }}
+            var table = document.createElement('table');
+            var tbody = document.createElement('tbody');
+            table.appendChild(tbody);
+            tbody.innerHTML = html;
+            var row = tbody.querySelector('tr[data-action="toggle-sigma-row"]');
+            var detailRow = tbody.querySelector('tr.detail-row');
             window.__jsdom_result = {{
-                hasBrokenOnclick: hasBrokenAttr
+                inlineHandlerCount: table.querySelectorAll('[onclick]').length,
+                detailId: row ? row.dataset.detailId : null,
+                detailRowId: detailRow ? detailRow.getAttribute('id') : null
             }};
         ''')
-        self.assertFalse(result['hasBrokenOnclick'],
-                         'detailId in onclick must not be breakable by quotes')
+        self.assertEqual(result['inlineHandlerCount'], 0,
+                         'a quoted alert id must not materialize any onclick attribute')
+        self.assertEqual(result['detailId'], 'sigma-detail-test"onclick="alert(1)',
+                         'the exact detail id must survive the data-detail-id round-trip')
+        self.assertEqual(result['detailRowId'], result['detailId'],
+                         "the collapsed row's data-detail-id must match the detail row's id")
 
 
 class TestBackwardCompatibilityUI(unittest.TestCase):
@@ -17097,12 +17447,12 @@ class TestUserConfigurableQueryLimit(unittest.TestCase):
                       'the Save button must be re-enabled in a finally block even if refreshAnalysisData throws')
 
     def test_settings_menu_item_in_static_html(self):
-        self.assertIn('onclick="showSettingsModal(); closeMenu();"', HTML_CONTENT,
+        self.assertIn('data-action="menu-settings"', HTML_CONTENT,
                       'the static header menu markup must include a Settings item')
 
     def test_settings_menu_item_in_renderGearMenu(self):
         func = JS_CONTENT.split('function renderGearMenu()')[1].split('// Subtle code-rain background')[0]
-        self.assertIn('showSettingsModal(); closeMenu();', func,
+        self.assertIn('data-action="menu-settings"', func,
                       'the dynamically-rebuilt header menu template must also include a Settings item')
 
 
@@ -18237,19 +18587,19 @@ class TestRulesModal(unittest.TestCase):
     def test_gear_menu_has_rules_item_in_both_copies(self):
         """The gear menu is duplicated (static HTML for first paint, plus
         renderGearMenu() in JS for re-renders) - both must offer Rules."""
-        self.assertIn('showRulesModal()', HTML_CONTENT,
+        self.assertIn('data-action="menu-rules"', HTML_CONTENT,
                       'the static gear menu in socrates.html must have a Rules item')
         gear_menu_match = re.search(r'function renderGearMenu\(\) \{\s*return `(.*?)`;\s*\}', JS_CONTENT, re.DOTALL)
         self.assertIsNotNone(gear_menu_match, 'renderGearMenu must exist')
-        self.assertIn('showRulesModal()', gear_menu_match.group(1),
+        self.assertIn('data-action="menu-rules"', gear_menu_match.group(1),
                       'renderGearMenu() output must also have a Rules item')
 
     def test_rules_modal_skeleton_exists(self):
-        self.assertIn('id="rulesModal" onclick="handleModalBackdropClick(event, closeRulesModal)"', HTML_CONTENT,
+        self.assertIn('id="rulesModal" data-action="backdrop" data-arg="close-rules-modal"', HTML_CONTENT,
                       'rulesModal must exist with a backdrop-click handler wired up')
         self.assertIn('id="rulesModalBody"', HTML_CONTENT,
                       'rulesModal must have a body element to render per-ruleset status into')
-        self.assertIn('id="updateAllRulesBtn" onclick="triggerRulesetUpdate(\'all\')"', HTML_CONTENT,
+        self.assertIn('id="updateAllRulesBtn" data-action="update-ruleset" data-arg="all"', HTML_CONTENT,
                       'rulesModal must have an Update All button')
 
     def test_showRulesModal_fetches_info_and_status_and_renders(self):
@@ -18422,9 +18772,9 @@ class TestRulesModal(unittest.TestCase):
             await showRulesModal();
             var body = document.getElementById('rulesModalBody');
             var yaraHeading = Array.from(body.querySelectorAll('strong')).find(function(s) { return s.textContent === 'YARA'; });
-            var yaraUpdateBtn = yaraHeading.closest('div[style*="justify-content: space-between"]').querySelector('button[onclick*="triggerRulesetUpdate"]');
+            var yaraUpdateBtn = yaraHeading.closest('div[style*="justify-content: space-between"]').querySelector('button[data-action="update-ruleset"]');
             var suricataHeading = Array.from(body.querySelectorAll('strong')).find(function(s) { return s.textContent === 'Suricata'; });
-            var suricataUpdateBtn = suricataHeading.closest('div[style*="justify-content: space-between"]').querySelector('button[onclick*="triggerRulesetUpdate"]');
+            var suricataUpdateBtn = suricataHeading.closest('div[style*="justify-content: space-between"]').querySelector('button[data-action="update-ruleset"]');
             window.__jsdom_result = {
                 yaraButtonHtml: yaraUpdateBtn.innerHTML,
                 yaraDisabled: yaraUpdateBtn.disabled,
@@ -18470,7 +18820,7 @@ class TestRulesModal(unittest.TestCase):
             function yaraButtonText() {
                 var body = document.getElementById('rulesModalBody');
                 var yaraHeading = Array.from(body.querySelectorAll('strong')).find(function(s) { return s.textContent === 'YARA'; });
-                return yaraHeading.closest('div[style*="justify-content: space-between"]').querySelector('button[onclick*="triggerRulesetUpdate"]').textContent;
+                return yaraHeading.closest('div[style*="justify-content: space-between"]').querySelector('button[data-action="update-ruleset"]').textContent;
             }
             await showRulesModal();
             var fetchCountAfterOpen = statusFetchCount;
@@ -18543,12 +18893,12 @@ class TestRulesModal(unittest.TestCase):
             });
             window.__jsdom_result = {
                 buttonFound: !!btn,
-                onclick: btn ? btn.getAttribute('onclick') : null,
+                action: btn ? btn.getAttribute('data-action') : null,
                 sourcesListVisibleBefore: !!document.querySelector('.suricata-sources-list'),
             };
         ''')
         self.assertTrue(result['buttonFound'], 'Suricata heading must have a "(Enable/Disable Rulesets)" trigger')
-        self.assertEqual(result['onclick'], 'toggleSuricataSources()')
+        self.assertEqual(result['action'], 'toggle-suricata-sources')
         self.assertFalse(result['sourcesListVisibleBefore'], 'sources list must still be collapsed by default')
 
     def test_no_duplicate_choose_rulesets_button(self):
@@ -18635,7 +18985,7 @@ class TestRulesModal(unittest.TestCase):
             toggleSuricataSources();
             var checkboxes = {};
             body.querySelectorAll('.suricata-sources-list input[type=checkbox]').forEach(function(cb) {
-                var name = cb.getAttribute('onchange').match(/handleSuricataSourceToggle\\('([^']+)'/)[1];
+                var name = cb.dataset.name;
                 checkboxes[name] = cb.checked;
             });
             window.__jsdom_result = { collapsedCheckboxCount: collapsedCheckboxCount, checkboxes: checkboxes };
@@ -18699,7 +19049,7 @@ class TestRulesModal(unittest.TestCase):
             await showRulesModal();
             toggleSuricataSources();
             var enableAllBtn = Array.from(document.querySelectorAll('button')).find(function(b) {
-                return b.getAttribute('onclick') === 'enableAllSuricataSources()';
+                return b.dataset.action === 'enable-all-suricata-sources';
             });
             window.__jsdom_result = { label: enableAllBtn.textContent };
         ''')
@@ -18721,7 +19071,7 @@ class TestRulesModal(unittest.TestCase):
             await showRulesModal();
             toggleSuricataSources();
             var enableAllBtn = Array.from(document.querySelectorAll('button')).find(function(b) {
-                return b.getAttribute('onclick') === 'enableAllSuricataSources()';
+                return b.dataset.action === 'enable-all-suricata-sources';
             });
             window.__jsdom_result = { label: enableAllBtn.textContent };
         ''')
@@ -18749,7 +19099,7 @@ class TestRulesModal(unittest.TestCase):
             toggleSuricataSources();
             var labels = {};
             document.querySelectorAll('.suricata-sources-list label').forEach(function(label) {
-                var name = label.querySelector('input').getAttribute('onchange').match(/handleSuricataSourceToggle\\('([^']+)'/)[1];
+                var name = label.querySelector('input').dataset.name;
                 var noteSpan = Array.from(label.querySelectorAll('span')).find(function(s) { return s.textContent === 'WARNING!'; });
                 labels[name] = noteSpan ? noteSpan.getAttribute('title') : null;
             });
@@ -18779,7 +19129,7 @@ class TestRulesModal(unittest.TestCase):
             await showRulesModal();
             toggleSuricataSources();
             var label = Array.from(document.querySelectorAll('.suricata-sources-list label')).find(function(l) {
-                return l.querySelector('input').getAttribute('onchange').indexOf("'ipfire/dbl'") !== -1;
+                return l.querySelector('input').dataset.name === 'ipfire/dbl';
             });
             var checkbox = label.querySelector('input');
             var checkedBefore = checkbox.checked;
@@ -18822,7 +19172,7 @@ class TestRulesModal(unittest.TestCase):
             function checkboxStates() {
                 var states = {};
                 document.querySelectorAll('.suricata-sources-list input[type=checkbox]').forEach(function(cb) {
-                    var name = cb.getAttribute('onchange').match(/handleSuricataSourceToggle\\('([^']+)'/)[1];
+                    var name = cb.dataset.name;
                     states[name] = cb.checked;
                 });
                 return states;
@@ -18868,7 +19218,7 @@ class TestRulesModal(unittest.TestCase):
             resetSuricataSourcesToDefault();
             var states = {};
             document.querySelectorAll('.suricata-sources-list input[type=checkbox]').forEach(function(cb) {
-                var name = cb.getAttribute('onchange').match(/handleSuricataSourceToggle\\('([^']+)'/)[1];
+                var name = cb.dataset.name;
                 states[name] = cb.checked;
             });
             window.__jsdom_result = states;
@@ -18898,7 +19248,7 @@ class TestRulesModal(unittest.TestCase):
             await refreshRulesModal();
             var body = document.getElementById('rulesModalBody');
             var cb = Array.from(body.querySelectorAll('input[type=checkbox]')).find(function(el) {
-                return el.getAttribute('onchange').indexOf("'abuse.ch/urlhaus'") !== -1;
+                return el.dataset.name === 'abuse.ch/urlhaus';
             });
             window.__jsdom_result = { stillChecked: cb ? cb.checked : null };
         ''')
@@ -18906,7 +19256,7 @@ class TestRulesModal(unittest.TestCase):
 
     def test_stale_threshold_days_input_exists(self):
         self.assertIn('id="staleThresholdDaysInput"', HTML_CONTENT)
-        self.assertIn('onchange="handleStaleThresholdDaysChange(this)"', HTML_CONTENT)
+        self.assertIn("getElementById('staleThresholdDaysInput').addEventListener('change'", JS_CONTENT)
         self.assertIn('min="1"', HTML_CONTENT)
         self.assertIn('max="365"', HTML_CONTENT)
 
@@ -19254,7 +19604,7 @@ class TestRulesModal(unittest.TestCase):
             await showRulesModal();
             toggleSuricataSources();
             var cb = Array.from(document.querySelectorAll('input[type=checkbox]')).find(function(el) {
-                return el.getAttribute('onchange') === 'handleShowProtocolDecodeAlertsToggle(this.checked)';
+                return el.dataset.changeAction === 'protocol-decode-toggle';
             });
             window.__jsdom_result = { checked: cb ? cb.checked : null };
         ''')
@@ -19274,7 +19624,7 @@ class TestRulesModal(unittest.TestCase):
             await showRulesModal();
             toggleSuricataSources();
             var cb = Array.from(document.querySelectorAll('input[type=checkbox]')).find(function(el) {
-                return el.getAttribute('onchange') === 'handleShowProtocolDecodeAlertsToggle(this.checked)';
+                return el.dataset.changeAction === 'protocol-decode-toggle';
             });
             window.__jsdom_result = { checked: cb ? cb.checked : null };
         ''')
@@ -19329,7 +19679,7 @@ class TestRulesModal(unittest.TestCase):
             handleShowProtocolDecodeAlertsToggle(true);
             await refreshRulesModal();
             var cb = Array.from(document.querySelectorAll('input[type=checkbox]')).find(function(el) {
-                return el.getAttribute('onchange') === 'handleShowProtocolDecodeAlertsToggle(this.checked)';
+                return el.dataset.changeAction === 'protocol-decode-toggle';
             });
             window.__jsdom_result = { stillChecked: cb ? cb.checked : null };
         ''')
@@ -19410,11 +19760,18 @@ class TestRulesModal(unittest.TestCase):
         running_status = json.loads(json.dumps(RULE_UPDATE_STATUS_IDLE))
         running_status['suricata'] = {'running': True, 'lines': ['line 1', 'line 2'], 'done': False, 'error': None}
         result = js_statements('''
+            // Log lines grow between polls (as they do during a real
+            // update run) - identical content would now skip the replace
+            // entirely (see the unchanged-content regression test below).
+            var pollCount = 0;
             window.fetch = function(url) {
                 if (url === '/api/rules-info') {
                     return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULES_INFO_RESPONSE) + ''') });
                 }
-                return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(running_status) + ''') });
+                pollCount++;
+                var status = JSON.parse(JSON.stringify(''' + json.dumps(running_status) + '''));
+                status.suricata.lines.push('line ' + (2 + pollCount));
+                return Promise.resolve({ json: () => Promise.resolve(status) });
             };
             await refreshRulesModal();
             toggleRuleLog('suricata');
@@ -19438,9 +19795,15 @@ class TestRulesModal(unittest.TestCase):
         result = js_statements('''
             localStorage.setItem('socrates_hideHelp', 'true');
             await new Promise(r => setTimeout(r, 50));
+            // The rule count changes between polls so the re-render
+            // actually replaces the DOM - identical content now skips it.
+            var infoPolls = 0;
             window.fetch = function(url) {
                 if (url === '/api/rules-info') {
-                    return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULES_INFO_RESPONSE) + ''') });
+                    infoPolls++;
+                    var info = JSON.parse(JSON.stringify(''' + json.dumps(RULES_INFO_RESPONSE) + '''));
+                    info.suricata.count = (info.suricata.count || 0) + infoPolls;
+                    return Promise.resolve({ json: () => Promise.resolve(info) });
                 }
                 return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULE_UPDATE_STATUS_IDLE) + ''') });
             };
@@ -19492,6 +19855,46 @@ class TestRulesModal(unittest.TestCase):
         ''')
         self.assertTrue(result['sameElementKept'], 'poll tick must skip the innerHTML replace while a selection lives inside the log')
         self.assertTrue(result['selectionSurvived'], 'text selection inside the log must survive a poll tick')
+
+    def test_unchanged_poll_tick_keeps_dom_nodes_for_in_flight_clicks(self):
+        """REGRESSION: an idle Rules modal renders byte-identical HTML on
+        every 2s poll tick, and replacing the body anyway swapped every
+        button out from under an in-progress click - a human press spans
+        ~100ms+, and a rebuild between mousedown and mouseup means the
+        click never fires (reported as 'after Revert to Default, the
+        Update button needs two clicks'). Identical content must skip the
+        replacement so the same nodes stay clickable."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.fetch = function(url) {
+                if (url === '/api/rules-info') {
+                    return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULES_INFO_RESPONSE) + ''') });
+                }
+                return Promise.resolve({ json: () => Promise.resolve(''' + json.dumps(RULE_UPDATE_STATUS_IDLE) + ''') });
+            };
+            await refreshRulesModal();
+            var btn = document.querySelector('[data-action="update-ruleset"][data-arg="suricata"]');
+            btn.__clickTarget = true;
+            await refreshRulesModal();
+            await refreshRulesModal();
+            var btnAfter = document.querySelector('[data-action="update-ruleset"][data-arg="suricata"]');
+            // and after a client-side revert, the re-render (content DID
+            // change) then the next identical poll must again hold steady
+            resetSuricataSourcesToDefault();
+            var btnPostRevert = document.querySelector('[data-action="update-ruleset"][data-arg="suricata"]');
+            btnPostRevert.__clickTarget = true;
+            await refreshRulesModal();
+            var btnPostRevertAfterPoll = document.querySelector('[data-action="update-ruleset"][data-arg="suricata"]');
+            window.__jsdom_result = {
+                sameNodeAcrossIdlePolls: btnAfter === btn && btnAfter.__clickTarget === true,
+                sameNodeAfterRevertThenPoll: btnPostRevertAfterPoll === btnPostRevert
+                    && btnPostRevertAfterPoll.__clickTarget === true,
+            };
+        ''')
+        self.assertTrue(result['sameNodeAcrossIdlePolls'],
+                        'idle poll ticks must not replace the Update button node')
+        self.assertTrue(result['sameNodeAfterRevertThenPoll'],
+                        'the poll tick after a revert re-render must not replace the Update button node')
 
     def test_escape_closes_rules_modal(self):
         from tests.jsdom_helper import js_statements
@@ -20090,7 +20493,7 @@ class TestAcknowledgeAlerts(unittest.TestCase):
             // second buildStats() call finishes - several microtask/macrotask
             // hops deep, hence the longer wait than this file's usual 20ms.
             await new Promise(function(r) { setTimeout(r, 100); });
-            var card = document.querySelector('.stat-card[onclick*="acknowledged"]');
+            var card = document.querySelector('.stat-card[data-section="section-acknowledged"]');
             window.__jsdom_result = {
                 hasCard: !!card,
                 label: card ? card.textContent : null,

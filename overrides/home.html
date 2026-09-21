@@ -1,0 +1,739 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Rajdhani&display=swap" rel="stylesheet">
+  <style>
+    /* ---- page-scoped layout: full-bleed, no sidebars ---- */
+    .md-main__inner { max-width: none; margin: 0; }
+    .md-content { padding: 0; }
+    .md-header {
+      background: rgba(5, 8, 15, .72);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    .md-footer { background: #05080f; }
+
+    /* ---- tokens ---- */
+    .sx {
+      --sx-bg: #05080f;
+      --sx-panel: rgba(13, 20, 34, .72);
+      --sx-line: color-mix(in srgb, var(--sx-cyan) 20%, transparent);
+      --sx-cyan: #00e5ff;
+      --sx-green: #39ff9c;
+      --sx-violet: #8b7bff;
+      --sx-text: #dbe7f4;
+      --sx-dim: #8fa3ba;
+      --sx-heading: #f2f9ff;
+      --sx-frame-bg: #0a1120;
+      --sx-frame-bar: #070d18;
+      --sx-frame-title: #b8c6d6;
+      --sx-btn-text: #04121a;
+      --sx-font-display: "Orbitron", "Segoe UI", sans-serif;
+      --sx-font-body: "Rajdhani", "Segoe UI", sans-serif;
+      --sx-font-mono: "Roboto Mono", "SFMono-Regular", Consolas, monospace;
+      background: var(--sx-bg);
+      color: var(--sx-text);
+      font-family: var(--sx-font-body);
+      font-size: 1.05rem;
+      line-height: 1.6;
+      overflow-x: clip;
+      flex: 1 1 100%;
+      min-width: 0;
+    }
+    .sx a { color: var(--sx-cyan); }
+    .sx-wrap { max-width: 68rem; margin: 0 auto; padding: 0 1.2rem; }
+
+    /* subtle grid + scanline overlay across the whole splash */
+    .sx::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(0deg, rgba(255,255,255,.022) 0 1px, transparent 1px 3px),
+        linear-gradient(color-mix(in srgb, var(--sx-cyan) 4%, transparent) 1px, transparent 1px),
+        linear-gradient(90deg, color-mix(in srgb, var(--sx-cyan) 4%, transparent) 1px, transparent 1px);
+      background-size: 100% 100%, 3.2rem 3.2rem, 3.2rem 3.2rem;
+      z-index: 0;
+      will-change: transform; /* own compositor layer: raster once, not per rain tick */
+    }
+    .sx > * { position: relative; z-index: 1; }
+
+    /* ---- themes: palettes lifted from the app's own themes in static/socrates.css ---- */
+    .sx[data-sxtheme="midnight"] {
+      --sx-bg: #0d1117; --sx-cyan: #58a6ff; --sx-green: #79c0ff;
+      --sx-text: #c9d1d9; --sx-dim: #8b949e; --sx-heading: #f0f6fc;
+      --sx-panel: color-mix(in srgb, #161b22 75%, transparent);
+      --sx-frame-bg: #161b22; --sx-frame-bar: #090d13; --sx-frame-title: #c9d1d9;
+      --sx-btn-text: #0d1117;
+    }
+    .sx[data-sxtheme="ohmydebn"] {
+      --sx-bg: #1e1e2e; --sx-cyan: #89b4fa; --sx-green: #b4befe;
+      --sx-text: #cdd6f4; --sx-dim: #a6adc8; --sx-heading: #f5e0dc;
+      --sx-panel: color-mix(in srgb, #272838 75%, transparent);
+      --sx-frame-bg: #272838; --sx-frame-bar: #16161f; --sx-frame-title: #cdd6f4;
+      --sx-btn-text: #1e1e2e;
+    }
+    .sx[data-sxtheme="hackerman"] {
+      --sx-bg: #0B0C16; --sx-cyan: #82FB9C; --sx-green: #a4fcc0;
+      --sx-text: #ddf7ff; --sx-dim: #6a6e95; --sx-heading: #f2fdff;
+      --sx-panel: color-mix(in srgb, #1c1d2c 75%, transparent);
+      --sx-frame-bg: #1c1d2c; --sx-frame-bar: #08090f; --sx-frame-title: #ddf7ff;
+      --sx-btn-text: #0B0C16;
+    }
+    .sx[data-sxtheme="nord"] {
+      --sx-bg: #2e3440; --sx-cyan: #81a1c1; --sx-green: #88c0d0;
+      --sx-text: #d8dee9; --sx-dim: #7b8494; --sx-heading: #eceff4;
+      --sx-panel: color-mix(in srgb, #323946 75%, transparent);
+      --sx-frame-bg: #323946; --sx-frame-bar: #232833; --sx-frame-title: #d8dee9;
+      --sx-btn-text: #2e3440;
+    }
+    .sx[data-sxtheme="dracula"] {
+      --sx-bg: #282a36; --sx-cyan: #bd93f9; --sx-green: #ff79c6;
+      --sx-text: #f8f8f2; --sx-dim: #6272a4; --sx-heading: #ffffff;
+      --sx-panel: color-mix(in srgb, #21222c 75%, transparent);
+      --sx-frame-bg: #21222c; --sx-frame-bar: #1a1b23; --sx-frame-title: #f8f8f2;
+      --sx-btn-text: #282a36;
+    }
+    .sx[data-sxtheme="gruvbox"] {
+      --sx-bg: #282828; --sx-cyan: #7daea3; --sx-green: #a9b665;
+      --sx-text: #d4be98; --sx-dim: #a89984; --sx-heading: #ebdbb2;
+      --sx-panel: color-mix(in srgb, #2f2d2d 75%, transparent);
+      --sx-frame-bg: #2f2d2d; --sx-frame-bar: #1f1e1e; --sx-frame-title: #d4be98;
+      --sx-btn-text: #282828;
+    }
+    .sx[data-sxtheme="kanagawa"] {
+      --sx-bg: #1f1f28; --sx-cyan: #7e9cd8; --sx-green: #9bb8ea;
+      --sx-text: #dcd7ba; --sx-dim: #8a8980; --sx-heading: #ede8d2;
+      --sx-panel: color-mix(in srgb, #272730 75%, transparent);
+      --sx-frame-bg: #272730; --sx-frame-bar: #16161d; --sx-frame-title: #dcd7ba;
+      --sx-btn-text: #1f1f28;
+    }
+
+
+    /* swatch colors: one place per theme, next to the token blocks above */
+    .sx-swatch[data-sxtheme=""] { --a: #00e5ff; --b: #39ff9c; }
+    .sx-swatch[data-sxtheme="midnight"] { --a: #58a6ff; --b: #79c0ff; }
+    .sx-swatch[data-sxtheme="ohmydebn"] { --a: #89b4fa; --b: #b4befe; }
+    .sx-swatch[data-sxtheme="hackerman"] { --a: #82FB9C; --b: #a4fcc0; }
+    .sx-swatch[data-sxtheme="nord"] { --a: #81a1c1; --b: #88c0d0; }
+    .sx-swatch[data-sxtheme="dracula"] { --a: #bd93f9; --b: #ff79c6; }
+    .sx-swatch[data-sxtheme="gruvbox"] { --a: #7daea3; --b: #a9b665; }
+    .sx-swatch[data-sxtheme="kanagawa"] { --a: #7e9cd8; --b: #9bb8ea; }
+
+    /* theme swatch strip */
+    .sx-themes {
+      margin-top: 1.8rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: .65rem;
+      font-family: var(--sx-font-mono);
+      font-size: .68rem;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: var(--sx-dim);
+    }
+    .sx-swatch {
+      width: 1.2rem; height: 1.2rem;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, .28);
+      padding: 0;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--a) 0 50%, var(--b) 50% 100%);
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .sx-swatch:hover { transform: scale(1.25); }
+    .sx-swatch.active { box-shadow: 0 0 0 2px var(--sx-bg), 0 0 0 4px var(--sx-cyan); }
+    .sx-themes-more {
+      font-size: .64rem;
+      letter-spacing: .12em;
+      margin-left: .5rem;
+      color: var(--sx-dim) !important;
+      text-decoration: underline dotted;
+    }
+    .sx-themes-more:hover { color: var(--sx-cyan) !important; }
+
+    /* ---- hero ---- */
+    .sx-hero {
+      position: relative;
+      min-height: 82vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 4.5rem 0 3.5rem;
+      overflow: hidden;
+    }
+    .sx-hero canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: .5;
+      will-change: transform;
+    }
+    .sx-hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 70% 55% at 50% 42%, transparent 30%, var(--sx-bg) 100%);
+      pointer-events: none;
+      will-change: transform;
+    }
+    .sx-hero-inner { position: relative; z-index: 2; }
+    .sx-hero-figure { display: none; }
+    @media (min-width: 62rem) {
+      .sx-hero-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+        align-items: center;
+        gap: 1.5rem;
+        text-align: left;
+      }
+      .sx-hero-copy .sx-tagline,
+      .sx-hero-copy .sx-sub { margin-left: 0; margin-right: 0; }
+      .sx-hero-copy .sx-ctas,
+      .sx-hero-copy .sx-themes { justify-content: flex-start; }
+      .sx-hero .sx-title { font-size: clamp(2.2rem, 4.3vw, 3.8rem); }
+      .sx-hero-figure {
+        display: block;
+        height: min(36rem, 74vh);
+        /* match the 784x1153 portrait's aspect so the mask fade tracks the
+           image edges (a wider box would push the fade outside the image) */
+        width: calc(min(36rem, 74vh) * 784 / 1153);
+        justify-self: center;
+        /* background-image inside this media query means narrow viewports
+           never fetch the file at all (an <img> would download even while
+           display:none); the radial mask fades the portrait's edges so the
+           statue emerges from the hex rain */
+        background: url("images/socrates.jpg") center / contain no-repeat;
+        -webkit-mask-image: radial-gradient(ellipse 68% 64% at 50% 46%, #000 32%, transparent 78%);
+        mask-image: radial-gradient(ellipse 68% 64% at 50% 46%, #000 32%, transparent 78%);
+      }
+    }
+    .sx-kicker {
+      font-family: var(--sx-font-mono);
+      font-size: .72rem;
+      letter-spacing: .35em;
+      text-transform: uppercase;
+      color: var(--sx-green);
+      margin-bottom: 1.1rem;
+    }
+    .sx-title {
+      font-family: var(--sx-font-display);
+      font-weight: 900;
+      font-size: clamp(2.4rem, 7.5vw, 4.6rem);
+      letter-spacing: .12em;
+      margin: 0;
+      background: linear-gradient(100deg, var(--sx-heading) 15%, var(--sx-cyan) 45%, var(--sx-green) 80%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 0 22px color-mix(in srgb, var(--sx-cyan) 35%, transparent));
+    }
+    .sx-tagline {
+      font-family: var(--sx-font-mono);
+      font-size: clamp(.8rem, 2vw, .98rem);
+      color: var(--sx-dim);
+      min-height: 2.4em;
+      margin: 1.2rem auto 0;
+      max-width: 44rem;
+    }
+    .sx-tagline .cursor {
+      display: inline-block;
+      width: .55em;
+      background: var(--sx-green);
+      color: transparent;
+      animation: sx-blink 1s steps(1) infinite;
+    }
+    @keyframes sx-blink { 50% { opacity: 0; } }
+    .sx-sub {
+      color: var(--sx-text);
+      max-width: 40rem;
+      margin: 1.1rem auto 0;
+      font-size: 1.15rem;
+    }
+    .sx-ctas {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 2.2rem;
+    }
+    .sx-btn {
+      font-family: var(--sx-font-display);
+      font-weight: 700;
+      font-size: .82rem;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      padding: .85rem 1.9rem;
+      border-radius: 4px;
+      text-decoration: none;
+      transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+      clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+    }
+    .sx-btn-primary {
+      background: linear-gradient(100deg, var(--sx-cyan), var(--sx-green));
+      color: var(--sx-btn-text) !important;
+      box-shadow: 0 0 18px color-mix(in srgb, var(--sx-cyan) 45%, transparent);
+    }
+    .sx-btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 30px color-mix(in srgb, var(--sx-cyan) 70%, transparent); }
+    .sx-btn-ghost {
+      border: 1px solid var(--sx-line);
+      color: var(--sx-cyan) !important;
+      background: color-mix(in srgb, var(--sx-cyan) 6%, transparent);
+    }
+    .sx-btn-ghost:hover { background: color-mix(in srgb, var(--sx-cyan) 14%, transparent); transform: translateY(-2px); }
+    .sx-engines {
+      margin-top: 2.6rem;
+      font-family: var(--sx-font-mono);
+      font-size: .74rem;
+      letter-spacing: .22em;
+      text-transform: uppercase;
+      color: var(--sx-dim);
+    }
+    .sx-engines span { color: var(--sx-green); padding: 0 .55em; }
+
+    /* ---- sections ---- */
+    .sx-section { padding: 4.5rem 0; }
+    .sx-section-title {
+      font-family: var(--sx-font-display);
+      font-weight: 700;
+      font-size: 1.5rem;
+      letter-spacing: .1em;
+      text-align: center;
+      margin: 0 0 .6rem;
+    }
+    .sx-section-title::before { content: "// "; color: var(--sx-green); }
+    .sx-section-sub { text-align: center; color: var(--sx-dim); max-width: 38rem; margin: 0 auto 2.8rem; }
+
+    /* feature grid */
+    .sx-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+      gap: 1.2rem;
+    }
+    .sx-card {
+      position: relative;
+      background: var(--sx-panel);
+      border: 1px solid var(--sx-line);
+      border-radius: 8px;
+      padding: 1.5rem 1.4rem;
+      backdrop-filter: blur(6px);
+      transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+    }
+    .sx-card:hover {
+      transform: translateY(-4px);
+      border-color: color-mix(in srgb, var(--sx-cyan) 50%, transparent);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, .5), 0 0 24px color-mix(in srgb, var(--sx-cyan) 12%, transparent);
+    }
+    .sx-card svg {
+      width: 2rem; height: 2rem;
+      stroke: var(--sx-cyan);
+      fill: none;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      filter: drop-shadow(0 0 6px color-mix(in srgb, var(--sx-cyan) 50%, transparent));
+      margin-bottom: .9rem;
+    }
+    .sx-card h3 {
+      font-family: var(--sx-font-display);
+      font-size: .92rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      margin: 0 0 .5rem;
+      color: var(--sx-heading);
+    }
+    .sx-card p { margin: 0; color: var(--sx-dim); font-size: .98rem; }
+
+    /* terminal-framed media */
+    .sx-frame {
+      background: var(--sx-frame-bg);
+      border: 1px solid var(--sx-line);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, .55), 0 0 40px color-mix(in srgb, var(--sx-cyan) 8%, transparent);
+    }
+    /* titlebar styled after OhMyDebn/Cinnamon: menu left, centered title,
+       minimize/maximize/close glyphs on the right */
+    .sx-frame-bar {
+      display: flex;
+      align-items: center;
+      padding: .45rem .8rem;
+      border-bottom: 1px solid var(--sx-line);
+      font-family: var(--sx-font-mono);
+      font-size: .68rem;
+      color: var(--sx-dim);
+      background: var(--sx-frame-bar);
+    }
+    .sx-frame-menu { font-size: .85rem; line-height: 1; opacity: .75; }
+    .sx-frame-bar em {
+      flex: 1;
+      text-align: center;
+      font-style: normal;
+      letter-spacing: .08em;
+      color: var(--sx-frame-title);
+    }
+    .sx-frame-btns { display: flex; gap: .85rem; line-height: 1; }
+    .sx-frame-btns i {
+      font-style: normal;
+      font-size: .72rem;
+      opacity: .75;
+    }
+    .sx-frame-btns i:last-child { color: #e06c75; opacity: .9; }
+    .sx-frame video, .sx-frame img { display: block; width: 100%; }
+    .sx-frame a { display: block; cursor: zoom-in; }
+
+    /* screenshot highlight rows */
+    .sx-row {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr;
+      gap: 2.4rem;
+      align-items: center;
+      margin-top: 3.2rem;
+    }
+    .sx-row.flip .sx-row-text { order: 2; }
+    .sx-row-text h3 {
+      font-family: var(--sx-font-display);
+      font-size: 1.05rem;
+      letter-spacing: .08em;
+      margin: 0 0 .7rem;
+    }
+    .sx-row-text h3 span { color: var(--sx-green); font-family: var(--sx-font-mono); margin-right: .5rem; }
+    .sx-row-text p { color: var(--sx-dim); margin: 0; }
+    @media (max-width: 48rem) {
+      .sx-row { grid-template-columns: 1fr; gap: 1.2rem; }
+      .sx-row.flip .sx-row-text { order: 0; }
+    }
+
+    /* bottom CTA */
+    .sx-final {
+      text-align: center;
+      padding: 5rem 0 5.5rem;
+      background:
+        radial-gradient(ellipse 60% 80% at 50% 100%, color-mix(in srgb, var(--sx-cyan) 10%, transparent), transparent 70%);
+    }
+    .sx-final .sx-section-title { font-size: 1.7rem; }
+
+    /* reveal-on-scroll */
+    .reveal { opacity: 0; transform: translateY(26px); transition: opacity .6s ease, transform .6s ease; }
+    .reveal.is-visible { opacity: 1; transform: none; }
+    @media (prefers-reduced-motion: reduce) {
+      .reveal { opacity: 1; transform: none; transition: none; }
+      .sx-btn, .sx-card, .sx-swatch { transition: none; }
+      .sx-tagline .cursor { animation: none; }
+    }
+  </style>
+{% endblock %}
+
+{# no sidebars on the splash page #}
+{% block site_nav %}{% endblock %}
+
+{% block container %}
+<div class="sx">
+
+  <!-- ======================= HERO ======================= -->
+  <section class="sx-hero">
+    <canvas id="sx-hexrain" aria-hidden="true"></canvas>
+    <div class="sx-hero-inner sx-wrap">
+      <div class="sx-hero-copy">
+      <div class="sx-kicker">[ threat analysis // containerized ]</div>
+      <h1 class="sx-title">SO&#8209;CRATES</h1>
+      <p class="sx-tagline"><span id="sx-typed"></span><span class="cursor">&#9608;</span></p>
+      <p class="sx-sub">
+        Drop in a pcap, log, or binary. Get alerts, metadata, transcripts,
+        hexdumps, and AI&#8209;guided playbooks &mdash; all in one page.
+      </p>
+      <div class="sx-ctas">
+        <a class="sx-btn sx-btn-primary" href="quick-demo/">Launch Interactive Demo</a>
+        <a class="sx-btn sx-btn-ghost" href="installation/">Install</a>
+      </div>
+      <div class="sx-engines">
+        Powered by <span>Suricata</span>&#183;<span>YARA</span>&#183;<span>Sigma</span>&#183;<span>AI Playbooks</span>
+      </div>
+      <div class="sx-themes" role="group" aria-label="Page theme">
+        <span>[ theme ]</span>
+        <button class="sx-swatch" data-sxtheme="" title="Default" aria-label="Default theme"></button>
+        <button class="sx-swatch" data-sxtheme="midnight" title="Midnight" aria-label="Midnight theme"></button>
+        <button class="sx-swatch" data-sxtheme="ohmydebn" title="OhMyDebn" aria-label="OhMyDebn theme"></button>
+        <button class="sx-swatch" data-sxtheme="hackerman" title="Hackerman" aria-label="Hackerman theme"></button>
+        <button class="sx-swatch" data-sxtheme="nord" title="Nord" aria-label="Nord theme"></button>
+        <button class="sx-swatch" data-sxtheme="dracula" title="Dracula" aria-label="Dracula theme"></button>
+        <button class="sx-swatch" data-sxtheme="gruvbox" title="Gruvbox" aria-label="Gruvbox theme"></button>
+        <button class="sx-swatch" data-sxtheme="kanagawa" title="Kanagawa" aria-label="Kanagawa theme"></button>
+        <a class="sx-themes-more" href="themes/">35 themes in the app &rarr;</a>
+      </div>
+      </div>
+      <div class="sx-hero-figure" aria-hidden="true"></div>
+    </div>
+  </section>
+
+  <!-- ======================= FEATURES ======================= -->
+  <section class="sx-section">
+    <div class="sx-wrap">
+      <h2 class="sx-section-title reveal">Capabilities</h2>
+      <p class="sx-section-sub reveal">One container. Three detection engines. Zero infrastructure to stand up.</p>
+      <div class="sx-grid">
+        <div class="sx-card reveal">
+          <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.2"/><circle cx="19" cy="5" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M7 11l9.5-5.2M7 13l9.5 5.2"/></svg>
+          <h3>Suricata Network Analysis</h3>
+          <p>Replay pcaps through Suricata for alerts, protocol metadata, flow records, and extracted files.</p>
+        </div>
+        <div class="sx-card reveal">
+          <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 15h6M9 18h4"/></svg>
+          <h3>YARA Binary Scanning</h3>
+          <p>Scan uploaded binaries and files carved from network traffic against YARA rule sets.</p>
+        </div>
+        <div class="sx-card reveal">
+          <svg viewBox="0 0 24 24"><path d="M4 5h16M4 10h16M4 15h10"/><circle cx="18" cy="17" r="3.2"/><path d="M20.4 19.4L23 22"/></svg>
+          <h3>Sigma Log Detection</h3>
+          <p>Run log files through Sigma rules to surface suspicious events across your evidence.</p>
+        </div>
+        <div class="sx-card reveal">
+          <svg viewBox="0 0 24 24"><path d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
+          <h3>AI Summaries &amp; Playbooks</h3>
+          <p>Alerts come with an AI summary of what the rule detects, plus a plain&#8209;English investigation playbook.</p>
+        </div>
+        <div class="sx-card reveal">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></svg>
+          <h3>Pivot, Hunt &amp; Correlate</h3>
+          <p>Click any value to include, exclude, hunt, or correlate every log sharing its community ID.</p>
+        </div>
+        <div class="sx-card reveal">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h2M11 9h2M15 9h2M7 13h2M11 13h2M15 13h2M7 17h6"/></svg>
+          <h3>Transcripts &amp; Hexdumps</h3>
+          <p>Drill from an alert straight into the ASCII transcript or hexdump without leaving the page.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= DEMO VIDEO ======================= -->
+  <section class="sx-section">
+    <div class="sx-wrap">
+      <h2 class="sx-section-title reveal">See it run</h2>
+      <p class="sx-section-sub reveal">A recorded walkthrough: load a sample pcap, review each data type, filter with Aggregation Tables, and drill into a single event.</p>
+      <div class="sx-frame reveal">
+        <div class="sx-frame-bar"><span class="sx-frame-menu">&#9776;</span><em>so-crates &mdash; demo.pcap</em><span class="sx-frame-btns"><i>&ndash;</i><i>&#9633;</i><i>&#10005;</i></span></div>
+        <video controls preload="none" width="100%" src="videos/demo.mp4" poster="videos/demo-poster.jpg"></video>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= SCREENSHOT HIGHLIGHTS ======================= -->
+  <section class="sx-section">
+    <div class="sx-wrap">
+      <h2 class="sx-section-title reveal">Inside the console</h2>
+
+      <div class="sx-row reveal">
+        <div class="sx-row-text">
+          <h3><span>01</span>Analyze anything</h3>
+          <p>Upload a pcap, log, or binary &mdash; or reload a previous analysis. Network alerts, file alerts, metadata, and extracted streams land on a single page.</p>
+        </div>
+        <div class="sx-frame"><div class="sx-frame-bar"><span class="sx-frame-menu">&#9776;</span><em>analysis</em><span class="sx-frame-btns"><i>&ndash;</i><i>&#9633;</i><i>&#10005;</i></span></div><a class="glightbox" href="images/so-crates-analysis.png" data-gallery="tour" aria-label="View full-size: Analysis screen"><img src="images/so-crates-analysis.png" alt="Analysis screen" loading="lazy"></a></div>
+      </div>
+
+      <div class="sx-row flip reveal">
+        <div class="sx-row-text">
+          <h3><span>02</span>Know what it means</h3>
+          <p>Each Suricata, Sigma, or YARA alert ships with an AI&#8209;generated summary and a Playbook of investigation questions specific to that detection.</p>
+        </div>
+        <div class="sx-frame"><div class="sx-frame-bar"><span class="sx-frame-menu">&#9776;</span><em>playbook</em><span class="sx-frame-btns"><i>&ndash;</i><i>&#9633;</i><i>&#10005;</i></span></div><a class="glightbox" href="images/so-crates-playbook.png" data-gallery="tour" aria-label="View full-size: Playbook view"><img src="images/so-crates-playbook.png" alt="Playbook view" loading="lazy"></a></div>
+      </div>
+
+      <div class="sx-row reveal">
+        <div class="sx-row-text">
+          <h3><span>03</span>Slice and dice</h3>
+          <p>Expand the Aggregation Tables and click values to filter. Pivot menus let you include, exclude, hunt, and correlate across the whole capture.</p>
+        </div>
+        <div class="sx-frame"><div class="sx-frame-bar"><span class="sx-frame-menu">&#9776;</span><em>aggregation</em><span class="sx-frame-btns"><i>&ndash;</i><i>&#9633;</i><i>&#10005;</i></span></div><a class="glightbox" href="images/so-crates-aggregation-filtering.png" data-gallery="tour" aria-label="View full-size: Aggregation table filtering"><img src="images/so-crates-aggregation-filtering.png" alt="Aggregation table filtering" loading="lazy"></a></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= FINAL CTA ======================= -->
+  <section class="sx-final">
+    <div class="sx-wrap reveal">
+      <h2 class="sx-section-title">Ready to analyze something sus?</h2>
+      <p class="sx-section-sub">Runs anywhere containers do &mdash; Docker, Podman, or OhMyDebn.</p>
+      <div class="sx-ctas">
+        <a class="sx-btn sx-btn-primary" href="quick-demo/">Launch Interactive Demo</a>
+        <a class="sx-btn sx-btn-ghost" href="installation/">Install</a>
+      </div>
+    </div>
+  </section>
+
+  <script>
+  (function () {
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    /* On software-rendered clients (llvmpipe/SwiftShader — e.g. VMs without GPU
+       passthrough), every animated frame is composited on the CPU, so the rain
+       is disproportionately expensive. Detect and fall back to a static frame. */
+    function softwareGL() {
+      try {
+        var c = document.createElement("canvas");
+        var gl = c.getContext("webgl") || c.getContext("experimental-webgl");
+        if (!gl) return true;
+        var ext = gl.getExtension("WEBGL_debug_renderer_info");
+        var r = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+        return /llvmpipe|swiftshader|softpipe|software/i.test(String(r));
+      } catch (e) { return false; }
+    }
+    var noRain = reduced || softwareGL();
+
+    /* restore saved theme ASAP to avoid a flash of the default palette */
+    var sx = document.querySelector(".sx");
+    var savedTheme = "";
+    try { savedTheme = localStorage.getItem("sx-splash-theme") || ""; } catch (e) {}
+    if (savedTheme) sx.setAttribute("data-sxtheme", savedTheme);
+
+    /* ---- typed tagline ---- */
+    var TAG = "Security Onion Containerized Rapid Analysis of Threats, Evil, and Sus";
+    var typed = document.getElementById("sx-typed");
+    if (reduced) {
+      typed.textContent = TAG;
+    } else {
+      var ti = 0;
+      (function type() {
+        if (ti <= TAG.length) {
+          typed.textContent = TAG.slice(0, ti++);
+          setTimeout(type, 28);
+        }
+      })();
+    }
+
+    /* ---- hexdump rain ---- */
+    var canvas = document.getElementById("sx-hexrain");
+    var ctx = canvas.getContext("2d");
+    var hero = canvas.parentElement;
+    var HEX = "0123456789abcdef";
+    var cols = [], fontSize = 14, colWidth = fontSize * 2.4, raf = null, visible = true;
+    var TICK_MS = 66; /* ~15fps: rain reads as discrete ticks, and CPU stays low */
+    var SCALE = 0.5;  /* half-res backing store: the canvas sits at 50% opacity
+                         behind a gradient, so the upscale is invisible */
+    var last = 0, w = 0, h = 0;
+    var RB = [5, 8, 15], RA = [0, 229, 255], RG = "#39ff9c"; /* rain: bg, accent, highlight */
+
+    function byte_() { return HEX[Math.random() * 16 | 0] + HEX[Math.random() * 16 | 0]; }
+
+    function hexToRgb(s) {
+      var m = /^#([0-9a-f]{6})$/i.exec(s.trim());
+      if (!m) return null;
+      return [parseInt(m[1].slice(0, 2), 16), parseInt(m[1].slice(2, 4), 16), parseInt(m[1].slice(4, 6), 16)];
+    }
+
+    /* rain colors follow the active theme's CSS custom properties */
+    function refreshRainColors() {
+      var cs = getComputedStyle(sx);
+      RB = hexToRgb(cs.getPropertyValue("--sx-bg")) || RB;
+      RA = hexToRgb(cs.getPropertyValue("--sx-cyan")) || RA;
+      RG = cs.getPropertyValue("--sx-green").trim() || RG;
+      ctx.fillStyle = "rgb(" + RB.join(",") + ")";
+      ctx.fillRect(0, 0, w, h);
+      if (noRain) staticFrame();
+    }
+
+    function resize() {
+      w = hero.clientWidth;
+      h = hero.clientHeight;
+      canvas.width = w * SCALE;
+      canvas.height = h * SCALE;
+      ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+      var n = Math.ceil(w / colWidth);
+      cols = [];
+      for (var i = 0; i < n; i++) {
+        cols.push({
+          y: Math.random() * h,
+          every: 1 + (Math.random() * 3 | 0),
+          tick: 0
+        });
+      }
+      ctx.fillStyle = "rgb(" + RB.join(",") + ")";
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    function frame(now) {
+      if (visible && !noRain) raf = requestAnimationFrame(frame);
+      if (now - last < TICK_MS) return;
+      last = now;
+      ctx.fillStyle = "rgba(" + RB.join(",") + ", 0.22)";
+      ctx.fillRect(0, 0, w, h);
+      ctx.font = fontSize + "px 'Roboto Mono', monospace";
+      for (var i = 0; i < cols.length; i++) {
+        var c = cols[i];
+        if (++c.tick % c.every) continue;
+        ctx.fillStyle = Math.random() < 0.06 ? RG : "rgba(" + RA.join(",") + ", 0.55)";
+        ctx.fillText(byte_(), i * colWidth, c.y);
+        c.y += fontSize;
+        if (c.y > h + fontSize) {
+          c.y = -fontSize * (Math.random() * 20);
+          c.every = 1 + (Math.random() * 3 | 0);
+        }
+      }
+    }
+
+    function staticFrame() {
+      ctx.font = fontSize + "px 'Roboto Mono', monospace";
+      for (var i = 0; i < cols.length; i++) {
+        for (var y = 0; y < h; y += fontSize * 1.4) {
+          if (Math.random() < 0.25) {
+            ctx.fillStyle = "rgba(" + RA.join(",") + ", " + (0.08 + Math.random() * 0.25) + ")";
+            ctx.fillText(byte_(), i * colWidth, y);
+          }
+        }
+      }
+    }
+
+    canvas.dataset.rain = noRain ? "static" : "animated";
+    resize();
+    window.addEventListener("resize", function () { resize(); if (noRain) staticFrame(); });
+    if (noRain) {
+      staticFrame();
+    } else {
+      new IntersectionObserver(function (entries) {
+        visible = entries[0].isIntersecting;
+        if (visible && raf === null) raf = requestAnimationFrame(frame);
+        if (!visible && raf !== null) { cancelAnimationFrame(raf); raf = null; }
+      }).observe(hero);
+      raf = requestAnimationFrame(frame);
+    }
+
+    /* ---- theme chooser ---- */
+    var swatches = document.querySelectorAll(".sx-swatch");
+    function applyTheme(name) {
+      if (name) sx.setAttribute("data-sxtheme", name);
+      else sx.removeAttribute("data-sxtheme");
+      swatches.forEach(function (b) {
+        b.classList.toggle("active", (b.dataset.sxtheme || "") === name);
+      });
+      try { localStorage.setItem("sx-splash-theme", name); } catch (e) {}
+      refreshRainColors();
+    }
+    swatches.forEach(function (b) {
+      b.addEventListener("click", function () { applyTheme(b.dataset.sxtheme || ""); });
+    });
+    applyTheme(savedTheme);
+
+    /* ---- reveal on scroll ---- */
+    var items = document.querySelectorAll(".reveal");
+    if (reduced || !("IntersectionObserver" in window)) {
+      items.forEach(function (el) { el.classList.add("is-visible"); });
+    } else {
+      var ro = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { e.target.classList.add("is-visible"); ro.unobserve(e.target); }
+        });
+      }, { threshold: 0.12 });
+      items.forEach(function (el) { ro.observe(el); });
+    }
+  })();
+  </script>
+</div>
+{% endblock %}

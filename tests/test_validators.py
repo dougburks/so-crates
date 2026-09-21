@@ -500,5 +500,82 @@ class TestIsEpochStale(unittest.TestCase):
         self.assertFalse(validators.is_epoch_stale(time.time() - (23 * 3600), max_age_hours=24))
 
 
+class TestIPBlockingProperties(unittest.TestCase):
+    """_ip_is_blocked: property-based SSRF address classes (incl. the
+    0.0.0.0 -> localhost connect() behavior on Linux)."""
+
+    def _blocked(self, addr):
+        import ipaddress
+        return validators._ip_is_blocked(ipaddress.ip_address(addr))
+
+    def test_unspecified_ipv4_blocked(self):
+        self.assertTrue(self._blocked('0.0.0.0'))
+
+    def test_this_network_blocked(self):
+        self.assertTrue(self._blocked('0.1.2.3'))
+
+    def test_unspecified_ipv6_blocked(self):
+        self.assertTrue(self._blocked('::'))
+
+    def test_link_local_ipv6_blocked(self):
+        self.assertTrue(self._blocked('fe80::1'))
+
+    def test_multicast_blocked(self):
+        self.assertTrue(self._blocked('224.0.0.1'))
+
+    def test_loopback_blocked(self):
+        self.assertTrue(self._blocked('127.0.0.1'))
+
+    def test_private_blocked(self):
+        self.assertTrue(self._blocked('10.1.2.3'))
+
+    def test_public_not_blocked(self):
+        self.assertFalse(self._blocked('8.8.8.8'))
+        self.assertFalse(self._blocked('2001:4860:4860::8888'))
+
+
+class TestReservedArtifactFilenames(unittest.TestCase):
+    """Analyzer output artifacts must be rejected as upload names - a
+    collision would overwrite results mid-scan or be deleted by reanalyze."""
+
+    def test_artifact_names_rejected(self):
+        for name in ('yara_matches.json', 'sigma_matches.json', 'zircolite.log',
+                     '.zircolite_events.db', 'file_metadata.json', 'notes.txt'):
+            with self.assertRaises(ValueError, msg=name):
+                validators.sanitize_filename(name)
+
+    def test_similar_names_still_allowed(self):
+        self.assertEqual(validators.sanitize_filename('my_yara_matches.json'),
+                         'my_yara_matches.json')
+
+
+class TestZipMemberCap(unittest.TestCase):
+    """validate_zip_extraction must cap member count - each member becomes
+    its own analysis (pcaps each spawn a Suricata process)."""
+
+    def _make_zip(self, count):
+        import io, zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            for i in range(count):
+                zf.writestr(f'file{i}.log', 'x')
+        buf.seek(0)
+        return zipfile.ZipFile(buf)
+
+    def test_over_cap_rejected(self):
+        import tempfile, config
+        with self._make_zip(config.MAX_ZIP_MEMBERS + 1) as zf, \
+                tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(ValueError) as ctx:
+                validators.validate_zip_extraction(zf, td)
+            self.assertIn('too many files', str(ctx.exception))
+
+    def test_at_cap_allowed(self):
+        import tempfile, config
+        with self._make_zip(config.MAX_ZIP_MEMBERS) as zf, \
+                tempfile.TemporaryDirectory() as td:
+            validators.validate_zip_extraction(zf, td)  # must not raise
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

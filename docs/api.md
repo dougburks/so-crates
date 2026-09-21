@@ -16,7 +16,7 @@ Redirects to `/socrates.html`.
 
 Returns the running SO-CRATES version.
 
-**Response:** `{"version": "4.1.0"}`
+**Response:** `{"version": "4.2.0"}`
 
 ---
 
@@ -52,8 +52,8 @@ Returns event data from Suricata's eve.json (via SQLite index or direct JSON par
 
 | Parameter | Required | Default | Description |
 |---|---|---|---|
-| `md5` | No | none | MD5 hash of a historical analysis (returns an empty array if omitted) |
-| `type` | No | all | Filter by event type - any `event_type` Suricata's eve.json can produce (see [Event Types](architecture/event-types.md)), plus the app's own synthetic types (`filealerts`, `log`, `sigmaalert`, `protocol_decode`) |
+| `md5` | Yes | - | MD5 hash of a historical analysis (`400` if omitted) |
+| `type` | No | all | Filter by event type - any `event_type` Suricata's eve.json can produce (see [Event Types](architecture/event-types.md)), plus the app's own synthetic types (`filealerts`, `log`, `protocol_decode`). Sigma alerts live in their own table and are served by `GET /api/sigma-alerts`, not here. |
 | `q` | No | none | Full-text search query (searches all event JSON). Multiple `q` params AND together. |
 | `offset` | No | `0` | Pagination offset |
 | `limit` | No | `1000` | Max events to return (capped at `MAX_QUERY_LIMIT`, 100,000 by default - see `GET /api/limits`) |
@@ -68,10 +68,10 @@ an empty string.
 
 **Example:**
 ```text
-GET /api/events?type=alert&limit=100
-GET /api/events?q=192.168.1.1
-GET /api/events?type=http&q=GET
-GET /api/events?q=tcp&q=80          # AND: events containing both "tcp" and "80"
+GET /api/events?md5=<hash>&type=alert&limit=100
+GET /api/events?md5=<hash>&q=192.168.1.1
+GET /api/events?md5=<hash>&type=http&q=GET
+GET /api/events?md5=<hash>&q=tcp&q=80          # AND: events containing both "tcp" and "80"
 ```
 
 ---
@@ -128,6 +128,8 @@ Returns on-disk rule counts, last-updated times, and staleness for all three rul
 
 **Response:** `{"suricata": {"count": <number or null>, "updated": <epoch or null>, "stale": <boolean or null>}, "yara": {"count": ..., "updated": ..., "stale": ...}, "sigma": {"windows": {"count": ..., "updated": ..., "stale": ...}, "linux": {...}}, "staleThresholdHours": <number>}` - `count`/`updated`/`stale` are all `null` if that ruleset has never been set up (rather than `stale: true`, since "never downloaded" is a different, more urgent problem the Rules modal's counts already surface, distinct from "downloaded but old"). `stale` is `true` once `updated` is older than `staleThresholdHours` (the server's `config.RULES_MAX_AGE_HOURS`) - the single source of truth both the Rules modal's own date-color warning and the notification read, rather than each hardcoding its own threshold.
 
+The `suricata` object additionally carries the rule-source configuration the Rules modal edits via `POST /api/update-rules`: `enabledSources` (currently enabled slugs), `showProtocolDecodeAlerts` (boolean), `availableSources` (map of every known slug to its metadata, each with a `bakedIn` boolean telling the modal whether enabling that source for the first time needs internet), `defaultSources` (what "Revert to Default" restores - served here so the frontend can't drift from `DEFAULT_SURICATA_SOURCES`), and `sidRanges` (an array of `{"min", "max", "label"}` signature-ID ranges, the single source of truth `classifyRuleset()` in `static/socrates.js` uses to attribute an alert's `signature_id` to its ruleset).
+
 ---
 
 ### `GET /api/rule-update-status`
@@ -142,11 +144,11 @@ Returns the live/last-run state of each ruleset's update job, polled by the Rule
 
 Starts an update for one ruleset, or all three. Triggered by the Rules modal's per-ruleset "Update" buttons and its "Update All" button.
 
-**Request body:** `{"ruleset": "suricata"|"yara"|"sigma"|"all"}`
+**Request body:** `{"ruleset": "suricata"|"yara"|"sigma"|"all"}` - plus two optional Suricata-only fields (ignored for the other rulesets even under `"all"`): `sources`, a list of Suricata rule-source slugs to enable (validated against `SURICATA_RULE_SOURCES`), and `showProtocolDecodeAlerts`, a boolean.
 
 **Response:** `{"status": "started"}`
 
-**Errors:** `400` if `ruleset` isn't one of the four allowed values. `409` ("Rule update already in progress") if the targeted ruleset (or, for `"all"`, any one of the three) is already running.
+**Errors:** `400` if `ruleset` isn't one of the four allowed values, if `sources` isn't a list of strings or names an unknown slug, or if `showProtocolDecodeAlerts` isn't a boolean. `409` ("Rule update already in progress") if the targeted ruleset (or, for `"all"`, any one of the three) is already running.
 
 ---
 
@@ -175,7 +177,7 @@ Unfiltered (no `q`) responses are cached server-side per `(md5, type)` and inval
 
 ### `GET /api/aggregation-data`
 
-Returns per-column frequency tables (top 10 values by count) for the given event type, computed server-side - the data behind the "Aggregations" panel.
+Returns per-column frequency tables (one page of values by count, 10 per page by default) for the given event type, computed server-side - the data behind the "Aggregations" panel.
 
 **Query Parameters:**
 
@@ -184,11 +186,35 @@ Returns per-column frequency tables (top 10 values by count) for the given event
 | `md5` | Yes | - | MD5 hash of the analysis |
 | `type` | No | all (merged view) | Event type (see [Event Types](architecture/event-types.md)), or omitted for the merged "All Events" view. Not supported for event types whose fields have no static JSON path to aggregate on server-side - currently `log`/`sigmaalert`/`binary` (dynamic/untrusted columns) and `mqtt`/`ldap` (dynamically keyed by message/operation subtype) - these fall back to client-side computation instead; see `AGGREGATION_JSON_PATHS` in `db.py` for the authoritative, current list. |
 | `q` | No | none | Full-text search query. Multiple `q` params AND together. |
+| `column` | No | none (all columns) | Restrict the response to a single column label, for paginating one column at a time |
+| `page` | No | `1` | Page number for Prev/Next pagination; non-numeric values fall back to `1` |
+| `page_size` | No | `10` | Values per page. Only `10`/`25`/`50`/`100` are accepted (the exact `AGG_PAGE_SIZE_OPTIONS` the "Items per page" selector offers); anything else falls back to the default 10 rather than erroring |
 
-**Response:** Object mapping column label to an array of `{"value": ..., "count": ...}`, sorted descending by count and capped to the top 10.
+**Response:** Object mapping column label to an array of `{"value": ..., "count": ...}`, sorted descending by count and capped to one page (`page_size` values, default 10).
 ```json
 {"Protocol": [{"value": "TCP", "count": 1200}, {"value": "UDP", "count": 340}],
  "Source IP": [{"value": "10.0.0.5", "count": 88}, ...]}
+```
+
+Unfiltered (no `q`) responses are cached server-side per `(md5, type, column, page, page_size)` (the Sankey cache's plain `(md5, type)` key doesn't apply here since these responses vary per page).
+
+---
+
+### `GET /api/aggregation-totals`
+
+Returns the distinct-value count per aggregation column, matching the same column set and filtering as `/api/aggregation-data` - fetched once per section open/filter change (not on every Prev/Next click) so the client can compute page counts for `/api/aggregation-data`'s per-page results (a page can come back shorter than `page_size` purely because its offset is near the end, not because that's the overall total).
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `md5` | Yes | - | MD5 hash of the analysis |
+| `type` | No | all (merged view) | Event type, or omitted for the merged "All Events" view. Same server-side-aggregation constraint as `/api/aggregation-data` - unsupported types return an empty object. |
+| `q` | No | none | Full-text search query. Multiple `q` params AND together. |
+
+**Response:** Object mapping column label to its total distinct-value count; columns with no values are omitted.
+```json
+{"Protocol": 2, "Source IP": 340}
 ```
 
 Unfiltered (no `q`) responses are cached server-side per `(md5, type)`, same as `/api/sankey-data`.
@@ -217,7 +243,7 @@ Carves a single TCP/UDP stream from the PCAP using `tcpdump` and returns it as a
 
 ### `GET /api/ascii-stream`
 
-Extracts ASCII payload from a TCP/UDP stream using `tshark`. Tries TCP first, falls back to UDP. Truncated to `MAX_TRANSCRIPT_SIZE` characters (100,000 by default), capped to the first `MAX_TRANSCRIPT_LINES` lines (500 by default) once that threshold is hit.
+Extracts ASCII payload from a TCP/UDP stream using `tshark`. Tries TCP first, falls back to UDP. Capped to the first 500 lines (`MAX_TRANSCRIPT_LINES`) and to 100,000 characters (`MAX_TRANSCRIPT_SIZE`), whichever is hit first.
 
 **Query Parameters:**
 
@@ -333,7 +359,7 @@ Returns Sigma alerts stored in `events.db` for the specified analysis.
 
 | Parameter | Required | Default | Description |
 |---|---|---|---|
-| `md5` | No | none | MD5 hash of a historical analysis (returns an empty array if omitted) |
+| `md5` | Yes | - | MD5 hash of a historical analysis (`400` if omitted) |
 | `offset` | No | `0` | Pagination offset |
 | `limit` | No | `1000` | Max alerts to return (capped at `MAX_QUERY_LIMIT`, 100,000 by default - see `GET /api/limits`) |
 | `severity` | No | none | Filter by severity level |
@@ -364,15 +390,15 @@ Returns the total Sigma alert count for the specified analysis, optionally filte
 
 ### `GET /api/sigma-stats`
 
-Returns Sigma alert statistics (counts grouped by severity/rule/etc.) for the specified analysis.
+Returns Sigma alert statistics (per-severity counts, total, and MITRE techniques) for the specified analysis.
 
 **Query Parameters:**
 
 | Parameter | Required | Default | Description |
 |---|---|---|---|
-| `md5` | No | none | MD5 hash of a historical analysis (returns an empty object if omitted) |
+| `md5` | Yes | - | MD5 hash of a historical analysis (`400` if omitted) |
 
-**Response:** Object mapping statistic names to counts.
+**Response:** `{"by_severity": {"<severity>": <count>, ...}, "total": <number>, "mitre_techniques": ["<technique id>", ...]}` - `by_severity` is ordered critical/high/medium/low, and `mitre_techniques` is a sorted list of unique technique IDs (not counts). An empty object if the analysis has no `sigma_alerts` table.
 
 ---
 
@@ -446,10 +472,10 @@ or for log files:
 {"status": "processing", "md5": "<hash>", "phase": "logs"}
 ```
 
-If the upload was a ZIP archive containing more than one supported file, only the first is analyzed (a PCAP takes priority; otherwise the first non-hidden file) and every response above gains a `filesSkipped` field with the count of files that were dropped:
+If the upload was a ZIP archive containing more than one supported file, every extracted file is analyzed, each as its own independent analysis - PCAPs get network analysis, everything else gets log/binary analysis. One exception: hidden non-PCAP members (dotfiles such as `.DS_Store`) are silently ignored - they get no analysis and are not counted anywhere. The response describes the primary file (a PCAP takes priority; otherwise the first non-hidden file) and gains an `additionalMd5s` array with the MD5 of every other file's analysis; a `filesSkipped` field appears only if individual files genuinely failed (hashing, commit, or filename-validation errors), with that count:
 
 ```json
-{"status": "processing", "md5": "<hash>", "phase": "network", "filesSkipped": 2}
+{"status": "processing", "md5": "<hash>", "phase": "network", "additionalMd5s": ["<hash>", "<hash>"], "filesSkipped": 1}
 ```
 
 **Response (already analyzed):**
@@ -458,11 +484,11 @@ If the upload was a ZIP archive containing more than one supported file, only th
 ```
 
 **Processing flow:**
-1. Detects file type (PCAP magic bytes, log content, or `.zip` extension)
+1. Detects file type (PCAP magic bytes, log content, or ZIP `PK` magic bytes - except files with Office extensions like `.docx`/`.xlsx`, which are ZIPs internally but analyzed as regular files)
 2. Computes MD5 hash
 3. If already analyzed (`eve.json` for PCAPs, `events.db` for non-PCAPs), returns `ready`
 4. For PCAPs: saves file, spawns Suricata in background thread, returns `processing` with `phase: "network"`
-5. For log files: saves file and imports them into `events.db` in the background, returns `processing` with `phase: "logs"`
+5. For log files: saves the file and imports it into `events.db` in the background, returns `processing` with `phase: "logs"`
 6. For other files: saves file, runs YARA/EXIF scans in the background, returns `processing` with `phase: "files"`
 7. When analysis finishes, results are available in `events.db` (or `eve.json` for PCAPs)
 
@@ -514,7 +540,7 @@ or, if analysis (Suricata/YARA/Zircolite) failed:
 {"status": "error", "message": "<failure reason>"}
 ```
 
-The `phase` field reflects the current analysis stage (`network`, `logs`, or `files`), or an empty string if no phase file exists yet. `meta` is present whenever `.meta` exists for the analysis and omitted otherwise (including on the `error` response). Same "no 404 for a well-formed-but-nonexistent MD5" caveat as `GET /api/status` applies here too.
+The `phase` field reflects the current analysis stage (`network`, `logs`, `files`, or `importing` - the SQLite build that runs after the YARA scan, just before results are ready), or an empty string if no phase file exists yet. `meta` is present whenever `.meta` exists for the analysis and omitted otherwise (including on the `error` response). Same "no 404 for a well-formed-but-nonexistent MD5" caveat as `GET /api/status` applies here too.
 
 **Ready detection:** the same check for every file type - `events.db` exists and no `.phase` file is still present (`events.db` is created the instant ingest starts, well before it finishes, so its existence alone isn't sufficient; `.phase` stays set for exactly that ingest window).
 
@@ -536,7 +562,7 @@ Only `md5` is read from the request body - the response's `phase` is determined 
 {"status": "processing", "md5": "<hash>", "phase": "network"}
 ```
 
-**Errors:** `400` for invalid MD5 or unsafe path. `404` if analysis not found. `409` if analysis is already in progress.
+**Errors:** `400` for invalid MD5 or unsafe path. `404` if analysis not found. `409` if analysis is already in progress. `500` if Suricata fails to start (the failure reason from the analysis's `.error` file, e.g. Suricata missing or a permissions problem - distinguished from the `409` case by whether `.error` was written).
 
 ---
 
@@ -714,4 +740,4 @@ Deletes all historical analyses (every MD5-shaped directory under the data root)
 | `409` | Conflict - analysis already in progress for this MD5 |
 | `413` | File too large |
 | `500` | Internal server error (generic message, no details leaked) |
-| `507` | Not enough disk space available for this upload |
+| `507` | Not enough disk space available on the server for this upload |

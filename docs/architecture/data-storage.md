@@ -4,8 +4,12 @@
 ~/socrates-data/
   suricata/
     suricata.yaml          # Copied from /etc/suricata/, rule path rewritten
-    rules/
-      suricata.rules       # Downloaded by suricata-update (online) or copied from baked-in image (offline/air-gapped)
+    rules/                 # Active rules: one file per enabled source, named by _source_filename()
+                           # (e.g. et-open.rules), plus Suricata's own bundled event rule files
+    rules-available/       # Per-source rules library - seeded from baked-in/staged copies;
+                           # downloads happen only via the Rules modal
+    enabled_sources.json   # Which curated rule sources are currently active
+    show_protocol_decode_alerts.json  # Whether Suricata's built-in decoder rules stay active
     disable.conf
   zircolite/               # Optional: the `zircolite`/`zircolite.py` command on PATH (installed via pip,
                            # or baked into the Docker image at build time) is used first; a pre-existing
@@ -24,7 +28,7 @@
     name.txt               # Human-readable display name
     notes.txt              # Freeform per-analysis notes (optional, written by POST /api/analysis-notes)
     filestore/             # Extracted files from Suricata file-store (PCAP only)
-    yara_matches.json      # YARA scan results (auto-created after analysis)
+    yara_matches.json      # YARA scan results (auto-created after analysis, PCAP only)
     sigma_matches.json     # Sigma detection results (log files only)
     file_metadata.json     # Hashes/entropy/strings/EXIF, keyed by SHA256 (standalone binary uploads and extracted PCAP filestore files)
     fast.log               # Suricata's plaintext alert log (PCAP only)

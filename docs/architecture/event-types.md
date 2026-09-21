@@ -10,7 +10,7 @@
 | `ftp` | FTP commands | `ftp.command`, `ftp.command_data`, `ftp.completion_code`, `ftp.reply` |
 | `anomaly` | Protocol anomalies | `anomaly.event`, `anomaly.type`, `anomaly.layer`, `anomaly.app_proto` |
 | `fileinfo` | File transfers | `fileinfo.filename`, `fileinfo.magic` |
-| `filealerts` | YARA matches on extracted files | `rule_name`, `sha256`, `tags` |
+| `filealerts` | YARA matches on extracted files | `filealerts.rule_name`, `filealerts.sha256`, `filealerts.tags` |
 | `dnp3` | DNP3 industrial-control events | `dnp3.src`, `dnp3.dst`, `dnp3.type` |
 | `modbus` | Modbus industrial-control events | `modbus.request.function_code`, `modbus.request.unit_id` |
 | `pgsql` | PostgreSQL protocol events | `pgsql.request.simple_query`, `pgsql.response.command_completed` |
@@ -20,7 +20,7 @@
 | `pop3` | POP3 mail retrieval | `pop3.request.command`/`args`, `pop3.response.status`/`data` |
 | `mdns` | Multicast DNS (.local) | `mdns.queries[].rrname`/`rrtype` (same V3-style array shape as `dns` - see note below) |
 | `ldap` | LDAP directory operations | keyed by operation type (`bind_request`/`search_request`/`modify_request`/...), e.g. `ldap.request.operation`, `ldap.responses[].bind_response.result_code` |
-| `quic` | QUIC connections | `quic.sni`, `quic.version`, `quic.ja3`, `quic.ja3s` |
+| `quic` | QUIC connections | `quic.sni`, `quic.version`, `quic.ja3.hash`, `quic.ja3s.hash` |
 | `dhcp` | DHCP lease negotiation | `dhcp.dhcp_type`, `dhcp.client_mac`, `dhcp.assigned_ip`, `dhcp.hostname` |
 | `ftp_data` | FTP data-channel transfers | `ftp_data.command`, `ftp_data.filename` |
 | `smb` | SMB/CIFS file-share operations | `smb.command`, `smb.filename`, `smb.share`, `smb.ntlmssp.user` |
@@ -38,8 +38,8 @@
 | `bittorrent_dht` | BitTorrent DHT messages | `bittorrent_dht.request_type`, `bittorrent_dht.info_hash` |
 | `smtp` | SMTP transactions | `smtp.helo`, `smtp.mail_from`, `smtp.rcpt_to` |
 | `arp` | ARP requests/replies (decode-layer, not app-layer - disabled by default, see note below) | `arp.opcode`, `arp.src_mac`, `arp.dest_mac` |
-| `log` | Imported log events (EVTX, JSON, CSV, XML, generic logs) | `original_log`, parsed dynamic fields |
-| `sigmaalert` | Sigma rule matches on imported logs | `title`, `severity`, `rule_level` |
+| `log` | Imported log events (EVTX, JSON, CSV, XML, generic logs) | parsed dynamic fields (one column per log field) |
+| `sigmaalert` | Sigma rule matches on imported logs | `rule_title`, `severity`, `level`, `original_log` |
 | `protocol_decode` | Suricata's built-in protocol-command-decode alerts, reclassified out of `alert` - labeled "Decoder Alerts" in the UI (synthetic - see note below) | `alert.signature`, `alert.severity`, `alert.category`, `alert.rule` |
 | `stats` | Suricata internal stats | (excluded from display) |
 

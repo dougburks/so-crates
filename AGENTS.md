@@ -321,8 +321,9 @@ Before cutting a release:
    image afterward (`podman rm -f`/`podman rmi`) rather than leaving it
    alongside the deployment's real image.
 10. **Remove any stray `tmp*` directories or files** left in the project root
-    (e.g. `tmp-********` dirs, `tmp*.js` files) - both patterns are already
-    gitignored, so they won't show up in `git status`, but they're debris
-    from interrupted test runs or agent sandboxes (see `tests/jsdom_helper.py`'s
-    `run_jsdom()`, which writes then unlinks a temp `.js` file per JS test)
-    and are easy to miss with `find . -maxdepth 1 -iname 'tmp*'`.
+    (e.g. `tmp-********` dirs) - the pattern is gitignored, so they won't
+    show up in `git status`, but they're debris from agent sandboxes and
+    are easy to miss with `find . -maxdepth 1 -iname 'tmp*'`. (The old
+    `tmp*.js` offenders no longer occur: `tests/jsdom_helper.py` writes its
+    per-test driver scripts to the system temp directory now, precisely so
+    a hard-killed test run can't strand them in the repo root.)

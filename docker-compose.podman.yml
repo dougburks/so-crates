@@ -3,7 +3,9 @@ services:
     image: ghcr.io/dougburks/so-crates:main
     container_name: so-crates
     ports:
-      - "8000:8000"
+      # Localhost-only by default. To allow other machines on your
+      # network to connect, change to "8000:8000".
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./socrates-data:/data:Z
     restart: unless-stopped

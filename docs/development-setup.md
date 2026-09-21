@@ -15,12 +15,12 @@ You'll need these prerequisites:
 - **suricata-update** - for downloading/updating Suricata rules (internet access required; the app will warn and continue without rules if offline)
 - **tcpdump** - for stream carving (`/api/download-stream`) and hexdump extraction (`/api/hexdump-stream`)
 - **tshark** - for ASCII transcript extraction (`/api/ascii-stream`)
-- **yara** (optional) - for scanning extracted files. If installed, SO-CRATES automatically downloads YARA rules on first run (or uses baked-in rules in Docker). If missing, file extraction and File Alerts are skipped.
+- **yara** (optional) - if installed, SO-CRATES scans extracted/uploaded files with YARA rules (baked-in in Docker; otherwise downloaded on demand via the Rules modal). If missing, YARA scanning and File Alerts are skipped (files are still extracted).
 - **Zircolite** (optional) - for Sigma rule detection on log files. SO-CRATES auto-detects if Zircolite is installed and skips log analysis if absent. The Dockerfile bakes in Zircolite v3.7.1.
 - **exiftool** (optional) - for extracting EXIF/media metadata from binary files. If missing, EXIF extraction is silently skipped (the rest of the file analysis still runs).
 - **file** (optional) - for MIME/file-type detection on non-PCAP uploads. If missing, this detection is silently skipped (the rest of the file analysis still runs).
 
-Once you have the prerequisites, then you can clone this github repo and run the server:
+Once you have the prerequisites, you can clone this GitHub repo and run the server:
 
 ```bash
 python3 socrates.py
@@ -34,6 +34,7 @@ Then open http://localhost:8000/socrates.html in your browser.
 |---|---|---|
 | `DATA_DIR` | `~/socrates-data` | Directory for analyzed files and Suricata config |
 | `BIND_ADDRESS` | `127.0.0.1` | Address to bind the HTTP server to |
+| `ALLOWED_HOSTS` | unset | Comma-separated hostnames accepted in the `Host`/`Origin` headers, beyond the always-accepted localhost and IP literals (other DNS names are rejected as a DNS-rebinding defense). Entries may be exact names, `*.suffix` wildcards (any subdomain - what proxied environments like Killercoda need, where the per-session hostname isn't known in advance), or a bare `*` to accept any host |
 | `PORT` | `8000` | HTTP server port |
 | `ENABLE_ARP_LOGGING` | unset (disabled) | Set to any non-empty value to enable Suricata's `arp` eve-log output. Off by default since ARP volume can be significant on a live network (Suricata's own default is disabled too, for the same reason) - only enable if you actually want ARP events. |
 | `OHMYDEBN_THEME_DIR` | unset (feature off) | Base OhMyDebn config directory (e.g. `~/.config/ohmydebn`), for the opt-in "Sync theme to OhMyDebn theme" feature - see [Themes](themes.md). No-op for any deployment not launched via OhMyDebn. |

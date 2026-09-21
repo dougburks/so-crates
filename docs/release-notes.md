@@ -1,5 +1,59 @@
 # Release Notes
 
+## 4.2.0
+
+### DNS Heuristics fixes
+
+The DNS Heuristics card now always matches its own tab: it no longer
+shows a count left over from a previously viewed analysis, and no longer
+stays missing until a page reload when you open an analysis that's still
+processing. It also flags far fewer false positives - common
+update/telemetry domains (Microsoft, Google, Apple, Mozilla), Akamai CDN
+names, and long-but-ordinary subdomains no longer score as suspicious.
+
+### UX and accessibility
+
+- Uploading a too-large file now tells you the size limit and where to
+  raise it, instead of a cryptic server error
+- Important warnings stay on screen until dismissed, other toasts last
+  longer, and the analysis-timeout message notes the analysis may still
+  finish in the background - check Previous Analyses
+- In the Rules modal, clicking Update right after "Revert to Default"
+  works on the first click
+- Aggregation tables page consistently when values have tied counts
+- The keyboard now reaches everything: sample cards and the drop zone
+  respond to Tab and Enter/Space, theme tiles preview on focus, and
+  confirmation dialogs place focus sensibly
+- The Security Onion comparison fits a 1080p display without scrolling
+
+### Security hardening
+
+This release hardens SO-CRATES against malicious websites attacking your
+local instance from inside your browser, plus several smaller
+server-side issues found in a full security review. Most of it is
+invisible, but three changes might affect you:
+
+- Serving SO-CRATES behind a reverse proxy or a cloud hostname (e.g.
+  Killercoda) now requires the new `ALLOWED_HOSTS` environment variable,
+  e.g. `-e ALLOWED_HOSTS='*.killercoda.com'` - browsing by IP or
+  localhost needs nothing, and the error page tells you exactly what to
+  set
+- The Docker/Podman compose files now publish the port on localhost
+  only; to allow other machines on your network, change the port mapping
+  back to `"8000:8000"`
+- Scripts calling the JSON API must send `Content-Type: application/json`
+
+See the [Security](security.md) page for the full picture.
+
+### Documentation and website
+
+so-crates.org has a brand-new landing page - demo video, screenshot
+tour, and a live theme chooser using the app's own palettes. The Usage
+guide is reorganized into focused sub-pages (analyzing files, exploring
+results, filtering and drill-down, keyboard and menus), the Themes
+gallery loads much faster, and the docs went through a full accuracy
+review against the code.
+
 ## 4.1.0
 
 ### DNS Heuristics
@@ -29,7 +83,7 @@ rather than expanding a detail panel in place.
 
 Suricata's `community-id` output is now force-enabled on every analysis
 (it ships off by default) - a single deterministic `community_id` field
-on flow/alert records that lets so-crates' output correlate against
+on flow/alert records that lets SO-CRATES's output correlate against
 Zeek and other community-id-aware tools without anyone needing to
 discover the setting exists. A new **Correlate** entry in the pivot
 menu puts that to use directly: click any field on a row that has a
@@ -68,7 +122,7 @@ whatever chip is left after a partial clear. Log analysis and
 binary/file analysis now get all of the above too - they'd never gotten
 the same fresh-load seeding PCAP analysis had, and log analysis
 specifically had its own separate bug where a stat card could end up
-with no tab-active card at all whenever sigma alerts were absent (the
+with no tab-active card at all whenever Sigma alerts were absent (the
 common case), silently breaking Down/Up navigation on the grid entirely.
 
 ### Pivot menu: Include/Exclude/Only inside expanded rows
@@ -84,7 +138,7 @@ now bridges the gap. Log analysis had its own, more pervasive version of
 the same mismatch: every detail field is labeled with the raw underlying
 JSON field name (e.g. "CommandLine"), not the human column label
 ("Command Line") table headers use - now converted automatically. A
-sigma alert's own "Matched Event" section goes further still, since none
+Sigma alert's own "Matched Event" section goes further still, since none
 of its fields (e.g. Computer) have a fixed column at all - filtering on
 them now works via the same generic field lookup the underlying log
 extraction logic already supported internally, without guessing which
@@ -94,8 +148,8 @@ fields are actually safe to allow through.
 
 Aggregation Tables used to show only the top 10 values per column with no
 way to see more. Each table now pages through its values with Prev/Next
-controls instead of growing the page - so a table full of long, variable-
-width values (a DNS query column, say) never reflows the surrounding
+controls instead of growing the page - so a table full of long,
+variable-width values (a DNS query column, say) never reflows the surrounding
 layout or shifts a Next button out from under your cursor as you click
 through it. An "Items per page" selector (10/25/50/100) applies to every
 table in the currently-open section at once and persists across
@@ -339,8 +393,8 @@ value), **Exclude** (narrow it to hide this value), **Only** (start a new
 search scoped to just this value, clearing every other filter), and **Hunt**
 (a full-text search for this value across every field, replacing the whole
 search - the one action that also clears any active search/filters
-entirely). Each of Include/Exclude/Only carries a color-coded magnifying-
-glass icon (green/red/blue) and an explanatory hover tooltip spelling out
+entirely). Each of Include/Exclude/Only carries a color-coded
+magnifying-glass icon (green/red/blue) and an explanatory hover tooltip spelling out
 exactly what clicking it will do with the real column/value substituted in.
 
 The menu also offers **Copy to Clipboard** and one-click lookups against
@@ -536,8 +590,8 @@ particular can be dozens of lines) read as noisy for what's meant to be a
 simple progress indicator. The actual log is still there for anyone who
 wants it: a "View Log" toggle reveals it on demand, both while an update is
 running and after it finishes, and "Hide Log" collapses it again without
-losing the underlying output (still fetched via the same polling `/api/rule-
-update-status` calls either way). Once an update finishes, a green checkmark
+losing the underlying output (still fetched via the same polling
+`/api/rule-update-status` calls either way). Once an update finishes, a green checkmark
 or red X appears next to that ruleset's Update button reflecting whether it
 succeeded - a persistent complement to the existing completion toast, which
 is easy to miss if you're not looking right when it fires. The icon only
@@ -653,7 +707,7 @@ badge still links directly to the GitHub release).
 
 ### Smaller Docker image
 
-The Docker image is roughly 130MB smaller, from two fixes found by
+The Docker image is roughly 130MB smaller, from three fixes found by
 inspecting `podman history` and the actual contents of the Zircolite git
 clone:
 

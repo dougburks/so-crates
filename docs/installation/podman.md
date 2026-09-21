@@ -10,9 +10,11 @@ sudo apt update && sudo apt -y install podman
 mkdir -p ~/socrates-data
 # Start SO-CRATES
 podman run --userns=keep-id --user $(id -u):$(id -g) \
-  -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+  -v $HOME/socrates-data:/data:Z -p 127.0.0.1:8000:8000 \
   ghcr.io/dougburks/so-crates:main
 ```
+
+This publishes the port on localhost only. To let other machines on your network connect, use `-p 8000:8000` instead.
 
 ## podman compose
 
@@ -57,14 +59,15 @@ podman save ghcr.io/dougburks/so-crates:main > so-crates.tar
 Then transfer so-crates.tar to the isolated network via USB or other media. On the air-gapped machine:
 ```bash
 podman load < so-crates.tar
+mkdir -p ~/socrates-data
 podman run --userns=keep-id --user $(id -u):$(id -g) \
-  -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+  -v $HOME/socrates-data:/data:Z -p 127.0.0.1:8000:8000 \
   ghcr.io/dougburks/so-crates:main
 ```
 
 ## Build Your Own Podman Image
 
-If you prefer to build your own Podman image, you can clone this github repo and then build the image:
+If you prefer to build your own Podman image, you can clone this GitHub repo and then build the image:
 
 ```bash
 git clone https://github.com/dougburks/so-crates
@@ -72,6 +75,16 @@ cd so-crates
 podman build -t so-crates .
 mkdir -p ~/socrates-data
 podman run --userns=keep-id --user $(id -u):$(id -g) \
-  -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+  -v $HOME/socrates-data:/data:Z -p 127.0.0.1:8000:8000 \
   so-crates
+```
+
+
+## Cloud and proxied environments
+
+If you access SO-CRATES through a proxy hostname rather than localhost or an IP (e.g. Killercoda, GitHub Codespaces, or your own reverse proxy), add the hostname to the `ALLOWED_HOSTS` environment variable or requests are rejected with "Invalid Host header" (a DNS-rebinding defense). A wildcard covers per-session hostnames:
+
+```bash
+podman run --rm -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+  -e ALLOWED_HOSTS='*.killercoda.com' ghcr.io/dougburks/so-crates:main
 ```

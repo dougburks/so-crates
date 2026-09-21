@@ -5,12 +5,16 @@ repo_url: https://github.com/dougburks/so-crates
 repo_name: dougburks/so-crates
 docs_dir: docs
 
+watch:
+  - overrides
+
 plugins:
   - glightbox
   - search
 
 theme:
   name: material
+  custom_dir: overrides
   features:
     - content.code.copy
     - navigation.footer
@@ -31,7 +35,12 @@ nav:
     - Docker: installation/docker.md
     - Podman: installation/podman.md
     - OhMyDebn: installation/ohmydebn.md
-  - Usage: usage.md
+  - Usage:
+    - Usage Overview: usage/index.md
+    - Analyzing Files: usage/analyzing-files.md
+    - Exploring Results: usage/exploring-results.md
+    - Filtering & Drill-Down: usage/filtering-and-drilldown.md
+    - Keyboard & Menus: usage/keyboard-and-menus.md
   - Themes: themes.md
   - Configuration: configuration.md
   - Security: security.md

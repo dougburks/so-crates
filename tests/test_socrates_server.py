@@ -1258,6 +1258,10 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertTrue(any(k[0] == md5 for k in server._SANKEY_CACHE),
                              'sankey cache must be populated before delete-all')
+            status, body = self._get(f'/api/aggregation-totals?md5={md5}&type=alert')
+            self.assertEqual(status, 200)
+            self.assertTrue(any(k[0] == md5 for k in server._AGGREGATION_TOTALS_CACHE),
+                             'totals cache must be populated before delete-all')
 
             status, body = self._post('/api/delete-all-analyses', {})
             self.assertEqual(status, 200)
@@ -1265,6 +1269,8 @@ class TestAPIEndpoints(unittest.TestCase):
                               'delete-all-analyses must clear the sankey cache')
             self.assertEqual(len(server._AGGREGATION_CACHE), 0,
                               'delete-all-analyses must clear the aggregation cache')
+            self.assertEqual(len(server._AGGREGATION_TOTALS_CACHE), 0,
+                              'delete-all-analyses must clear the aggregation totals cache')
         finally:
             server._evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
@@ -4974,9 +4980,9 @@ class TestSizeLimitMessages(unittest.TestCase):
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
         error_count = content.count('max {MAX_EVE_SIZE // (1024*1024)}MB')
-        error_text_count = content.count('eve.json too large')
+        error_text_count = content.count('Analysis data too large to load')
         self.assertGreaterEqual(error_count, 1, 'Error message appears at least once')
-        self.assertGreaterEqual(error_text_count, 1, 'eve.json too large text appears at least once')
+        self.assertGreaterEqual(error_text_count, 1, 'too-large error text appears at least once')
 
 
 class TestHTMLNoDuplicateFunctions(unittest.TestCase):
@@ -6354,7 +6360,7 @@ class TestCheckDiskSpace(unittest.TestCase):
         with unittest.mock.patch('shutil.disk_usage', return_value=fake_usage):
             result = handler._check_disk_space(100 * 1024 * 1024)
         self.assertFalse(result)
-        handler._send_error.assert_called_once_with(507, 'Not enough disk space available for this upload')
+        handler._send_error.assert_called_once_with(507, 'Not enough disk space available on the server for this upload')
 
     def test_allows_when_ample_space(self):
         handler = self._make_handler()
@@ -6480,14 +6486,23 @@ class TestReadJsonBody(unittest.TestCase):
     """Tests for _read_json_body, which every JSON POST handler uses so a
     malformed body returns a clean 400 instead of an uncaught exception."""
 
-    def _make_handler(self, body_bytes):
+    def _make_handler(self, body_bytes, content_type='application/json'):
         from io import BytesIO
         handler = server.Handler.__new__(server.Handler)
+        headers = {'Content-Length': str(len(body_bytes)),
+                   'Content-Type': content_type}
         handler.headers = unittest.mock.MagicMock()
-        handler.headers.get = unittest.mock.MagicMock(return_value=str(len(body_bytes)))
+        handler.headers.get = unittest.mock.MagicMock(
+            side_effect=lambda name, default=None: headers.get(name, default))
         handler.rfile = BytesIO(body_bytes)
         handler._send_error = unittest.mock.MagicMock()
         return handler
+
+    def test_non_json_content_type_returns_none_and_sends_415(self):
+        handler = self._make_handler(b'{"md5": "abc"}', content_type='text/plain')
+        result = handler._read_json_body(config.MAX_REQUEST_BODY_SIZE)
+        self.assertIsNone(result)
+        handler._send_error.assert_called_once_with(415, 'Content-Type must be application/json')
 
     def test_valid_json_object_returns_dict(self):
         handler = self._make_handler(b'{"md5": "abc"}')
@@ -6527,7 +6542,10 @@ class TestReadJsonBody(unittest.TestCase):
         """_read_json_body must propagate _read_post_body's own rejection
         (Content-Length too large) without ever calling json.loads."""
         handler = self._make_handler(b'{}')
-        handler.headers.get = unittest.mock.MagicMock(return_value=str(config.MAX_REQUEST_BODY_SIZE + 1))
+        headers = {'Content-Length': str(config.MAX_REQUEST_BODY_SIZE + 1),
+                   'Content-Type': 'application/json'}
+        handler.headers.get = unittest.mock.MagicMock(
+            side_effect=lambda name, default=None: headers.get(name, default))
         result = handler._read_json_body(config.MAX_REQUEST_BODY_SIZE)
         self.assertIsNone(result)
         handler._send_error.assert_called_once_with(400, 'Invalid Content-Length')
@@ -7118,6 +7136,269 @@ class TestNonArtifactFiles(unittest.TestCase):
         open(os.path.join(self.tmpdir, 'real-upload.bin'), 'w').close()
         result = self.handler._non_artifact_files(self.tmpdir, pcap_file='so-pcap.1234567890')
         self.assertEqual(result, ['real-upload.bin'])
+
+
+class TestIngressDefenses(unittest.TestCase):
+    """Host-header (DNS rebinding), Origin/Sec-Fetch-Site (CSRF),
+    Content-Type enforcement, and /static/ path-normalization defenses."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.original_base = server.DATA_DIR
+        server.DATA_DIR = cls.tmpdir
+        cls.port = 19000 + (os.getpid() % 1000)
+        cls.server = server.ThreadedTCPServer(('127.0.0.1', cls.port), server.Handler)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        server.DATA_DIR = cls.original_base
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _raw(self, method, path, headers=None, body=None):
+        import http.client
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        try:
+            conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+            sent = {k.lower() for k in (headers or {})}
+            if 'host' not in sent:
+                conn.putheader('Host', f'127.0.0.1:{self.port}')
+            for k, v in (headers or {}).items():
+                conn.putheader(k, v)
+            if body is not None:
+                conn.putheader('Content-Length', str(len(body)))
+            conn.endheaders(body)
+            resp = conn.getresponse()
+            return resp.status, resp.read().decode()
+        finally:
+            conn.close()
+
+    # ---- Host header (DNS rebinding) ----
+
+    def test_dns_name_host_rejected(self):
+        status, _ = self._raw('GET', '/socrates.html', headers={'Host': 'evil.example.com'})
+        self.assertEqual(status, 403)
+
+    def test_ip_literal_host_allowed(self):
+        status, _ = self._raw('GET', '/socrates.html', headers={'Host': '192.168.1.50:8000'})
+        self.assertEqual(status, 200)
+
+    def test_localhost_host_allowed(self):
+        status, _ = self._raw('GET', '/socrates.html', headers={'Host': f'localhost:{self.port}'})
+        self.assertEqual(status, 200)
+
+    def test_ipv6_literal_host_allowed(self):
+        status, _ = self._raw('GET', '/socrates.html', headers={'Host': '[::1]:8000'})
+        self.assertEqual(status, 200)
+
+    def test_rejected_host_blocks_post_too(self):
+        status, _ = self._raw('POST', '/api/delete-all-analyses',
+                              headers={'Host': 'evil.example.com',
+                                       'Content-Type': 'application/json'},
+                              body=b'{}')
+        self.assertEqual(status, 403)
+
+    def test_wildcard_allowed_hosts_matches_subdomains(self):
+        """REGRESSION: proxied environments (Killercoda, Codespaces) serve
+        the app via per-session hostnames that can't be known in advance -
+        '*.suffix' entries must match the suffix and any subdomain."""
+        with unittest.mock.patch.object(server.Handler, 'ALLOWED_HOSTNAMES',
+                                        frozenset({'*.killercoda.com'})):
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'abc123-8000.spch.r.killercoda.com'})
+            self.assertEqual(status, 200)
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'killercoda.com'})
+            self.assertEqual(status, 200)
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'evil.example.com'})
+            self.assertEqual(status, 403)
+            # suffix must match on a label boundary, not substring
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'evilkillercoda.com'})
+            self.assertEqual(status, 403)
+
+    def test_star_allowed_hosts_accepts_any(self):
+        with unittest.mock.patch.object(server.Handler, 'ALLOWED_HOSTNAMES',
+                                        frozenset({'*'})):
+            status, _ = self._raw('GET', '/socrates.html',
+                                  headers={'Host': 'anything.example.net'})
+            self.assertEqual(status, 200)
+
+    def test_rejected_host_error_is_actionable(self):
+        status, body = self._raw('GET', '/socrates.html',
+                                 headers={'Host': 'proxy.cloud.example'})
+        self.assertEqual(status, 403)
+        self.assertIn('ALLOWED_HOSTS', body)
+        self.assertIn('proxy.cloud.example', body)
+
+    # ---- Origin / Sec-Fetch-Site (CSRF) ----
+
+    def test_cross_origin_post_rejected(self):
+        status, _ = self._raw('POST', '/api/delete-all-analyses',
+                              headers={'Origin': 'https://evil.example.com',
+                                       'Content-Type': 'application/json'},
+                              body=b'{}')
+        self.assertEqual(status, 403)
+
+    def test_null_origin_post_rejected(self):
+        status, _ = self._raw('POST', '/api/delete-all-analyses',
+                              headers={'Origin': 'null',
+                                       'Content-Type': 'application/json'},
+                              body=b'{}')
+        self.assertEqual(status, 403)
+
+    def test_same_origin_post_allowed(self):
+        status, _ = self._raw('POST', '/api/delete-all-analyses',
+                              headers={'Origin': f'http://127.0.0.1:{self.port}',
+                                       'Content-Type': 'application/json'},
+                              body=b'{}')
+        self.assertEqual(status, 200)
+
+    def test_cross_site_fetch_metadata_rejected(self):
+        status, _ = self._raw('POST', '/api/delete-all-analyses',
+                              headers={'Sec-Fetch-Site': 'cross-site',
+                                       'Content-Type': 'application/json'},
+                              body=b'{}')
+        self.assertEqual(status, 403)
+
+    def test_same_origin_fetch_metadata_allowed(self):
+        status, _ = self._raw('POST', '/api/delete-all-analyses',
+                              headers={'Sec-Fetch-Site': 'same-origin',
+                                       'Content-Type': 'application/json'},
+                              body=b'{}')
+        self.assertEqual(status, 200)
+
+    # ---- Content-Type enforcement on JSON endpoints ----
+
+    def test_json_post_without_json_content_type_rejected(self):
+        status, _ = self._raw('POST', '/api/delete-analysis',
+                              headers={'Content-Type': 'text/plain'},
+                              body=b'{}')
+        self.assertEqual(status, 415)
+
+    def test_json_post_with_charset_allowed(self):
+        # Passes the Content-Type gate; 400 is the normal missing-md5 error
+        status, _ = self._raw('POST', '/api/delete-analysis',
+                              headers={'Content-Type': 'application/json; charset=utf-8'},
+                              body=b'{}')
+        self.assertEqual(status, 400)
+
+    # ---- /static/ path normalization ----
+
+    def test_static_encoded_traversal_rejected(self):
+        status, _ = self._raw('GET', '/static/%2e%2e/db.py')
+        self.assertEqual(status, 404)
+
+    def test_static_plain_traversal_rejected(self):
+        status, _ = self._raw('GET', '/static/../socrates.py')
+        self.assertEqual(status, 404)
+
+    def test_static_legit_file_served(self):
+        status, _ = self._raw('GET', '/static/socrates.css')
+        self.assertEqual(status, 200)
+
+
+class TestErrorTextSanitizer(unittest.TestCase):
+    def test_data_dir_paths_stripped(self):
+        msg = server._sanitize_error_text(
+            "YARA scan failed: [Errno 13] Permission denied: '%s'"
+            % os.path.join(server.DATA_DIR, 'abc', 'file.bin'))
+        self.assertNotIn(server.DATA_DIR, msg)
+
+    def test_other_absolute_paths_redacted(self):
+        msg = server._sanitize_error_text(
+            'Suricata failed: /usr/lib/suricata/suricata.yaml missing')
+        self.assertNotIn('/usr/lib/', msg)
+        self.assertIn('<path>', msg)
+
+    def test_plain_message_unchanged(self):
+        msg = 'Suricata failed to start: command not found'
+        self.assertEqual(server._sanitize_error_text(msg), msg)
+
+
+class TestRunCapped(unittest.TestCase):
+    def test_output_capped_and_flagged(self):
+        rc, out, truncated = server._run_capped(
+            ['python3', '-c', 'import sys; sys.stdout.write("x" * 1000000)'],
+            max_bytes=1000, timeout=30)
+        self.assertTrue(truncated)
+        self.assertEqual(len(out), 1000)
+
+    def test_small_output_untruncated(self):
+        rc, out, truncated = server._run_capped(
+            ['python3', '-c', 'print("hello")'], max_bytes=1000, timeout=30, text=True)
+        self.assertEqual(rc, 0)
+        self.assertFalse(truncated)
+        self.assertEqual(out.strip(), 'hello')
+
+    def test_timeout_raises(self):
+        import subprocess as sp
+        with self.assertRaises(sp.TimeoutExpired):
+            server._run_capped(['sleep', '30'], max_bytes=1000, timeout=1)
+
+
+class TestCSPEnforced(unittest.TestCase):
+    """The enforced CSP has no inline-script carve-out (all handlers are
+    wired via data-action dispatch; the theme bootstrap is external), and
+    its report-uri keeps /api/csp-report as a permanent tripwire."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.original_base = server.DATA_DIR
+        server.DATA_DIR = cls.tmpdir
+        cls.port = 20000 + (os.getpid() % 1000)
+        cls.server = server.ThreadedTCPServer(('127.0.0.1', cls.port), server.Handler)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        server.DATA_DIR = cls.original_base
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_enforced_policy_has_no_inline_script(self):
+        import urllib.request
+        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/socrates.html', timeout=5) as resp:
+            enforced = resp.headers.get('Content-Security-Policy', '')
+            ro = resp.headers.get('Content-Security-Policy-Report-Only')
+        script_src = [d.strip() for d in enforced.split(';') if d.strip().startswith('script-src')]
+        self.assertEqual(script_src, ["script-src 'self'"])
+        self.assertIn('report-uri /api/csp-report', enforced)
+        # style-src keeps unsafe-inline deliberately (inline style= attrs)
+        self.assertIn("style-src 'self' 'unsafe-inline'", enforced)
+        # the migration-era report-only header is retired
+        self.assertIsNone(ro)
+
+    def test_report_endpoint_accepts_csp_content_type(self):
+        import urllib.request
+        body = json.dumps({'csp-report': {
+            'violated-directive': 'script-src', 'blocked-uri': 'inline',
+            'source-file': 'http://x/socrates.html', 'line-number': 1}}).encode()
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{self.port}/api/csp-report', data=body,
+            headers={'Content-Type': 'application/csp-report'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 204)
+
+    def test_report_endpoint_tolerates_garbage(self):
+        import urllib.request
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{self.port}/api/csp-report', data=b'not json',
+            headers={'Content-Type': 'application/csp-report'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 204)
 
 
 if __name__ == '__main__':

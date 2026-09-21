@@ -1326,6 +1326,11 @@
         #helpModal.wide .modal-content { max-width: 850px; }
         #helpModalBody { max-height: 60vh; overflow-y: auto; }
         #rulesModal .modal-content { max-width: 900px; width: 95vw; max-height: 92vh; }
+        /* The feature-comparison table runs ~980px tall - at the default
+           80vh cap it scrolls on any window under ~1225px, including a
+           maximized 1080p browser. 92vh (same as #rulesModal) lets it fit
+           without scrolling on most desktop windows. */
+        #securityOnionModal .modal-content { max-height: 92vh; }
         .rule-update-log { font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 12px; color: var(--text-primary); }
         #fileInfoContainer { margin-bottom: 20px; }
         .container { width: 100%; padding: 20px; box-sizing: border-box; padding-bottom: 80px; padding-top: 56px; }

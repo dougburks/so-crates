@@ -9,7 +9,9 @@ import ssl
 import sqlite3
 import subprocess
 import hashlib
-from urllib.parse import urlparse, parse_qs, urljoin
+import ipaddress
+import posixpath
+from urllib.parse import urlparse, parse_qs, urljoin, unquote
 import urllib.request
 import urllib.error
 import zipfile
@@ -27,7 +29,7 @@ from db import (
     query_sigma_alerts_sqlite, get_sigma_stats_sqlite,
     get_sigma_alert_count_sqlite, get_event_date_range_sqlite,
     get_sankey_data_sqlite, get_aggregation_data_sqlite, get_aggregation_totals_sqlite,
-    AGGREGATION_TOP_N,
+    AGGREGATION_TOP_N, AGGREGATION_JSON_PATHS, REAL_AGGREGATION_COLUMNS,
     set_row_note, has_row_notes,
     set_acknowledged, set_acknowledged_bulk,
 )
@@ -60,7 +62,7 @@ from ai_summary_lookup import get_ai_summary
 import config
 import tomllib
 
-VERSION = '4.1.0'
+VERSION = '4.2.0'
 GITHUB_RELEASES_API = 'https://api.github.com/repos/dougburks/so-crates/releases/latest'
 PORT = int(os.environ.get('PORT', 8000))
 BIND_ADDRESS = os.environ.get('BIND_ADDRESS', '127.0.0.1')
@@ -99,14 +101,97 @@ MAX_URL_REDIRECTS = 5
 _SANKEY_CACHE = {}
 _AGGREGATION_CACHE = {}
 _AGGREGATION_TOTALS_CACHE = {}
+# Single source of truth for "every analysis-result cache": _evict_analysis_cache
+# and the delete-all handler must always cover the same set, so a new cache
+# added here is automatically evicted/cleared in both places.
+_ALL_CACHES = (_SANKEY_CACHE, _AGGREGATION_CACHE, _AGGREGATION_TOTALS_CACHE)
 _CACHE_LOCK = threading.Lock()
+# Backstop against cache-fill abuse: cache keys include client-supplied
+# strings, so even with per-key validation the total entry count is bounded.
+_CACHE_MAX_ENTRIES = 2048
 
 
 def _evict_analysis_cache(md5):
     with _CACHE_LOCK:
-        for cache in (_SANKEY_CACHE, _AGGREGATION_CACHE, _AGGREGATION_TOTALS_CACHE):
+        for cache in _ALL_CACHES:
             for key in [k for k in cache if k[0] == md5]:
                 del cache[key]
+
+
+def _sanitize_error_text(text):
+    """Redact server filesystem paths from client-facing .error text -
+    exception strings routinely embed absolute paths (data dir, tool
+    locations) that a browser client has no use for."""
+    text = text.replace(DATA_DIR + os.sep, '').replace(DATA_DIR, '')
+    return re.sub(r'(?:^|(?<=[\s:\'"(]))/(?:[\w.+-]+/)+[\w.+-]+', '<path>', text)
+
+
+def _run_capped(cmd, max_bytes, timeout, text=False):
+    """Run a command capturing stdout up to max_bytes.
+
+    subprocess.run(capture_output=True) buffers the entire stdout in RAM
+    before any size cap can apply - for pcap-derived streams that can be
+    gigabytes. Read incrementally instead and kill the process once the cap
+    is reached. Returns (returncode, output, truncated); raises
+    subprocess.TimeoutExpired on timeout, matching subprocess.run.
+    """
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    timed_out = [False]
+
+    def _kill_on_timeout():
+        timed_out[0] = True
+        proc.kill()
+
+    timer = threading.Timer(timeout, _kill_on_timeout)
+    timer.start()
+    chunks = []
+    total = 0
+    truncated = False
+    try:
+        while True:
+            chunk = proc.stdout.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                chunks.append(chunk[:max_bytes - (total - len(chunk))])
+                truncated = True
+                proc.kill()
+                break
+            chunks.append(chunk)
+        proc.wait()
+    finally:
+        timer.cancel()
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    if timed_out[0]:
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    data = b''.join(chunks)
+    if text:
+        data = data.decode('utf-8', errors='replace')
+    return proc.returncode, data, truncated
+
+
+def _cache_put(cache, key, value):
+    """Insert into an analysis cache; caller must hold _CACHE_LOCK."""
+    if len(cache) >= _CACHE_MAX_ENTRIES:
+        cache.clear()
+    cache[key] = value
+
+
+def _cacheable_aggregation_key(event_type, column=None):
+    """Only cache keys built from recognized event types/columns - arbitrary
+    client strings must not become permanent cache entries (memory DoS)."""
+    if event_type is not None and event_type not in AGGREGATION_JSON_PATHS:
+        return False
+    if column is None:
+        return True
+    if column in REAL_AGGREGATION_COLUMNS:
+        return True
+    if event_type is None:
+        return column in ('Type', 'Detail')
+    return column in AGGREGATION_JSON_PATHS[event_type]
 
 
 # Server-wide rule-update job state, polled by the frontend via
@@ -532,7 +617,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _add_security_headers(self):
         self.send_header('X-Frame-Options', 'DENY')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'self';")
+        # script-src 'self' with no inline carve-out: all handlers are wired
+        # via addEventListener/data-action dispatch and the theme bootstrap
+        # is an external file, so injected markup (an escaping regression in
+        # an innerHTML sink) renders as inert text instead of executing.
+        # report-uri keeps /api/csp-report as a permanent tripwire - any
+        # future violation is blocked AND logged server-side.
+        # style-src keeps 'unsafe-inline' deliberately: the UI uses inline
+        # style= attributes throughout, and CSS injection is a far weaker
+        # primitive than script injection.
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'self'; report-uri /api/csp-report;")
 
     def end_headers(self):
         self._add_security_headers()
@@ -579,7 +673,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except OSError:
             return True
         if free < required_bytes + config.DISK_SPACE_SAFETY_MARGIN:
-            self._send_error(507, 'Not enough disk space available for this upload')
+            self._send_error(507, 'Not enough disk space available on the server for this upload')
             return False
         return True
 
@@ -619,7 +713,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         Returns the parsed dict, or None and sends an error response if
         reading fails, the body isn't valid JSON, or it isn't a JSON object.
+
+        Requires Content-Type: application/json. Browsers allow cross-site
+        "simple request" POSTs (no preflight) only for a few content types -
+        never application/json - so this check blocks CSRF from web pages
+        while costing legitimate clients nothing (the frontend always sends
+        it, and curl users add one header).
         """
+        ctype = (self.headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
+        if ctype != 'application/json':
+            self._send_error(415, 'Content-Type must be application/json')
+            return None
         post_data = self._read_post_body(max_size)
         if post_data is None:
             return None
@@ -641,7 +745,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         non-internal string suitable for client responses.
         """
         if not md5:
-            return None, 'md5 parameter required'
+            return None, 'MD5 parameter required'
         if not MD5_RE.match(md5):
             return None, 'Invalid MD5'
         dir_path = os.path.join(DATA_DIR, md5)
@@ -801,10 +905,95 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/acknowledge-alert': 'handle_post_acknowledge_alert',
         '/api/acknowledge-alerts-bulk': 'handle_post_acknowledge_alerts_bulk',
         '/api/delete-all-analyses': 'handle_post_delete_all_analyses',
+        '/api/csp-report': 'handle_post_csp_report',
         '/api/update-rules': 'handle_post_update_rules',
     }
 
+    # Hostnames accepted in Host/Origin headers beyond localhost and IP
+    # literals; comma-separated env var for reverse-proxy/hostname deployments.
+    # Entries: exact hostnames, '*.suffix' wildcards (matches the suffix
+    # itself and any subdomain of it - the shape proxied environments like
+    # Killercoda/Codespaces need, where the exact per-session hostname
+    # isn't known in advance), or a bare '*' to accept any Host (explicit
+    # opt-out of the DNS-rebinding defense for deployments that accept
+    # that risk).
+    ALLOWED_HOSTNAMES = frozenset(
+        h.strip().lower()
+        for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()
+    )
+
+    def _trusted_host(self, netloc):
+        """True when a Host/Origin host is safe for this localhost-first app.
+
+        IP literals are always accepted: DNS rebinding needs a *name* (the
+        attacker's domain re-resolving to this server), so a raw IP in Host
+        cannot be a rebinding attack, and LAN users legitimately browse to
+        the server's IP. Names are limited to localhost (+subdomains) plus
+        the ALLOWED_HOSTS env allowlist (see ALLOWED_HOSTNAMES above for
+        the wildcard forms).
+        """
+        if not netloc:
+            return True  # non-browser clients (curl, scripts) may omit Host
+        try:
+            host = urlparse('//' + netloc).hostname or ''
+        except ValueError:
+            return False
+        if host == 'localhost' or host.endswith('.localhost'):
+            return True
+        for allowed in self.ALLOWED_HOSTNAMES:
+            if allowed == '*':
+                return True
+            if allowed.startswith('*.'):
+                suffix = allowed[2:]
+                if host == suffix or host.endswith('.' + suffix):
+                    return True
+            elif host == allowed:
+                return True
+        try:
+            ipaddress.ip_address(host)
+            return True
+        except ValueError:
+            return False
+
+    def _reject_cross_origin(self, is_post):
+        """DNS-rebinding (Host) and CSRF (Origin/Sec-Fetch-Site) defenses.
+
+        Returns True (and sends a 403) when the request must not proceed.
+        Complements _read_json_body's Content-Type check, which blocks the
+        cross-site "simple request" POSTs that carry neither header.
+        """
+        if not self._trusted_host(self.headers.get('Host', '')):
+            # Actionable, not a dead end: proxied environments (Killercoda,
+            # Codespaces, reverse proxies) legitimately serve SO-CRATES via
+            # a hostname this instance has never heard of. The hostname is
+            # attacker-influenced text, but it's JSON-encoded by
+            # _send_error and never rendered as HTML.
+            host = (self.headers.get('Host', '') or '').split(':')[0][:200]
+            self._send_error(403,
+                f"Invalid Host header ('{host}'). If you are deliberately serving "
+                f"SO-CRATES via this hostname (e.g. behind a proxy), restart it with "
+                f"the ALLOWED_HOSTS environment variable - for example "
+                f"ALLOWED_HOSTS={host or 'my.host.example'} or a wildcard like "
+                f"ALLOWED_HOSTS=*.example.com")
+            return True
+        if not is_post:
+            return False
+        origin = self.headers.get('Origin')
+        if origin:
+            if origin.lower() == 'null':
+                self._send_error(403, 'Cross-origin request rejected')
+                return True
+            if not self._trusted_host(urlparse(origin).netloc):
+                self._send_error(403, 'Cross-origin request rejected')
+                return True
+        if (self.headers.get('Sec-Fetch-Site') or '').lower() == 'cross-site':
+            self._send_error(403, 'Cross-origin request rejected')
+            return True
+        return False
+
     def do_GET(self):
+        if self._reject_cross_origin(is_post=False):
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         params = parse_qs(parsed.query)
@@ -824,11 +1013,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if handler_name:
             getattr(self, handler_name)(params)
         elif path == '/socrates.html' or path.startswith('/static/'):
-            super().do_GET()
+            # The prefix check above runs on the raw path, but the stdlib
+            # handler unquotes and normalizes before serving - so a path like
+            # /static/%2e%2e/foo would escape /static/. Re-check the prefix
+            # on the same normalized form the file server will actually use.
+            normalized = posixpath.normpath(unquote(path))
+            if normalized == '/socrates.html' or (
+                    normalized.startswith('/static/')
+                    and '..' not in normalized.split('/')):
+                super().do_GET()
+            else:
+                self._send_error(404, 'Not found')
         else:
             self._send_error(404, 'Not found')
 
     def do_POST(self):
+        if self._reject_cross_origin(is_post=True):
+            return
         handler_name = self.POST_ROUTES.get(self.path)
         if handler_name:
             getattr(self, handler_name)()
@@ -929,7 +1130,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({'nodes': [], 'links': []})
             return
         try:
-            if q is None:
+            if q is None and _cacheable_aggregation_key(event_type):
                 cache_key = (md5, event_type)
                 with _CACHE_LOCK:
                     cached = _SANKEY_CACHE.get(cache_key)
@@ -938,7 +1139,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return
                 data = get_sankey_data_sqlite(db_file, event_type, q)
                 with _CACHE_LOCK:
-                    _SANKEY_CACHE[cache_key] = data
+                    _cache_put(_SANKEY_CACHE, cache_key, data)
             else:
                 data = get_sankey_data_sqlite(db_file, event_type, q)
         except Exception:
@@ -982,7 +1183,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({})
             return
         try:
-            if q is None:
+            if q is None and _cacheable_aggregation_key(event_type, column):
                 cache_key = (md5, event_type, column, page, page_size)
                 with _CACHE_LOCK:
                     cached = _AGGREGATION_CACHE.get(cache_key)
@@ -991,7 +1192,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return
                 data = get_aggregation_data_sqlite(db_file, event_type, q, top_n=page_size, offset=offset, column=column)
                 with _CACHE_LOCK:
-                    _AGGREGATION_CACHE[cache_key] = data
+                    _cache_put(_AGGREGATION_CACHE, cache_key, data)
             else:
                 data = get_aggregation_data_sqlite(db_file, event_type, q, top_n=page_size, offset=offset, column=column)
         except Exception:
@@ -1018,7 +1219,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({})
             return
         try:
-            if q is None:
+            if q is None and _cacheable_aggregation_key(event_type):
                 cache_key = (md5, event_type)
                 with _CACHE_LOCK:
                     cached = _AGGREGATION_TOTALS_CACHE.get(cache_key)
@@ -1027,7 +1228,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     return
                 data = get_aggregation_totals_sqlite(db_file, event_type, q)
                 with _CACHE_LOCK:
-                    _AGGREGATION_TOTALS_CACHE[cache_key] = data
+                    _cache_put(_AGGREGATION_TOTALS_CACHE, cache_key, data)
             else:
                 data = get_aggregation_totals_sqlite(db_file, event_type, q)
         except Exception:
@@ -1048,18 +1249,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         dport = result['dport']
 
         try:
-            proc = subprocess.run(
+            returncode, stdout, truncated = _run_capped(
                 ['tcpdump', '-r', pcap, '-w', '-', f"host {src} and host {dst} and port {sport} and port {dport}"],
-                capture_output=True, timeout=config.STREAM_TIMEOUT_SECONDS
+                max_bytes=config.MAX_STREAM_DOWNLOAD_SIZE,
+                timeout=config.STREAM_TIMEOUT_SECONDS
             )
-            if proc.returncode == 0 and len(proc.stdout) > 0:
+            if truncated:
+                # A cut-off pcap is a corrupt download - refuse rather than
+                # serve a partial file that looks complete.
+                self._send_error(413, 'Stream too large to download')
+            elif returncode == 0 and len(stdout) > 0:
                 filename = f"stream_{src}_{sport}_to_{dst}_{dport}.pcap"
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/vnd.tcpdump.pcap')
                 self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
-                self.send_header('Content-Length', str(len(proc.stdout)))
+                self.send_header('Content-Length', str(len(stdout)))
                 self.end_headers()
-                self.wfile.write(proc.stdout)
+                self.wfile.write(stdout)
             else:
                 self._send_error(404, 'No packets found')
         except subprocess.TimeoutExpired:
@@ -1108,14 +1314,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(500, 'Internal server error')
 
     def _extract_payload_lines(self, pcap, src, sport, dst, dport, proto):
-        result = subprocess.run(
+        # Capped read: the response is trimmed to MAX_TRANSCRIPT_* far below
+        # this, so anything past the cap could never be shown anyway.
+        _, stdout, _ = _run_capped(
             ['tshark', '-r', pcap, '-Y',
              f'ip.addr == {src} && ip.addr == {dst} && {proto}.port == {sport} && {proto}.port == {dport}',
              '-T', 'fields', '-e', 'ip.src', '-e', f'{proto}.payload'],
-            capture_output=True, text=True, timeout=config.STREAM_TIMEOUT_SECONDS
+            max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
+            timeout=config.STREAM_TIMEOUT_SECONDS, text=True
         )
         lines = []
-        for line in result.stdout.strip().split('\n'):
+        for line in stdout.strip().split('\n'):
             if not line.strip():
                 continue
             parts = line.split('\t')
@@ -1148,17 +1357,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         dport = result['dport']
 
         try:
-            proc = subprocess.run(
+            _, stdout, raw_truncated = _run_capped(
                 ['tcpdump', '-r', pcap, '-X', '-nn',
                  f'host {src} and host {dst} and port {sport} and port {dport}'],
-                capture_output=True, text=True, timeout=config.STREAM_TIMEOUT_SECONDS
+                max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
+                timeout=config.STREAM_TIMEOUT_SECONDS, text=True
             )
             packets = []
             current_packet = None
             total_chars = 0
-            truncated = False
+            truncated = raw_truncated
 
-            for line in proc.stdout.split('\n'):
+            for line in stdout.split('\n'):
                 if not line.strip():
                     if current_packet:
                         packets.append(current_packet)
@@ -1246,7 +1456,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if os.path.exists(eve_path):
                 eve_size = os.path.getsize(eve_path)
                 if eve_size > MAX_EVE_SIZE:
-                    self._send_error(400, f'eve.json too large ({eve_size // (1024*1024)}MB, max {MAX_EVE_SIZE // (1024*1024)}MB)')
+                    self._send_error(400, f'Analysis data too large to load ({eve_size // (1024*1024)}MB, max {MAX_EVE_SIZE // (1024*1024)}MB). Try reanalyzing.')
                     return
 
             notes = ''
@@ -1506,6 +1716,42 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         self._send_json({'success': True, 'count': len(row_ids)})
 
+    # Dedupe key -> True for CSP violations already logged this run, so a
+    # page with one unconverted inline handler doesn't flood the console on
+    # every click. Bounded: cleared when it grows past a sane size.
+    _CSP_REPORTS_SEEN = {}
+
+    def handle_post_csp_report(self):
+        """Sink for Content-Security-Policy violation reports.
+
+        Browsers POST these with Content-Type: application/csp-report, so
+        this reads the raw body instead of going through _read_json_body's
+        application/json requirement. The enforced policy's report-uri
+        points here, so any future inline-script regression is blocked by
+        the browser AND logged (deduplicated) server-side. Always 204.
+        """
+        body = self._read_post_body(65536)
+        if body is None:
+            return
+        try:
+            report = json.loads(body).get('csp-report', {})
+        except (json.JSONDecodeError, AttributeError):
+            report = {}
+        if report:
+            key = (report.get('violated-directive'),
+                   report.get('blocked-uri'),
+                   report.get('source-file'),
+                   report.get('line-number'))
+            if key not in self._CSP_REPORTS_SEEN:
+                if len(self._CSP_REPORTS_SEEN) > 512:
+                    self._CSP_REPORTS_SEEN.clear()
+                self._CSP_REPORTS_SEEN[key] = True
+                print(f"CSP report: {report.get('violated-directive')} "
+                      f"blocked={report.get('blocked-uri')} "
+                      f"at {report.get('source-file')}:{report.get('line-number')}")
+        self.send_response(204)
+        self.end_headers()
+
     def handle_post_delete_all_analyses(self):
         deleted = 0
         errors = []
@@ -1528,8 +1774,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(500, f'Could not delete analyses: {errors[0]}')
             return
         with _CACHE_LOCK:
-            _SANKEY_CACHE.clear()
-            _AGGREGATION_CACHE.clear()
+            for cache in _ALL_CACHES:
+                cache.clear()
         self._send_json({'success': True, 'deleted': deleted})
 
     def handle_post_update_rules(self):
@@ -1975,7 +2221,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                             continue
                         try:
                             self._commit_and_spawn_pcap_analysis(extra, safe_filename, md5_hash=md5_hash)
-                        except OSError:
+                        except (OSError, ValueError):
+                            # ValueError: e.g. a reserved artifact filename
+                            # inside the ZIP - skip that member, keep the rest
                             failed_count += 1
                             continue
                         seen.add(md5_hash)
@@ -1991,7 +2239,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                             continue
                         try:
                             self._commit_and_analyze_standalone_file(extra, safe_filename, md5_hash, prefix)
-                        except OSError:
+                        except (OSError, ValueError):
                             failed_count += 1
                             continue
                         seen.add(md5_hash)
@@ -2318,7 +2566,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 try:
                     with open(error_file, 'r') as f:
-                        error_msg = f.read().strip()
+                        error_msg = _sanitize_error_text(f.read().strip())
                 except OSError:
                     error_msg = 'Analysis failed'
                 return {'status': 'error', 'message': error_msg}
@@ -2475,7 +2723,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if os.path.exists(error_file):
                     try:
                         with open(error_file, 'r') as f:
-                            error_msg = f.read().strip()
+                            error_msg = _sanitize_error_text(f.read().strip())
                     except OSError:
                         error_msg = 'Suricata failed to start'
                     self._send_error(500, error_msg)
