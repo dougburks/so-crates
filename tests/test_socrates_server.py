@@ -7448,6 +7448,54 @@ class TestCSPEnforced(unittest.TestCase):
             self.assertEqual(resp.status, 204)
 
 
+class TestHeadRequests(unittest.TestCase):
+    """REGRESSION: the inherited SimpleHTTPRequestHandler.do_HEAD served
+    from the working directory with none of do_GET's checks - HEAD
+    /socrates.py answered 200. HEAD is now refused everywhere."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.original_base = server.DATA_DIR
+        server.DATA_DIR = cls.tmpdir
+        cls.port = 23000 + (os.getpid() % 1000)
+        cls.server = server.ThreadedTCPServer(('127.0.0.1', cls.port), server.Handler)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        server.DATA_DIR = cls.original_base
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _head(self, path):
+        import http.client
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        try:
+            conn.request('HEAD', path)
+            resp = conn.getresponse()
+            return resp.status, resp.headers, resp.read()
+        finally:
+            conn.close()
+
+    def test_head_refused_everywhere(self):
+        for path in ('/socrates.py', '/config.py', '/socrates.html', '/static/socrates.css',
+                     '/api/version', '/cyberchef/', '/'):
+            status, headers, body = self._head(path)
+            self.assertEqual(status, 405, path)
+            self.assertEqual(headers['Allow'], 'GET, POST', path)
+            self.assertEqual(body, b'', path)
+
+    def test_get_unaffected(self):
+        import urllib.request
+        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/socrates.html', timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+
+
 class TestSigtermShutdown(unittest.TestCase):
     """In the container python3 is PID 1, which gets no default SIGTERM
     action - 'podman stop' waited out its full 10s grace period and then

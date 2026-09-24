@@ -1094,6 +1094,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         else:
             self._send_error(404, 'Not found')
 
+    def do_HEAD(self):
+        # SimpleHTTPRequestHandler's inherited do_HEAD serves straight from
+        # the working directory, skipping every check do_GET makes (Host
+        # header, routing, path normalization) - HEAD /socrates.py answered
+        # 200 with the file's size. Nothing in this app needs HEAD (browsers
+        # never send it here), so refuse it outright rather than duplicate
+        # do_GET's routing for a method no client uses. No body: a HEAD
+        # response must not have one, so not _send_error.
+        self.send_response(405)
+        self.send_header('Allow', 'GET, POST')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
     def do_POST(self):
         if self._reject_cross_origin(is_post=True):
             return
