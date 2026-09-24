@@ -11,6 +11,7 @@ import subprocess
 import hashlib
 import ipaddress
 import posixpath
+import signal
 from urllib.parse import urlparse, parse_qs, urljoin, unquote
 import urllib.request
 import urllib.error
@@ -157,6 +158,10 @@ def _run_capped(cmd, max_bytes, timeout, text=False):
         proc.kill()
 
     timer = threading.Timer(timeout, _kill_on_timeout)
+    # Daemon, like every request thread: a non-daemon timer still pending
+    # when the server shuts down would hold the process open for up to
+    # the full timeout.
+    timer.daemon = True
     timer.start()
     chunks = []
     total = 0
@@ -2901,6 +2906,19 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+def _install_sigterm_handler():
+    """Exit cleanly on SIGTERM. In the container, python3 is PID 1 (the
+    entrypoint execs it), and the kernel gives PID 1 no default action for
+    SIGTERM - without a handler, 'docker/podman stop' was silently ignored
+    and always fell back to SIGKILL after its 10-second grace period.
+    SystemExit unwinds serve_forever() and the server's 'with' block like
+    Ctrl-C's KeyboardInterrupt does; request and analysis threads are all
+    daemons, so nothing holds the process open after that."""
+    def _handle_sigterm(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
+
 def main():
     """Run SO-CRATES server."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2955,8 +2973,13 @@ def main():
     ================================================================
     """)
     
-    with ThreadedTCPServer((BIND_ADDRESS, PORT), Handler) as httpd:
-        httpd.serve_forever()
+    _install_sigterm_handler()
+    try:
+        with ThreadedTCPServer((BIND_ADDRESS, PORT), Handler) as httpd:
+            httpd.serve_forever()
+    except (KeyboardInterrupt, SystemExit):
+        pass  # Ctrl-C, or SIGTERM via the handler above - a normal stop, not an error
+    print('SO-CRATES stopped')
 
 
 if __name__ == '__main__':

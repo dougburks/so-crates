@@ -7448,6 +7448,61 @@ class TestCSPEnforced(unittest.TestCase):
             self.assertEqual(resp.status, 204)
 
 
+class TestSigtermShutdown(unittest.TestCase):
+    """In the container python3 is PID 1, which gets no default SIGTERM
+    action - 'podman stop' waited out its full 10s grace period and then
+    SIGKILLed. Run the real serving loop in a child process: with the
+    handler it exits 0 promptly; without it, SIGTERM would kill it (-15)."""
+
+    def _start(self, extra=''):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        code = f"""
+import os, sys, threading
+sys.path.insert(0, {root!r}); os.chdir({root!r})
+import socrates
+socrates.DATA_DIR = {tempfile.mkdtemp()!r}
+socrates._install_sigterm_handler()
+{extra}
+with socrates.ThreadedTCPServer(('127.0.0.1', 0), socrates.Handler) as httpd:
+    print(httpd.server_address[1], flush=True)
+    httpd.serve_forever()
+"""
+        proc = subprocess.Popen([sys.executable, '-c', code], stdout=subprocess.PIPE, text=True)
+        port = int(proc.stdout.readline())
+        return proc, port
+
+    def _stop_and_time(self, proc):
+        import signal
+        start = time.time()
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()  # don't leave a live server behind a failing test
+            proc.wait()
+            raise
+        return proc.returncode, time.time() - start
+
+    def test_sigterm_exits_cleanly_and_promptly(self):
+        import urllib.request
+        proc, port = self._start()
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/version', timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+        rc, elapsed = self._stop_and_time(proc)
+        self.assertEqual(rc, 0)
+        self.assertLess(elapsed, 3)
+
+    def test_pending_run_capped_timer_does_not_delay_exit(self):
+        """A stream request's _run_capped timeout timer still pending at
+        shutdown must not hold the process open until it fires."""
+        proc, port = self._start(extra=(
+            "threading.Thread(target=socrates._run_capped, args=(['sleep', '20'], 1024, 20), daemon=True).start()"))
+        time.sleep(0.5)
+        rc, elapsed = self._stop_and_time(proc)
+        self.assertEqual(rc, 0)
+        self.assertLess(elapsed, 3)
+
+
 class TestCyberChefCSP(unittest.TestCase):
     """cyberchef.build_csp() - pure function, no server needed."""
 
