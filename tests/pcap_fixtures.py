@@ -22,7 +22,7 @@ def _checksum(data):
     return ~s & 0xffff
 
 
-def _tcp_packet(src, dst, sport, dport, seq, ack, flags, payload=b''):
+def _tcp_packet(src, dst, sport, dport, seq, ack, flags, payload=b'', vlan=None):
     v6 = ':' in src
     tcp = struct.pack('!HHIIBBHHH', sport, dport, seq, ack, 5 << 4, flags, 65535, 0, 0) + payload
     if v6:
@@ -38,26 +38,28 @@ def _tcp_packet(src, dst, sport, dport, seq, ack, flags, payload=b''):
         ip = struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(tcp), 1, 0, 64, 6, 0, s, d)
         ip = ip[:10] + struct.pack('!H', _checksum(ip)) + ip[12:]
         ethertype = 0x0800
-    return b'\x00' * 6 + b'\x11' * 6 + struct.pack('!H', ethertype) + ip + tcp
+    tag = struct.pack('!HH', 0x8100, vlan) if vlan is not None else b''
+    return b'\x00' * 6 + b'\x11' * 6 + tag + struct.pack('!H', ethertype) + ip + tcp
 
 
-def tcp_conversation(client, server, cport, sport, request, response, retransmit=False):
+def tcp_conversation(client, server, cport, sport, request, response, retransmit=False, vlan=None):
     """Handshake, one request, a two-segment response (the first segment
-    optionally retransmitted), then FIN/FIN."""
+    optionally retransmitted), then FIN/FIN - optionally inside 802.1Q
+    frames tagged with VLAN id vlan."""
     pkts = []
     cs, ss = 1000, 5000
-    pkts.append(_tcp_packet(client, server, cport, sport, cs, 0, 0x02)); cs += 1
-    pkts.append(_tcp_packet(server, client, sport, cport, ss, cs, 0x12)); ss += 1
-    pkts.append(_tcp_packet(client, server, cport, sport, cs, ss, 0x10))
-    pkts.append(_tcp_packet(client, server, cport, sport, cs, ss, 0x18, request)); cs += len(request)
+    pkts.append(_tcp_packet(client, server, cport, sport, cs, 0, 0x02, vlan=vlan)); cs += 1
+    pkts.append(_tcp_packet(server, client, sport, cport, ss, cs, 0x12, vlan=vlan)); ss += 1
+    pkts.append(_tcp_packet(client, server, cport, sport, cs, ss, 0x10, vlan=vlan))
+    pkts.append(_tcp_packet(client, server, cport, sport, cs, ss, 0x18, request, vlan=vlan)); cs += len(request)
     half = len(response) // 2
-    pkts.append(_tcp_packet(server, client, sport, cport, ss, cs, 0x18, response[:half]))
+    pkts.append(_tcp_packet(server, client, sport, cport, ss, cs, 0x18, response[:half], vlan=vlan))
     if retransmit:
-        pkts.append(_tcp_packet(server, client, sport, cport, ss, cs, 0x18, response[:half]))
-    pkts.append(_tcp_packet(server, client, sport, cport, ss + half, cs, 0x18, response[half:]))
+        pkts.append(_tcp_packet(server, client, sport, cport, ss, cs, 0x18, response[:half], vlan=vlan))
+    pkts.append(_tcp_packet(server, client, sport, cport, ss + half, cs, 0x18, response[half:], vlan=vlan))
     ss += len(response)
-    pkts.append(_tcp_packet(client, server, cport, sport, cs, ss, 0x11))
-    pkts.append(_tcp_packet(server, client, sport, cport, ss, cs + 1, 0x11))
+    pkts.append(_tcp_packet(client, server, cport, sport, cs, ss, 0x11, vlan=vlan))
+    pkts.append(_tcp_packet(server, client, sport, cport, ss, cs + 1, 0x11, vlan=vlan))
     return pkts
 
 
@@ -70,10 +72,13 @@ def write_pcap(path, packets):
 
 def write_http_pcap(path):
     """An IPv4 flow 10.0.0.1:40000 -> 10.0.0.2:80 (with a retransmitted
-    response segment) and an IPv6 flow [2001:db8::1]:40001 ->
-    [2001:db8::2]:8080, both carrying HTTP_REQUEST/HTTP_RESPONSE."""
+    response segment), an IPv6 flow [2001:db8::1]:40001 ->
+    [2001:db8::2]:8080, and a VLAN 244-tagged IPv4 flow 10.0.0.3:40002 ->
+    10.0.0.4:443, all carrying HTTP_REQUEST/HTTP_RESPONSE."""
     write_pcap(path,
                tcp_conversation('10.0.0.1', '10.0.0.2', 40000, 80,
                                 HTTP_REQUEST, HTTP_RESPONSE, retransmit=True)
                + tcp_conversation('2001:db8::1', '2001:db8::2', 40001, 8080,
-                                  HTTP_REQUEST, HTTP_RESPONSE))
+                                  HTTP_REQUEST, HTTP_RESPONSE)
+               + tcp_conversation('10.0.0.3', '10.0.0.4', 40002, 443,
+                                  HTTP_REQUEST, HTTP_RESPONSE, vlan=244))

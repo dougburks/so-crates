@@ -2748,15 +2748,24 @@ bright_magenta = "#D9B9D9"
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_stream_filter_uses_and_not_or(self):
-        """download-stream and hexdump-stream must use 'and port' not 'or port'
-        to avoid pulling in unrelated UDP flows sharing the same destination port."""
+        """download-stream, hexdump-stream and raw-stream must use 'and port'
+        not 'or port' to avoid pulling in unrelated UDP flows sharing the
+        same destination port - all three build it via _stream_bpf_filter."""
         import inspect
         import socrates
         source = inspect.getsource(socrates)
-        # Find the tcpdump filter lines for hexdump and download
-        self.assertIn("f'host {src} and host {dst} and port {sport} and port {dport}'", source)
-        self.assertIn("f\"host {src} and host {dst} and port {sport} and port {dport}\"", source)
-        self.assertNotIn("or port {dport}", source)
+        self.assertEqual(source.count('_stream_bpf_filter(src, sport, dst, dport)]'), 3)
+        flt = socrates._stream_bpf_filter('1.2.3.4', 1, '5.6.7.8', 2)
+        self.assertIn('host 1.2.3.4 and host 5.6.7.8 and port 1 and port 2', flt)
+        self.assertNotIn('or port', flt)
+
+    def test_stream_filter_matches_vlan_tagged_frames(self):
+        """REGRESSION: a flow inside 802.1Q-tagged frames carved to an empty
+        pcap - BPF host/port only match untagged offsets."""
+        import socrates
+        flow = 'host 1.2.3.4 and host 5.6.7.8 and port 1 and port 2'
+        self.assertEqual(socrates._stream_bpf_filter('1.2.3.4', 1, '5.6.7.8', 2),
+                         f'({flow}) or (vlan and ({flow}))')
 
     def test_upload_traversal_filename(self):
         # Use unique PCAP content to avoid collision with test_upload_same_pcap_in_different_zips
@@ -7640,6 +7649,18 @@ class TestRawBytesEndpoints(unittest.TestCase):
         self.assertEqual(status, 200)
         filename = headers['Content-Disposition'].split('filename=')[1]
         self.assertNotIn(':', filename)
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_vlan_tagged_flow(self):
+        """REGRESSION: 802.1Q-tagged flows carved to an empty pcap, so
+        raw-stream 404'd and Download PCAP/Hexdump came back empty."""
+        from tests.pcap_fixtures import HTTP_RESPONSE
+        status, _, body = self._stream('dst', '10.0.0.3', 40002, '10.0.0.4', 443)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, HTTP_RESPONSE)
+        status, _, pcap = self._get(f'/api/download-stream?md5={self.MD5}&src=10.0.0.3&sport=40002&dst=10.0.0.4&dport=443')
+        self.assertEqual(status, 200)
+        self.assertGreater(len(pcap), 24, 'more than an empty pcap header')
 
     @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
     def test_raw_stream_too_large_is_413_not_truncated(self):

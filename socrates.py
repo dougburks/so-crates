@@ -128,6 +128,18 @@ def _sanitize_error_text(text):
     return re.sub(r'(?:^|(?<=[\s:\'"(]))/(?:[\w.+-]+/)+[\w.+-]+', '<path>', text)
 
 
+def _stream_bpf_filter(src, sport, dst, dport):
+    """tcpdump filter for one flow. 'and port', not 'or port', so unrelated
+    flows sharing a port stay out. The second half matches the same flow
+    inside 802.1Q VLAN-tagged frames: BPF's host/port primitives only look
+    at untagged offsets, so without it a capture from a tagged SPAN/trunk
+    port carves to an empty file (seen for real: a Security Onion capture
+    with every packet on VLAN 244). 'vlan' shifts the offsets for what
+    follows it, hence the whole expression repeated after it."""
+    flow = f'host {src} and host {dst} and port {sport} and port {dport}'
+    return f'({flow}) or (vlan and ({flow}))'
+
+
 def _run_capped(cmd, max_bytes, timeout, text=False):
     """Run a command capturing stdout up to max_bytes.
 
@@ -1300,7 +1312,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         try:
             returncode, stdout, truncated = _run_capped(
-                ['tcpdump', '-r', pcap, '-w', '-', f"host {src} and host {dst} and port {sport} and port {dport}"],
+                ['tcpdump', '-r', pcap, '-w', '-', _stream_bpf_filter(src, sport, dst, dport)],
                 max_bytes=config.MAX_STREAM_DOWNLOAD_SIZE,
                 timeout=config.STREAM_TIMEOUT_SECONDS
             )
@@ -1409,7 +1421,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try:
             _, stdout, raw_truncated = _run_capped(
                 ['tcpdump', '-r', pcap, '-X', '-nn',
-                 f'host {src} and host {dst} and port {sport} and port {dport}'],
+                 _stream_bpf_filter(src, sport, dst, dport)],
                 max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
                 timeout=config.STREAM_TIMEOUT_SECONDS, text=True
             )
@@ -1478,7 +1490,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # the flow out in a fraction of a second - so carve first, the
             # same way /api/download-stream does, and follow only that.
             _, carved, truncated = _run_capped(
-                ['tcpdump', '-r', pcap, '-w', '-', f"host {src} and host {dst} and port {sport} and port {dport}"],
+                ['tcpdump', '-r', pcap, '-w', '-', _stream_bpf_filter(src, sport, dst, dport)],
                 max_bytes=config.MAX_STREAM_DOWNLOAD_SIZE,
                 timeout=config.STREAM_TIMEOUT_SECONDS
             )
