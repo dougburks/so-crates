@@ -7852,6 +7852,7 @@ class TestSendToCyberChef(unittest.TestCase):
             app: {
                 options: { updateUrl: true },
                 setRecipeConfig: function(r) { calls.recipe = r; calls.updateUrlAtRecipe = fakeWin.app.options.updateUrl; },
+                setInput: function(t) { calls.text = t; calls.updateUrlAtInput = fakeWin.app.options.updateUrl; },
                 manager: { input: { loadUIFiles: function(f) { calls.files = f; } } }
             }
         };
@@ -8003,6 +8004,76 @@ class TestSendToCyberChef(unittest.TestCase):
         self.assertEqual(result['order'], ['open'])
         self.assertEqual(len(result['toasts']), 1)
         self.assertIn('pop-ups', result['toasts'][0])
+
+    TRANSCRIPT = """
+        // jsdom has no layout, so no Range geometry - stub it (real
+        // browsers all implement both).
+        Range.prototype.getClientRects = function() { return []; };
+        Range.prototype.getBoundingClientRect = function() { return { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 }; };
+        var tr = document.createElement('div');
+        tr.innerHTML = '<div class="stream-payload"><div class="ascii-transcript"><div><span></span><div>'
+            + '<div id="l1">GET /x HTTP/1.1</div><div id="l2">X-Data: aGVsbG8=</div></div></div></div>'
+            + '<div class="hexdump-content"><div id="hx">0x0000: 4745 5420</div></div></div>'
+            + '<div id="outside">not a transcript</div>';
+        document.body.appendChild(tr);
+        function select(startId, endId) {
+            var r = document.createRange();
+            r.setStart(document.getElementById(startId).firstChild, 0);
+            var end = document.getElementById(endId).firstChild;
+            r.setEnd(end, end.length);
+            var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+            updateCyberChefSelectionButton();
+            var b = document.getElementById('cyberChefSelectionBtn');
+            return !!b && !b.hidden;
+        }
+    """
+
+    def test_selection_button_only_for_transcript_selections(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.TRANSCRIPT + '''
+            var inTranscript = select('l1', 'l2');
+            var text = getSelection().toString();
+            var hexdump = select('hx', 'hx');
+            var outside = select('outside', 'outside');
+            var spanning = select('l2', 'outside');
+            getSelection().removeAllRanges(); updateCyberChefSelectionButton();
+            var cleared = !document.getElementById('cyberChefSelectionBtn').hidden;
+            window.__jsdom_result = { inTranscript: inTranscript, text: text, hexdump: hexdump,
+                                      outside: outside, spanning: spanning, cleared: cleared };
+        ''')
+        self.assertTrue(result['inTranscript'])
+        self.assertIn('GET /x HTTP/1.1', result['text'])
+        self.assertIn('X-Data: aGVsbG8=', result['text'])
+        self.assertFalse(result['hexdump'])
+        self.assertFalse(result['outside'])
+        self.assertFalse(result['spanning'], 'a selection running out of the transcript is not offered')
+        self.assertFalse(result['cleared'])
+
+    def test_selection_sent_as_text_input(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self.TRANSCRIPT + '''
+            select('l1', 'l2');
+            document.getElementById('cyberChefSelectionBtn').click();
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { text: calls.text, files: calls.files, recipe: calls.recipe,
+                                      updateUrlAtInput: calls.updateUrlAtInput, order: calls.order };
+        ''')
+        self.assertIn('GET /x HTTP/1.1', result['text'])
+        self.assertIsNone(result['files'], 'text goes in as input, not as a File')
+        self.assertEqual(result['recipe'], [{'op': 'Magic', 'args': [3, False, False, '']}])
+        self.assertIs(result['updateUrlAtInput'], False)
+        self.assertEqual(result['order'], ['open:/cyberchef/|'], 'no server request for a selection')
+
+    def test_selection_button_keeps_selection_on_mousedown(self):
+        """Pressing the button must not collapse the selection it sends."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.TRANSCRIPT + '''
+            select('l1', 'l2');
+            var ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+            document.getElementById('cyberChefSelectionBtn').dispatchEvent(ev);
+            window.__jsdom_result = { prevented: ev.defaultPrevented };
+        ''')
+        self.assertTrue(result['prevented'])
 
     def test_cyberchef_never_ready_times_out_with_message(self):
         from tests.jsdom_helper import js_statements

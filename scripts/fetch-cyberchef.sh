@@ -51,7 +51,7 @@ mv "$WORK/out/CyberChef_$CYBERCHEF_VERSION.html" "$WORK/out/index.html"
 # internal window.app object, not a published API - fail the build here if
 # an upgrade renamed any piece it uses, rather than shipping a silently
 # broken button.
-for needle in 'window.app=' 'loadUIFiles' 'setRecipeConfig' 'options.updateUrl'; do
+for needle in 'window.app=' 'loadUIFiles' 'setRecipeConfig' 'options.updateUrl' 'setInput'; do
     if ! grep -qF "$needle" "$WORK/out/assets/main.js"; then
         echo "fetch-cyberchef.sh: '$needle' not found in CyberChef $CYBERCHEF_VERSION's main.js" >&2
         exit 1

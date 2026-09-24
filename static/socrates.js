@@ -10447,16 +10447,54 @@
         const CYBERCHEF_MAGIC_MAX_BYTES = 16 * 1024;
         const CYBERCHEF_READY_TIMEOUT_MS = 15000;
 
-        async function sendToCyberChef(fetchUrl, filename) {
-            // Opened synchronously, before any await - browsers block a
-            // window.open() that follows an async step as a pop-up. And
-            // without noopener, unlike the lookup links: the handle to the
-            // new window is how the data gets in.
+        // Opened synchronously, before any await - browsers block a
+        // window.open() that follows an async step as a pop-up. And without
+        // noopener, unlike the lookup links: the handle to the new window is
+        // how the data gets in. Returns null (after telling the user) if the
+        // pop-up was blocked.
+        function openCyberChefTab() {
             const win = window.open('/cyberchef/', '_blank');
-            if (!win) {
-                showToast('Could not open CyberChef - allow pop-ups for this page');
-                return;
-            }
+            if (!win) showToast('Could not open CyberChef - allow pop-ups for this page');
+            return win;
+        }
+
+        // Polls until CyberChef in win has finished loading, then hands its
+        // app object to deliver(app, win). Applies Magic first when the
+        // payload is small enough (see CYBERCHEF_MAGIC_MAX_BYTES).
+        function whenCyberChefReady(win, payloadBytes, deliver) {
+            const deadline = Date.now() + CYBERCHEF_READY_TIMEOUT_MS;
+            const tryLoad = () => {
+                if (win.closed) return;
+                let app = null;
+                try {
+                    if (win.document.body && win.document.body.classList.contains('loaded')) app = win.app;
+                } catch (e) { /* still navigating - try again */ }
+                if (app && app.manager && app.manager.input) {
+                    // CyberChef's "update the URL" option rewrites the tab's
+                    // URL with the recipe and, for smaller inputs, the input
+                    // itself (history.replaceState) - which would put the
+                    // payload into browser history, and into synced history
+                    // with it. Off for this tab only: app.options is
+                    // in-memory here, not the saved preferences.
+                    if (app.options) app.options.updateUrl = false;
+                    if (payloadBytes <= CYBERCHEF_MAGIC_MAX_BYTES) {
+                        app.setRecipeConfig([{ op: 'Magic', args: [3, false, false, ''] }]);
+                    }
+                    deliver(app, win);
+                    return;
+                }
+                if (Date.now() > deadline) {
+                    showToast('CyberChef did not finish loading - the data was not sent');
+                    return;
+                }
+                setTimeout(tryLoad, 200);
+            };
+            tryLoad();
+        }
+
+        async function sendToCyberChef(fetchUrl, filename) {
+            const win = openCyberChefTab();
+            if (!win) return;
             let blob;
             try {
                 const resp = await fetch(fetchUrl);
@@ -10476,36 +10514,103 @@
                 showToast('Could not load data for CyberChef');
                 return;
             }
-            const deadline = Date.now() + CYBERCHEF_READY_TIMEOUT_MS;
-            const tryLoad = () => {
-                if (win.closed) return;
-                let app = null;
-                try {
-                    if (win.document.body && win.document.body.classList.contains('loaded')) app = win.app;
-                } catch (e) { /* still navigating - try again */ }
-                if (app && app.manager && app.manager.input) {
-                    // CyberChef's "update the URL" option rewrites the tab's
-                    // URL with the recipe and, for smaller inputs, the input
-                    // itself (history.replaceState) - which would put the
-                    // payload into browser history, and into synced history
-                    // with it. Off for this tab only: app.options is
-                    // in-memory here, not the saved preferences.
-                    if (app.options) app.options.updateUrl = false;
-                    if (blob.size <= CYBERCHEF_MAGIC_MAX_BYTES) {
-                        app.setRecipeConfig([{ op: 'Magic', args: [3, false, false, ''] }]);
-                    }
-                    // win.File, not this page's File: CyberChef's own
-                    // instanceof checks run in its window's realm.
-                    app.manager.input.loadUIFiles([new win.File([blob], filename, { type: 'application/octet-stream' })]);
-                    return;
-                }
-                if (Date.now() > deadline) {
-                    showToast('CyberChef did not finish loading - the data was not sent');
-                    return;
-                }
-                setTimeout(tryLoad, 200);
-            };
-            tryLoad();
+            whenCyberChefReady(win, blob.size, (app, cyberChefWin) => {
+                // cyberChefWin.File, not this page's File: CyberChef's own
+                // instanceof checks run in its window's realm.
+                app.manager.input.loadUIFiles([new cyberChefWin.File([blob], filename, { type: 'application/octet-stream' })]);
+            });
+        }
+
+        // Text, not a File: it lands in CyberChef's editable input box,
+        // where a snippet belongs, instead of a "File details" panel.
+        function sendTextToCyberChef(text) {
+            const win = openCyberChefTab();
+            if (!win) return;
+            whenCyberChefReady(win, new Blob([text]).size, (app) => app.setInput(text));
+        }
+
+        // Send a selection of an ASCII transcript to CyberChef: a small
+        // floating button appears just below any non-empty selection that
+        // lies entirely inside one .ascii-transcript. It sends the text as
+        // displayed - the transcript already shows non-printable bytes as
+        // '.', so this is for text (a base64 blob, a header, a URL); whole
+        // binary payloads go through the Both/Source/Dest buttons instead.
+        // Hexdump selections are deliberately not offered - they'd drag
+        // the offset and ASCII columns along with the bytes.
+        let cyberChefSelectionText = '';
+        let cyberChefSelectionFrame = 0;
+
+        function getCyberChefSelectionButton() {
+            let btn = document.getElementById('cyberChefSelectionBtn');
+            if (!btn) {
+                btn = document.createElement('button');
+                btn.type = 'button';
+                btn.id = 'cyberChefSelectionBtn';
+                btn.className = 'cyberchef-selection-btn';
+                btn.dataset.action = 'send-selection-to-cyberchef';
+                btn.textContent = 'Send selection to CyberChef';
+                btn.hidden = true;
+                // Pressing a button would otherwise collapse the selection
+                // before the click lands.
+                btn.addEventListener('mousedown', e => e.preventDefault());
+                document.body.appendChild(btn);
+            }
+            return btn;
+        }
+
+        // The transcript a selection lies entirely within, or null.
+        function transcriptForSelection(sel) {
+            if (!sel || sel.rangeCount !== 1 || sel.isCollapsed) return null;
+            const node = sel.getRangeAt(0).commonAncestorContainer;
+            const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+            return el ? el.closest('.ascii-transcript') : null;
+        }
+
+        function updateCyberChefSelectionButton() {
+            cyberChefSelectionFrame = 0;
+            const sel = window.getSelection();
+            const transcript = transcriptForSelection(sel);
+            const text = transcript ? sel.toString() : '';
+            const btn = document.getElementById('cyberChefSelectionBtn');
+            if (!text.trim()) {
+                if (btn) btn.hidden = true;
+                cyberChefSelectionText = '';
+                return;
+            }
+            cyberChefSelectionText = text;
+            const shown = getCyberChefSelectionButton();
+            const rects = sel.getRangeAt(0).getClientRects();
+            const last = rects.length ? rects[rects.length - 1] : sel.getRangeAt(0).getBoundingClientRect();
+            shown.hidden = false;
+            // position: fixed (see .cyberchef-selection-btn), so viewport
+            // coordinates straight from the range. Just right of where the
+            // selection ends, on that same line - transcript lines are
+            // usually short, so that's blank space; placing it below
+            // instead covered the next line's text. Too close to the right
+            // edge for that, it drops just below the selection's end.
+            const w = shown.offsetWidth, h = shown.offsetHeight;
+            let left = last.right + 8;
+            let top = last.top + (last.height - h) / 2;
+            if (left + w > window.innerWidth - 8) {
+                left = window.innerWidth - w - 8;
+                top = last.bottom + 6;
+            }
+            shown.style.left = `${Math.max(8, left)}px`;
+            shown.style.top = `${Math.max(8, Math.min(top, window.innerHeight - h - 8))}px`;
+        }
+
+        function scheduleCyberChefSelectionButton() {
+            if (!cyberChefSelectionFrame) cyberChefSelectionFrame = requestAnimationFrame(updateCyberChefSelectionButton);
+        }
+
+        document.addEventListener('selectionchange', scheduleCyberChefSelectionButton);
+        // Capture phase: also catches the scrolling containers inside the
+        // page, not just the window, so the button follows its selection.
+        window.addEventListener('scroll', scheduleCyberChefSelectionButton, true);
+        window.addEventListener('resize', scheduleCyberChefSelectionButton);
+
+        function sendSelectionToCyberChef() {
+            if (cyberChefSelectionText.trim()) sendTextToCyberChef(cyberChefSelectionText);
         }
 
         function sendStreamToCyberChef(src, sport, dst, dport, direction) {
@@ -12031,6 +12136,7 @@
                 if (p) sendStreamToCyberChef(p.dataset.srcIp, p.dataset.srcPort, p.dataset.dstIp, p.dataset.dstPort, el.dataset.direction);
             },
             'send-file-to-cyberchef': (el) => sendExtractedFileToCyberChef(el.dataset.sha256, el.dataset.filename),
+            'send-selection-to-cyberchef': () => sendSelectionToCyberChef(),
             // The note-icon <td>: clicks that miss the icon must do
             // nothing (not toggle the row) - shadowing handles that; the
             // preventDefault/stopPropagation mirror the old inline pair.

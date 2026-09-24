@@ -34,7 +34,7 @@ Expanding a Suricata or Sigma alert shows a **Playbook** section (after Alert De
 
 Click a row's timestamp cell (or use the pivot menu's **Expand Row** entry) to expand it, then:
 
-- **ASCII Transcript** - view decoded TCP/UDP payload as readable text
+- **ASCII Transcript** - view decoded TCP/UDP payload as readable text. Select any part of it - a base64 blob, a header, a URL - and a **Send selection to CyberChef** button appears next to the selection, opening that text in CyberChef's input box. It sends the text as shown, where non-printable bytes are already `.`, so for binary data use **Send to CyberChef** below instead
 - **Hexdump** - view per-packet hex dumps with collapsible packet headers
 - **Download PCAP** - carve that specific stream into a standalone `.pcap` file
 - **Send to CyberChef** - open the stream's exact payload bytes in the built-in CyberChef, in a new tab: **Both** directions, or just the bytes sent by the **Source** or **Dest** side (their dots match the ASCII Transcript's red/blue direction colors). Unlike the transcript, nothing is replaced or trimmed, so XOR keys, compressed data and shellcode survive intact. Payloads up to 16 KB open with CyberChef's **Magic** operation already applied to suggest decodings; larger ones open with an empty recipe, since Magic can take minutes on them. Payloads over 10 MB aren't sent
