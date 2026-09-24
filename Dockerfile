@@ -44,7 +44,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # actually reads) into small gzip-compressed JSON indexes holding only the
 # plain-English content - see playbook_lookup.py and ai_summary_lookup.py.
 # python3-yaml and the raw YAML trees never need to exist in the final
-# runtime image.
+# runtime image. It also downloads the pinned CyberChef release (see the
+# last step of this stage), so the release zip and unzip stay out too.
 #
 # ca-certificates is required explicitly, not assumed from the base image -
 # debian:13-slim (trixie) is still an actively-updated release, and a base
@@ -54,9 +55,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # not an expired/invalid cert - this happened for real in CI).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     git \
     python3 \
     python3-yaml \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 \
@@ -179,6 +182,13 @@ for detection_type, filename in (
     print(f'Baked {len(index)} {detection_type} AI summary entries -> {out_path}')
 PY
 
+# Downloads the pinned, checksum-verified CyberChef release - see
+# scripts/fetch-cyberchef.sh for the pins and what it strips. Last in this
+# stage so a CyberChef upgrade doesn't re-run the slow YAML conversions
+# above.
+COPY scripts/fetch-cyberchef.sh /tmp/fetch-cyberchef.sh
+RUN sh /tmp/fetch-cyberchef.sh /tmp/cyberchef-out
+
 
 FROM debian:13-slim
 
@@ -220,7 +230,7 @@ ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY config.py db.py models.py validators.py suricata_analyzer.py suricata_sid_ranges.py yara_analyzer.py sigma_analyzer.py file_analyzer.py exif_analyzer.py ohmydebn_colors.py playbook_lookup.py ai_summary_lookup.py socrates.py socrates.html ./
+COPY config.py db.py models.py validators.py suricata_analyzer.py suricata_sid_ranges.py yara_analyzer.py sigma_analyzer.py file_analyzer.py exif_analyzer.py ohmydebn_colors.py playbook_lookup.py ai_summary_lookup.py cyberchef.py socrates.py socrates.html ./
 COPY static/ static/
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
@@ -358,6 +368,10 @@ COPY --from=resources-builder /tmp/playbooks-out/ /usr/share/playbooks/
 # Bake AI-generated rule summaries into the image the same way - see the
 # resources-builder stage above and ai_summary_lookup.py.
 COPY --from=resources-builder /tmp/ai-summaries-out/ /usr/share/ai-summaries/
+
+# Bake CyberChef in so the pivot menu's CyberChef lookup works air-gapped -
+# see the resources-builder stage above and cyberchef.py.
+COPY --from=resources-builder /tmp/cyberchef-out/ /usr/share/cyberchef/
 
 RUN mkdir -p /data && chown -R 1000:1000 /data
 

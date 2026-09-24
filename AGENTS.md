@@ -26,6 +26,19 @@ If the copyright year changed, update `static/LICENSE` accordingly.
 Check for D3 releases at https://github.com/d3/d3/releases.
 Recommended cadence: every 6–12 months, or immediately if a security CVE is announced.
 
+### CyberChef
+
+Unlike D3, CyberChef is not committed to the repo - the Dockerfile's `resources-builder` stage runs `scripts/fetch-cyberchef.sh`, which downloads a pinned release, verifies it, and installs it to `/usr/share/cyberchef` (`CYBERCHEF_DIR`), served at `/cyberchef/`.
+
+To upgrade:
+
+1. Take the new release's tag, asset filename (it carries a commit hash, not the version) and GitHub's published SHA-256 digest from https://github.com/gchq/CyberChef/releases, plus the SHA-256 of `LICENSE` at that tag, and update the four pins at the top of `scripts/fetch-cyberchef.sh`.
+2. Run `scripts/fetch-cyberchef.sh ./cyberchef`. It fails if either internal hook SO-CRATES relies on (`window.app=`, `loadUIFiles` in `assets/main.js`) disappeared.
+3. Serve it (`CYBERCHEF_DIR=./cyberchef python3 socrates.py`), open `/cyberchef/` with DevTools open, and run at least From Base64, Magic, XOR, YARA Rules, SHA2 and Gunzip on a loaded file. Any new CSP violation means `_CSP_TEMPLATE` in `cyberchef.py` needs a carve-out - add only what the violation names, and document why in that comment. The two inline-script hashes are computed from `index.html` automatically, so they need no edit. One violation is expected: `frame-src` for the "Bombe" loading animation (see the same comment).
+4. Run the test suite.
+
+Recommended cadence: every 3–6 months, or immediately for a CyberChef security fix - shorter than D3's, because CyberChef runs on SO-CRATES's origin under a looser CSP, so its bugs matter more here.
+
 ## Backend Architecture
 
 SO-CRATES's backend is split into domain modules. Do not add new logic directly to `socrates.py` - place it in the appropriate module:
@@ -41,6 +54,7 @@ SO-CRATES's backend is split into domain modules. Do not add new logic directly 
 | `ohmydebn_colors.py` | Deriving a full theme (CSS custom properties) from an OhMyDebn/Aether color palette (`colors.toml`/`alacritty.toml`) for the Themes modal's OhMyDebn sync toggle. Pure functions, no I/O. |
 | `playbook_lookup.py` | Security Onion Playbooks lookup - reading the baked-in gzip-compressed indexes (`BAKED_IN_PLAYBOOKS_DIR`/`PLAYBOOKS_DIR`), exact-rule/engine-fallback resolution, in-process caching. No fetch/refresh logic - see "Detection Rule Freshness" below for why. |
 | `ai_summary_lookup.py` | AI-generated per-rule summary lookup - same baked-in gzip-compressed-index/in-process-caching shape as `playbook_lookup.py` (`AI_SUMMARIES_DIR`), but exact-match only, no engine-wide fallback, and covers `nids`/`sigma`/`yara` (one more type than Playbooks). No fetch/refresh logic - see "Detection Rule Freshness" below. |
+| `cyberchef.py` | The bundled CyberChef: where it lives (`CYBERCHEF_DIR`) and the Content-Security-Policy `/cyberchef/` responses get (`build_csp`/`get_csp`). Serving itself stays in `socrates.py`'s `do_GET`. |
 | `db.py` | SQLite schema changes, new query functions, index optimization, bulk loading logic. |
 | `models.py` | New Suricata event field extraction helpers (parsing JSON fields into typed values). |
 | `config.py` | Application-wide constants: size limits, timeouts, thresholds. Adjust here for different deployments. |

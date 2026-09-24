@@ -7814,7 +7814,7 @@ class TestPivotMenu(unittest.TestCase):
             btn.click();
             window.__jsdom_result = { url: opened };
         ''')
-        self.assertTrue(result['url'].startswith('https://gchq.github.io/CyberChef/#input='))
+        self.assertTrue(result['url'].startswith('/cyberchef/#input='))
         # 1.1.1.1 base64-encoded and then URL-encoded (the trailing '='
         # padding becomes %3D).
         self.assertIn('MS4xLjEuMQ%3D%3D', result['url'])
@@ -7831,7 +7831,7 @@ class TestPivotMenu(unittest.TestCase):
             window.__jsdom_result = { threw: threw, url: url };
         ''')
         self.assertFalse(result['threw'])
-        self.assertTrue(result['url'].startswith('https://gchq.github.io/CyberChef/#input='))
+        self.assertTrue(result['url'].startswith('/cyberchef/#input='))
 
 
 class TestCorrelatePivotMenu(unittest.TestCase):

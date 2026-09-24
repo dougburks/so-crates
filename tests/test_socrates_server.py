@@ -6751,6 +6751,22 @@ class TestDockerfile(unittest.TestCase):
         self.assertEqual(content.count('FROM debian:13-slim'), 3,
                           'Dockerfile must have exactly three build stages')
 
+    def test_cyberchef_baked_from_resources_builder(self):
+        """The bundled CyberChef is downloaded by the shared
+        resources-builder stage (not a stage of its own - see
+        test_dockerfile_uses_multistage_build) and copied to the path
+        cyberchef.CYBERCHEF_DIR defaults to; unzip stays build-only."""
+        import re
+        import cyberchef
+        with open(DOCKERFILE, 'r') as f:
+            content = f.read()
+        self.assertIn('RUN sh /tmp/fetch-cyberchef.sh /tmp/cyberchef-out', content)
+        final_stage = self._dockerfile_final_stage()
+        self.assertIn(f'COPY --from=resources-builder /tmp/cyberchef-out/ {cyberchef.CYBERCHEF_DIR}/',
+                      final_stage)
+        self.assertIsNone(re.search(r'^\s+unzip\s*\\?$', final_stage, re.MULTILINE),
+                          'unzip must not be installed in the final runtime stage')
+
     def test_build_toolchain_absent_from_final_stage(self):
         """REGRESSION: the Rust/build toolchain used to compile the
         Zircolite venv must not be installed in the final runtime stage."""
@@ -7399,6 +7415,141 @@ class TestCSPEnforced(unittest.TestCase):
             headers={'Content-Type': 'application/csp-report'})
         with urllib.request.urlopen(req, timeout=5) as resp:
             self.assertEqual(resp.status, 204)
+
+
+class TestCyberChefCSP(unittest.TestCase):
+    """cyberchef.build_csp() - pure function, no server needed."""
+
+    INDEX = ('<html><head><script type=application/javascript>var a=1;</script>'
+             '<script defer src=assets/main.js></script></head><body>'
+             '<script type="text/javascript">\n  var b=2;\n</script></body></html>')
+
+    def _sha(self, body):
+        import base64
+        return "'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'"
+
+    def test_hashes_each_inline_script_exactly(self):
+        import cyberchef
+        csp = cyberchef.build_csp(self.INDEX)
+        # Whitespace is part of what the browser hashes - no stripping.
+        self.assertIn(self._sha('var a=1;'), csp)
+        self.assertIn(self._sha('\n  var b=2;\n'), csp)
+
+    def test_src_script_not_hashed_and_not_merged_with_next(self):
+        """REGRESSION: an empty <script src=...></script> must not be
+        matched together with the following inline script's body."""
+        import cyberchef
+        script_src = [d for d in cyberchef.build_csp(self.INDEX).split(';')
+                      if d.strip().startswith('script-src')][0]
+        self.assertEqual(script_src.count("'sha256-"), 2)
+
+    def test_no_unsafe_inline_script(self):
+        import cyberchef
+        script_src = [d for d in cyberchef.build_csp(self.INDEX).split(';')
+                      if d.strip().startswith('script-src')][0]
+        self.assertNotIn('unsafe-inline', script_src)
+
+    def test_missing_copy_still_gets_valid_policy(self):
+        import cyberchef
+        missing = os.path.join(tempfile.mkdtemp(), 'nope')
+        csp = cyberchef.get_csp(missing)
+        self.assertIn("default-src 'self'", csp)
+        self.assertNotIn("'sha256-", csp)
+
+
+class TestCyberChefServing(unittest.TestCase):
+    """/cyberchef/ serves the bundled copy from CYBERCHEF_DIR with its own
+    CSP, and nothing else about the app's serving changes."""
+
+    INDEX = '<html><script>var x=1;</script><script defer src=assets/main.js></script></html>'
+
+    @classmethod
+    def setUpClass(cls):
+        import cyberchef
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.original_base = server.DATA_DIR
+        server.DATA_DIR = cls.tmpdir
+        cls.ccdir = os.path.join(cls.tmpdir, 'cyberchef')
+        os.makedirs(os.path.join(cls.ccdir, 'assets'))
+        with open(os.path.join(cls.ccdir, 'index.html'), 'w') as f:
+            f.write(cls.INDEX)
+        with open(os.path.join(cls.ccdir, 'assets', 'main.js'), 'w') as f:
+            f.write('window.app={};')
+        cls.original_ccdir = cyberchef.CYBERCHEF_DIR
+        cyberchef.CYBERCHEF_DIR = cls.ccdir
+        cls.port = 21000 + (os.getpid() % 1000)
+        cls.server = server.ThreadedTCPServer(('127.0.0.1', cls.port), server.Handler)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        import cyberchef
+        cls.server.shutdown()
+        cls.server.server_close()
+        cyberchef.CYBERCHEF_DIR = cls.original_ccdir
+        server.DATA_DIR = cls.original_base
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _raw(self, path):
+        import http.client
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        try:
+            conn.request('GET', path)
+            resp = conn.getresponse()
+            # resp.headers, not a dict: the stdlib handler sends 'Content-type'.
+            return resp.status, resp.headers, resp.read().decode()
+        finally:
+            conn.close()
+
+    def test_bare_path_redirects_to_directory(self):
+        status, headers, _ = self._raw('/cyberchef')
+        self.assertEqual(status, 301)
+        self.assertEqual(headers.get('Location'), '/cyberchef/')
+
+    def test_index_served_with_cyberchef_csp(self):
+        import cyberchef
+        status, headers, body = self._raw('/cyberchef/')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, self.INDEX)
+        self.assertEqual(headers.get('Content-Security-Policy'), cyberchef.build_csp(self.INDEX))
+        self.assertEqual(headers.get('X-Frame-Options'), 'DENY')
+        self.assertEqual(headers.get('Cache-Control'), 'no-cache')
+
+    def test_asset_served(self):
+        status, headers, body = self._raw('/cyberchef/assets/main.js')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, 'window.app={};')
+        self.assertIn('javascript', headers.get('Content-Type', ''))
+
+    def test_app_pages_keep_strict_csp(self):
+        for path in ('/socrates.html', '/static/socrates.css'):
+            status, headers, _ = self._raw(path)
+            self.assertEqual(status, 200, path)
+            script_src = [d.strip() for d in headers['Content-Security-Policy'].split(';')
+                          if d.strip().startswith('script-src')]
+            self.assertEqual(script_src, ["script-src 'self'"], path)
+
+    def test_traversal_rejected(self):
+        for path in ('/cyberchef/%2e%2e/socrates.py', '/cyberchef/../socrates.py',
+                     '/cyberchef/..%2fconfig.py', '/cyberchef/%2e%2e/%2e%2e/etc/passwd'):
+            status, _, body = self._raw(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn('import', body, path)
+
+    def test_does_not_serve_app_directory(self):
+        """CyberChef paths resolve inside CYBERCHEF_DIR, never the app's
+        own working directory."""
+        status, _, _ = self._raw('/cyberchef/socrates.py')
+        self.assertEqual(status, 404)
+
+    def test_no_directory_listings(self):
+        for path in ('/cyberchef/assets/', '/static/'):
+            status, _, body = self._raw(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn('Directory listing', body, path)
 
 
 if __name__ == '__main__':

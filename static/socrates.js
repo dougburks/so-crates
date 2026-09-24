@@ -10352,12 +10352,15 @@
         // throws on e.g. multi-byte characters in a log field's value).
         // Falls back to a bare (empty-input) CyberChef link on any encoding
         // failure rather than the whole menu action silently doing nothing.
+        // Points at the copy baked into the image (served by socrates.py at
+        // /cyberchef/, see cyberchef.py) rather than gchq.github.io, so the
+        // lookup works air-gapped like everything else in SO-CRATES.
         function cyberChefUrl(value) {
             try {
                 const b64 = btoa(unescape(encodeURIComponent(String(value))));
-                return `https://gchq.github.io/CyberChef/#input=${encodeURIComponent(b64)}`;
+                return `/cyberchef/#input=${encodeURIComponent(b64)}`;
             } catch (e) {
-                return 'https://gchq.github.io/CyberChef/';
+                return '/cyberchef/';
             }
         }
 

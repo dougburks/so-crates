@@ -60,6 +60,7 @@ from ohmydebn_colors import (
 from playbook_lookup import get_playbook
 from ai_summary_lookup import get_ai_summary
 import config
+import cyberchef
 import tomllib
 
 VERSION = '4.2.0'
@@ -611,8 +612,28 @@ def _extract_zip_contents(zip_path, extract_dir, passwords=None, max_size=None):
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    # Set by do_GET for a /cyberchef/ request that passed its path checks -
+    # switches translate_path() to CYBERCHEF_DIR and _add_security_headers()
+    # to CyberChef's own CSP for this one response.
+    _serving_cyberchef = False
+
     def log_message(self, format, *args):
         pass
+
+    def translate_path(self, path):
+        if not self._serving_cyberchef:
+            return super().translate_path(path)
+        # do_GET already rejected any '..' segment in this normalized form.
+        normalized = posixpath.normpath(unquote(urlparse(path).path))
+        parts = [p for p in normalized.split('/')[2:] if p]
+        return os.path.join(cyberchef.CYBERCHEF_DIR, *parts)
+
+    def list_directory(self, path):
+        # SimpleHTTPRequestHandler's fallback for a directory with no
+        # index.html (e.g. /static/ or /cyberchef/assets/) - never a page
+        # this app means to serve.
+        self._send_error(404, 'Not found')
+        return None
 
     def _add_security_headers(self):
         self.send_header('X-Frame-Options', 'DENY')
@@ -626,13 +647,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # style-src keeps 'unsafe-inline' deliberately: the UI uses inline
         # style= attributes throughout, and CSS injection is a far weaker
         # primitive than script injection.
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'self'; report-uri /api/csp-report;")
+        # /cyberchef/ gets its own, looser policy - see cyberchef.py for
+        # what each carve-out is for and why it stays off this app's pages.
+        if self._serving_cyberchef:
+            self.send_header('Content-Security-Policy', cyberchef.get_csp())
+        else:
+            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'self'; report-uri /api/csp-report;")
 
     def end_headers(self):
         self._add_security_headers()
         # Prevent browser caching of HTML and static assets so upgrades
         # are reflected immediately without manual cache clearing.
-        if self.path.endswith('.html') or self.path.startswith('/static/'):
+        # CyberChef is ~48MB, too big to re-download on every open, but its
+        # asset names don't change between versions (assets/main.js), so it
+        # can't be cached blindly either: no-cache makes the browser
+        # revalidate each time, and the stdlib handler answers with a cheap
+        # 304 until an image upgrade changes the files' Last-Modified.
+        if self._serving_cyberchef:
+            self.send_header('Cache-Control', 'no-cache')
+        elif self.path.endswith('.html') or self.path.startswith('/static/'):
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
@@ -1021,6 +1054,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if normalized == '/socrates.html' or (
                     normalized.startswith('/static/')
                     and '..' not in normalized.split('/')):
+                super().do_GET()
+            else:
+                self._send_error(404, 'Not found')
+        elif path == '/cyberchef':
+            self.send_response(301)
+            self.send_header('Location', '/cyberchef/')
+            self.end_headers()
+        elif path.startswith('/cyberchef/'):
+            # Same normalized-form re-check as /static/ above.
+            normalized = posixpath.normpath(unquote(path))
+            if ((normalized == '/cyberchef' or normalized.startswith('/cyberchef/'))
+                    and '..' not in normalized.split('/')):
+                self._serving_cyberchef = True
                 super().do_GET()
             else:
                 self._send_error(404, 'Not found')
