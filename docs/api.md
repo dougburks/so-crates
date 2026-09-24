@@ -279,6 +279,44 @@ Extracts per-packet hex dumps from a TCP/UDP stream using `tcpdump -X`. Truncate
 
 ---
 
+### `GET /api/raw-stream`
+
+Returns a TCP/UDP stream's exact payload bytes - nothing decoded, replaced or trimmed, unlike `/api/ascii-stream`. The flow is carved with `tcpdump`, then reassembled with `tshark`'s `follow ... raw` mode, which drops retransmitted segments and orders out-of-order ones. Tries TCP first, falls back to UDP.
+
+**Query Parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `src` | Yes | Source IP address |
+| `sport` | Yes | Source port |
+| `dst` | Yes | Destination IP address |
+| `dport` | Yes | Destination port |
+| `md5` | Yes | MD5 hash of a historical analysis |
+| `direction` | No | `src` (bytes sent by `src`:`sport`), `dst` (bytes sent by the other side), or `both` (default - everything, in capture order) |
+
+**Response:** `application/octet-stream` download.
+
+**Errors:** `400` for invalid parameters, `404` if the flow has no payload in that direction, `413` if the payload is over 10 MB (`MAX_RAW_STREAM_SIZE`) - never a truncated payload. The size check covers the whole flow, so asking for one small direction of a flow whose other direction is huge also returns `413`.
+
+---
+
+### `GET /api/extracted-file`
+
+Returns a file Suricata extracted from the analysis's traffic, by its SHA256 (the `fileinfo.sha256` field of a `fileinfo` event).
+
+**Query Parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `md5` | Yes | MD5 hash of a historical analysis |
+| `sha256` | Yes | Lowercase hex SHA256 of the extracted file |
+
+**Response:** `application/octet-stream` download of the file's exact bytes.
+
+**Errors:** `400` for an invalid `md5` or `sha256`, `404` if no file with that hash was stored (Suricata logs a `fileinfo` event for every transfer, but only stores files it could fully reassemble), `413` if the file is over 25 MB (`MAX_EXTRACTED_FILE_SIZE`). The file is looked up by hash only, inside the analysis's `filestore/` - no path is ever accepted from the client.
+
+---
+
 ### `GET /api/analyses`
 
 Lists all previously-analyzed files.

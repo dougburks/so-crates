@@ -6751,6 +6751,18 @@ class TestDockerfile(unittest.TestCase):
         self.assertEqual(content.count('FROM debian:13-slim'), 3,
                           'Dockerfile must have exactly three build stages')
 
+    def test_every_app_module_copied_into_image(self):
+        """A top-level module missing from the final stage's COPY line only
+        fails at import time inside the built image - catch it here."""
+        import glob
+        with open(DOCKERFILE, 'r') as f:
+            content = f.read()
+        copy_line = [l for l in content.split('\n') if l.startswith('COPY config.py ')]
+        self.assertEqual(len(copy_line), 1)
+        root = os.path.dirname(DOCKERFILE)
+        for path in glob.glob(os.path.join(root, '*.py')):
+            self.assertIn(' ' + os.path.basename(path) + ' ', copy_line[0], path)
+
     def test_cyberchef_baked_from_resources_builder(self):
         """The bundled CyberChef is downloaded by the shared
         resources-builder stage (not a stage of its own - see
@@ -7550,6 +7562,129 @@ class TestCyberChefServing(unittest.TestCase):
             status, _, body = self._raw(path)
             self.assertEqual(status, 404, path)
             self.assertNotIn('Directory listing', body, path)
+
+
+class TestRawBytesEndpoints(unittest.TestCase):
+    """/api/raw-stream and /api/extracted-file return exact bytes, against
+    a real (hand-built) pcap and a filestore laid out the way Suricata's
+    file-store v2 writes one."""
+
+    MD5 = 'b' * 32
+    FILE_BYTES = b'MZ\x90\x00' + bytes(range(256)) + b'\xff\xfe'
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.pcap_fixtures import write_http_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.original_base = server.DATA_DIR
+        server.DATA_DIR = cls.tmpdir
+        cls.dir_path = os.path.join(cls.tmpdir, cls.MD5)
+        os.makedirs(cls.dir_path)
+        write_http_pcap(os.path.join(cls.dir_path, 'capture.pcap'))
+        cls.sha256 = hashlib.sha256(cls.FILE_BYTES).hexdigest()
+        store = os.path.join(cls.dir_path, 'filestore', cls.sha256[:2])
+        os.makedirs(store)
+        with open(os.path.join(store, cls.sha256), 'wb') as f:
+            f.write(cls.FILE_BYTES)
+        # A file outside the filestore, and a symlink inside it pointing there.
+        cls.outside = os.path.join(cls.tmpdir, 'secret.txt')
+        with open(cls.outside, 'wb') as f:
+            f.write(b'secret')
+        cls.link_sha = 'c' * 64
+        os.makedirs(os.path.join(cls.dir_path, 'filestore', 'cc'))
+        os.symlink(cls.outside, os.path.join(cls.dir_path, 'filestore', 'cc', cls.link_sha))
+        cls.port = 22000 + (os.getpid() % 1000)
+        cls.server = server.ThreadedTCPServer(('127.0.0.1', cls.port), server.Handler)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        server.DATA_DIR = cls.original_base
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _get(self, path):
+        import http.client
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=30)
+        try:
+            conn.request('GET', path)
+            resp = conn.getresponse()
+            return resp.status, resp.headers, resp.read()
+        finally:
+            conn.close()
+
+    def _stream(self, direction=None, src='10.0.0.1', sport=40000, dst='10.0.0.2', dport=80):
+        q = f'/api/raw-stream?md5={self.MD5}&src={src}&sport={sport}&dst={dst}&dport={dport}'
+        if direction:
+            q += f'&direction={direction}'
+        return self._get(q)
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_raw_stream_exact_bytes(self):
+        from tests.pcap_fixtures import HTTP_REQUEST, HTTP_RESPONSE
+        status, headers, body = self._stream('dst')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, HTTP_RESPONSE)
+        self.assertEqual(headers['Content-Type'], 'application/octet-stream')
+        self.assertIn('attachment', headers['Content-Disposition'])
+        self.assertEqual(self._stream('src')[2], HTTP_REQUEST)
+        self.assertEqual(self._stream()[2], HTTP_REQUEST + HTTP_RESPONSE)  # default: both
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_raw_stream_ipv6_filename_has_no_colons(self):
+        status, headers, _ = self._stream('src', '2001:db8::1', 40001, '2001:db8::2', 8080)
+        self.assertEqual(status, 200)
+        filename = headers['Content-Disposition'].split('filename=')[1]
+        self.assertNotIn(':', filename)
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_raw_stream_too_large_is_413_not_truncated(self):
+        with unittest.mock.patch.object(config, 'MAX_RAW_STREAM_SIZE', 100):
+            status, _, body = self._stream('dst')
+        self.assertEqual(status, 413)
+        self.assertNotIn(b'HTTP/1.1 200', body)
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_raw_stream_unknown_flow_404(self):
+        self.assertEqual(self._stream('both', '10.9.9.9', 1, '10.8.8.8', 2)[0], 404)
+
+    def test_raw_stream_rejects_bad_params(self):
+        self.assertEqual(self._stream('client')[0], 400)
+        self.assertEqual(self._stream('both', src='10.0.0.1;ls')[0], 400)
+        self.assertEqual(self._get('/api/raw-stream?md5=nothex&src=1.2.3.4&sport=1&dst=1.2.3.5&dport=2')[0], 400)
+
+    def test_extracted_file_exact_bytes(self):
+        status, headers, body = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={self.sha256}')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, self.FILE_BYTES)
+        self.assertEqual(headers['Content-Type'], 'application/octet-stream')
+
+    def test_extracted_file_bad_sha256_400(self):
+        for bad in ('', 'abc', self.sha256.upper(), '../' + self.sha256[3:], self.sha256 + 'a'):
+            status, _, _ = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={bad}')
+            self.assertEqual(status, 400, bad)
+
+    def test_extracted_file_unknown_404(self):
+        status, _, _ = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={"d" * 64}')
+        self.assertEqual(status, 404)
+
+    def test_extracted_file_symlink_out_of_filestore_404(self):
+        status, _, body = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={self.link_sha}')
+        self.assertEqual(status, 404)
+        self.assertNotIn(b'secret', body)
+
+    def test_extracted_file_too_large_413(self):
+        with unittest.mock.patch.object(config, 'MAX_EXTRACTED_FILE_SIZE', 10):
+            status, _, _ = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={self.sha256}')
+        self.assertEqual(status, 413)
+
+    def test_extracted_file_bad_md5_400(self):
+        status, _, _ = self._get(f'/api/extracted-file?md5=../x&sha256={self.sha256}')
+        self.assertEqual(status, 400)
 
 
 if __name__ == '__main__':

@@ -55,6 +55,7 @@ SO-CRATES's backend is split into domain modules. Do not add new logic directly 
 | `playbook_lookup.py` | Security Onion Playbooks lookup - reading the baked-in gzip-compressed indexes (`BAKED_IN_PLAYBOOKS_DIR`/`PLAYBOOKS_DIR`), exact-rule/engine-fallback resolution, in-process caching. No fetch/refresh logic - see "Detection Rule Freshness" below for why. |
 | `ai_summary_lookup.py` | AI-generated per-rule summary lookup - same baked-in gzip-compressed-index/in-process-caching shape as `playbook_lookup.py` (`AI_SUMMARIES_DIR`), but exact-match only, no engine-wide fallback, and covers `nids`/`sigma`/`yara` (one more type than Playbooks). No fetch/refresh logic - see "Detection Rule Freshness" below. |
 | `cyberchef.py` | The bundled CyberChef: where it lives (`CYBERCHEF_DIR`) and the Content-Security-Policy `/cyberchef/` responses get (`build_csp`/`get_csp`). Serving itself stays in `socrates.py`'s `do_GET`. |
+| `stream_payload.py` | Exact-byte stream payloads for `/api/raw-stream`: building the `tshark` follow command and parsing its raw output per direction. Carving the flow out of the capture first stays in the handler, alongside the other stream endpoints. |
 | `db.py` | SQLite schema changes, new query functions, index optimization, bulk loading logic. |
 | `models.py` | New Suricata event field extraction helpers (parsing JSON fields into typed values). |
 | `config.py` | Application-wide constants: size limits, timeouts, thresholds. Adjust here for different deployments. |

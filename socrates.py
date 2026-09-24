@@ -44,8 +44,9 @@ from suricata_analyzer import (
     _set_error, _set_phase, _clear_phase, get_suricata_rules_info,
     get_suricata_enabled_sources, get_suricata_show_protocol_decode_alerts,
     SURICATA_RULE_SOURCES, BAKED_IN_SURICATA_SOURCES,
-    DEFAULT_SURICATA_SOURCES,
+    DEFAULT_SURICATA_SOURCES, find_extracted_file,
 )
+from stream_payload import DIRECTIONS as STREAM_DIRECTIONS, run_follow_raw
 from suricata_sid_ranges import (
     SURICATA_SID_RANGES, SURICATA_BUILTIN_SID_RANGE, SURICATA_BUILTIN_LABEL,
 )
@@ -166,6 +167,7 @@ def _run_capped(cmd, max_bytes, timeout, text=False):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+        proc.stdout.close()
     if timed_out[0]:
         raise subprocess.TimeoutExpired(cmd, timeout)
     data = b''.join(chunks)
@@ -908,6 +910,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/download-stream': 'handle_get_download_stream',
         '/api/ascii-stream': 'handle_get_ascii_stream',
         '/api/hexdump-stream': 'handle_get_hexdump_stream',
+        '/api/raw-stream': 'handle_get_raw_stream',
+        '/api/extracted-file': 'handle_get_extracted_file',
         '/api/analyses': 'handle_get_analyses',
         '/api/load-analysis': 'handle_get_load_analysis',
         '/api/pcap-path': 'handle_get_pcap_path',
@@ -1441,6 +1445,97 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except subprocess.TimeoutExpired:
             self._send_error(500, 'Hexdump extraction timed out')
         except Exception:
+            self._send_error(500, 'Internal server error')
+
+    def _send_bytes(self, data, filename):
+        """Exact bytes as a download - application/octet-stream plus the
+        global nosniff header means a browser navigating here directly
+        never renders them, whatever they contain."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/octet-stream')
+        self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_get_raw_stream(self, params):
+        """One flow's exact payload bytes (see stream_payload.py) - unlike
+        /api/ascii-stream, nothing is decoded, replaced or trimmed.
+        direction: 'src' (bytes sent by src:sport), 'dst', or 'both'."""
+        result, error, status_code = self._validate_stream_params(params)
+        if error:
+            self._send_error(status_code, error)
+            return
+        direction = params.get('direction', ['both'])[0]
+        if direction not in STREAM_DIRECTIONS:
+            self._send_error(400, 'Invalid direction')
+            return
+        pcap, src, sport, dst, dport = (result[k] for k in ('pcap', 'src', 'sport', 'dst', 'dport'))
+        try:
+            # tshark reads the entire capture even to follow one flow (~8s
+            # on a 1GB pcap, measured), while tcpdump's BPF filter carves
+            # the flow out in a fraction of a second - so carve first, the
+            # same way /api/download-stream does, and follow only that.
+            _, carved, truncated = _run_capped(
+                ['tcpdump', '-r', pcap, '-w', '-', f"host {src} and host {dst} and port {sport} and port {dport}"],
+                max_bytes=config.MAX_STREAM_DOWNLOAD_SIZE,
+                timeout=config.STREAM_TIMEOUT_SECONDS
+            )
+            if truncated:
+                self._send_error(413, 'Stream payload too large')
+                return
+            # _upload_tmp_dir() is swept at startup, so a hard crash
+            # mid-request can't strand the carved copy.
+            with tempfile.NamedTemporaryFile(dir=_upload_tmp_dir(), suffix='.pcap') as tmp:
+                tmp.write(carved)
+                tmp.flush()
+                payload, too_large = run_follow_raw(
+                    _run_capped, tmp.name, src, sport, dst, dport, direction,
+                    max_bytes=config.MAX_RAW_STREAM_SIZE,
+                    timeout=config.STREAM_TIMEOUT_SECONDS)
+            if too_large:
+                # Refuse rather than cut off: a truncated payload would
+                # decode wrongly with nothing to say it's incomplete.
+                self._send_error(413, 'Stream payload too large')
+            elif not payload:
+                self._send_error(404, 'No payload found')
+            else:
+                self._send_bytes(payload, f'stream_{src}_{sport}_to_{dst}_{dport}_{direction}.bin'
+                                          .replace(':', '-'))
+        except subprocess.TimeoutExpired:
+            self._send_error(500, 'Stream payload extraction timed out')
+        except Exception:
+            self._send_error(500, 'Internal server error')
+
+    def handle_get_extracted_file(self, params):
+        """One file Suricata extracted from this analysis's traffic, by
+        SHA256 (the fileinfo event's fileinfo.sha256)."""
+        dir_path, error = self._resolve_md5_dir(params.get('md5', [''])[0])
+        if error:
+            self._send_error(400, error)
+            return
+        sha256 = params.get('sha256', [''])[0]
+        if not re.match(r'^[a-f0-9]{64}$', sha256):
+            self._send_error(400, 'Invalid SHA256')
+            return
+        path = find_extracted_file(dir_path, sha256)
+        if not path:
+            # Suricata logs a fileinfo event for every transfer it sees,
+            # but only stores the ones it could fully reassemble.
+            self._send_error(404, 'Extracted file not found')
+            return
+        try:
+            if os.path.getsize(path) > config.MAX_EXTRACTED_FILE_SIZE:
+                self._send_error(413, 'Extracted file too large')
+                return
+            with open(path, 'rb') as f:
+                data = f.read(config.MAX_EXTRACTED_FILE_SIZE + 1)
+            if len(data) > config.MAX_EXTRACTED_FILE_SIZE:
+                self._send_error(413, 'Extracted file too large')
+                return
+            self._send_bytes(data, f'{sha256}.bin')
+        except OSError:
             self._send_error(500, 'Internal server error')
 
     def handle_get_analyses(self, params):

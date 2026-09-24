@@ -927,6 +927,31 @@ def spawn_suricata(dir_path, pcap_path, suricata_config_path=None, data_dir=None
         return False
 
 
+_SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
+
+
+def find_extracted_file(dir_path, sha256):
+    """Path of the file Suricata extracted with this SHA256 in the analysis
+    at dir_path, or None. Suricata's file-store (v2) names every file by
+    its SHA256 under a two-hex-character subdirectory:
+    filestore/<sha256[:2]>/<sha256>. sha256 is validated before it touches
+    the filesystem, and the resolved real path must still be a regular
+    file inside filestore/ - so neither a crafted hash nor a symlink
+    placed in the filestore can reach anything else."""
+    if not isinstance(sha256, str) or not _SHA256_RE.match(sha256):
+        return None
+    filestore_dir = os.path.realpath(os.path.join(dir_path, 'filestore'))
+    path = os.path.realpath(os.path.join(filestore_dir, sha256[:2], sha256))
+    try:
+        if os.path.commonpath([path, filestore_dir]) != filestore_dir:
+            return None
+    except ValueError:
+        return None
+    if not os.path.isfile(path):
+        return None
+    return path
+
+
 def _set_phase(dir_path, phase):
     """Write the current analysis phase to the .phase file."""
     phase_file = os.path.join(dir_path, '.phase')

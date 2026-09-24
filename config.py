@@ -86,6 +86,8 @@ MAX_ZIP_MEMBERS = 100                      # files per uploaded ZIP - each membe
 MAX_STREAM_TEXT_OUTPUT = 4 * 1024 * 1024   # 4 MB cap on raw tshark/tcpdump text read for transcripts/hexdumps - the response is trimmed to MAX_TRANSCRIPT_* far below this; without a read cap a huge stream buffers fully in RAM first
 MAX_STREAM_DOWNLOAD_SIZE = 200 * 1024 * 1024  # 200 MB cap on a carved-stream pcap download; larger streams get a 413 rather than a partial (corrupt) file
 MAX_ENTROPY_READ_SIZE = 10 * 1024 * 1024   # 10 MB cap for entropy calculation
+MAX_RAW_STREAM_SIZE = 10 * 1024 * 1024     # 10 MB cap on /api/raw-stream's exact payload bytes - it feeds the browser (CyberChef), which gets sluggish well before MAX_STREAM_DOWNLOAD_SIZE; larger payloads get a 413, never a truncated one
+MAX_EXTRACTED_FILE_SIZE = 25 * 1024 * 1024  # 25 MB cap on /api/extracted-file, for the same reason
 
 # Thresholds
 STALE_THRESHOLD_SECONDS = 600              # 10 minutes

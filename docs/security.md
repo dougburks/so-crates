@@ -13,6 +13,7 @@ potentially malicious files. What's built in by default (see
 - **Input validation** - on all endpoints (IP, port, MD5, path traversal)
 - **File-type routing** - PCAPs, log files, and everything else each only ever reach their own analyzer (Suricata, Zircolite/Sigma, YARA)
 - **SSRF protection** - on "Load from URL", including a DNS-rebinding-safe resolve-then-connect
+- **Extracted files** - files Suricata carved from traffic are served only by exact SHA256 from that analysis's own `filestore/` (no client-supplied path, symlinks out of it refused), as `application/octet-stream` downloads a browser never renders, capped at 25 MB
 - **Zip safety** - zip-slip and zip-bomb (decompressed-size) protection on archive extraction
 - **Upload limits** - a hard size ceiling plus an upfront disk-space check before accepting an upload
 - **Generic error messages** - no internal details or stack traces leaked
