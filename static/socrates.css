@@ -1445,6 +1445,16 @@
            a positive offset, not inset, since this is a small pill/button rather
            than a full-width row. */
         .stream-btn.keyboard-selected { outline: 2px solid var(--interactive-highlight, var(--accent)); outline-offset: 2px; }
+        /* File Info's Send to CyberChef - styled like .stream-btn but its own
+           class, so it stays a plain flat-list item for arrow-key navigation
+           instead of joining the stream Payload panel's Left/Right group
+           (isStreamControlGroupMember keys off .stream-btn). */
+        .cyberchef-file-btn { background: var(--bg-hover); border: none; color: var(--accent); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+        .cyberchef-file-btn:hover { background: var(--bg-hover-light); }
+        .cyberchef-file-btn.keyboard-selected { outline: 2px solid var(--interactive-highlight, var(--accent)); outline-offset: 2px; }
+        .cyberchef-send-label { color: var(--text-muted); font-size: 0.75rem; margin: 0 6px 0 16px; }
+        .stream-btn + .stream-btn { margin-left: 6px; }
+        .cyberchef-direction-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
         /* The "+ Add Note"/"Edit" link (see rowNoteDetailValueHtml) is otherwise
            unstyled apart from its own inline color - same outline treatment as
            .stream-btn/.view-tab above, the other controls in an expanded row's

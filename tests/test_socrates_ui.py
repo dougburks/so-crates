@@ -3487,6 +3487,7 @@ class TestThemeAndMenu(unittest.TestCase):
             '.filter-chip.keyboard-selected',
             '.filter-clear-all.keyboard-selected',
             '.stream-btn.keyboard-selected',
+            '.cyberchef-file-btn.keyboard-selected',
             '.view-tab.keyboard-selected',
             '.row-note-edit-link.keyboard-selected',
             '.packet-header.keyboard-selected',
@@ -7832,6 +7833,192 @@ class TestPivotMenu(unittest.TestCase):
         ''')
         self.assertFalse(result['threw'])
         self.assertTrue(result['url'].startswith('/cyberchef/#input='))
+
+
+class TestSendToCyberChef(unittest.TestCase):
+    """Send to CyberChef: stream Payload panel and File Info buttons, and
+    the handoff into the bundled CyberChef's window (stubbed here - the
+    real CyberChef side is covered by the manual/Playwright check in
+    AGENTS.md's "Updating CyberChef")."""
+
+    # A fake CyberChef window: records what SO-CRATES hands it.
+    FAKE_WIN = """
+        var calls = { order: [], recipe: null, files: null, closed: false };
+        var fakeWin = {
+            closed: false,
+            close: function() { this.closed = true; calls.closed = true; },
+            document: { body: { classList: { contains: function(c) { return c === 'loaded'; } } } },
+            File: window.File,
+            app: {
+                options: { updateUrl: true },
+                setRecipeConfig: function(r) { calls.recipe = r; calls.updateUrlAtRecipe = fakeWin.app.options.updateUrl; },
+                manager: { input: { loadUIFiles: function(f) { calls.files = f; } } }
+            }
+        };
+        window.open = function(url, target, features) {
+            calls.order.push('open:' + url + '|' + (features || ''));
+            return fakeWin;
+        };
+        var toasts = [];
+        showToast = function(m) { toasts.push(m); };
+    """
+
+    def _stub_fetch(self, status=200, body_js="new Blob([new Uint8Array([0, 1, 255, 128])])", json_body=None):
+        json_js = json.dumps(json_body) if json_body is not None else 'null'
+        return """
+        window.fetch = function(url) {
+            // Only the endpoints under test - the app's own startup
+            // requests (rules-info, analyses) go through here too.
+            if (/raw-stream|extracted-file/.test(String(url))) calls.order.push('fetch:' + url);
+            return Promise.resolve({
+                ok: %d < 400, status: %d,
+                blob: function() { return Promise.resolve(%s); },
+                json: function() { var j = %s; return j ? Promise.resolve(j) : Promise.reject(new Error('no json')); }
+            });
+        };
+        """ % (status, status, body_js, json_js)
+
+    def test_payload_panel_has_three_direction_buttons(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var html = _formatEventPayload({src_ip: '10.0.0.1', src_port: 40000, dest_ip: '10.0.0.2', dest_port: 80});
+            var div = document.createElement('div'); div.innerHTML = html;
+            var btns = Array.from(div.querySelectorAll('[data-action="send-stream-to-cyberchef"]'));
+            window.__jsdom_result = {
+                directions: btns.map(function(b) { return b.dataset.direction; }),
+                labels: btns.map(function(b) { return b.textContent; }),
+                allStreamBtn: btns.every(function(b) { return b.classList.contains('stream-btn'); }),
+                srcTitle: btns[1].title
+            };
+        ''')
+        self.assertEqual(result['directions'], ['both', 'src', 'dst'])
+        self.assertEqual(result['labels'], ['Both', 'Source', 'Dest'])
+        self.assertTrue(result['allStreamBtn'])
+        self.assertIn('10.0.0.1:40000', result['srcTitle'])
+
+    def test_payload_buttons_escape_ip_in_titles(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var html = _formatEventPayload({src_ip: '"><img src=x onerror=alert(1)>', src_port: 1, dest_ip: '10.0.0.2', dest_port: 2});
+            var div = document.createElement('div'); div.innerHTML = html;
+            window.__jsdom_result = { imgs: div.querySelectorAll('img').length };
+        ''')
+        self.assertEqual(result['imgs'], 0)
+
+    def test_file_info_button_only_for_stored_files(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            currentMd5 = 'abc';
+            function btn(fi) {
+                var div = document.createElement('div');
+                div.innerHTML = renderFileInfoDetails({event_type: 'fileinfo', fileinfo: fi});
+                return div.querySelector('[data-action="send-file-to-cyberchef"]');
+            }
+            var sha = 'a'.repeat(64);
+            var stored = btn({sha256: sha, stored: true, filename: '/dir/evil.exe', size: 10});
+            var notStored = btn({sha256: sha, stored: false, size: 10});
+            currentMd5 = '';
+            var noAnalysis = btn({sha256: sha, stored: true, size: 10});
+            window.__jsdom_result = {
+                stored: stored ? {sha: stored.dataset.sha256, name: stored.dataset.filename, streamBtn: stored.classList.contains('stream-btn')} : null,
+                notStored: !!notStored, noAnalysis: !!noAnalysis
+            };
+        ''')
+        self.assertEqual(result['stored'], {'sha': 'a' * 64, 'name': 'evil.exe', 'streamBtn': False})
+        self.assertFalse(result['notStored'])
+        self.assertFalse(result['noAnalysis'])
+
+    def test_file_button_is_keyboard_reachable_but_not_in_stream_group(self):
+        from tests.jsdom_helper import js_statements
+        selector = re.search(r"const EXPANDED_ROW_ITEM_SELECTOR = '([^']*)'", JS_CONTENT).group(1)
+        self.assertIn('.cyberchef-file-btn', selector)
+        result = js_statements('''
+            var b = document.createElement('button'); b.className = 'cyberchef-file-btn';
+            window.__jsdom_result = { inGroup: isStreamControlGroupMember(b) };
+        ''')
+        self.assertFalse(result['inGroup'])
+
+    def test_stream_send_opens_first_then_loads_file_with_magic(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch() + '''
+            currentMd5 = 'abc';
+            sendStreamToCyberChef('2001:db8::1', '40001', '2001:db8::2', '8080', 'dst');
+            await new Promise(function(r) { setTimeout(r, 300); });
+            var f = calls.files && calls.files[0];
+            var bytes = f ? Array.from(new Uint8Array(await f.arrayBuffer())) : null;
+            window.__jsdom_result = { order: calls.order, recipe: calls.recipe, name: f && f.name, bytes: bytes, toasts: toasts,
+                                      updateUrlAtRecipe: calls.updateUrlAtRecipe };
+        ''')
+        # Off before anything that bakes, so the payload never reaches the
+        # tab's URL (and browser history).
+        self.assertIs(result['updateUrlAtRecipe'], False)
+        # Opened before the fetch (pop-up blockers), and without noopener.
+        self.assertEqual(result['order'][0], 'open:/cyberchef/|')
+        self.assertTrue(result['order'][1].startswith('fetch:/api/raw-stream?'))
+        self.assertIn('direction=dst', result['order'][1])
+        self.assertIn('md5=abc', result['order'][1])
+        self.assertEqual(result['recipe'], [{'op': 'Magic', 'args': [3, False, False, '']}])
+        self.assertEqual(result['name'], 'stream_2001-db8--1_40001_to_2001-db8--2_8080_dst.bin')
+        self.assertEqual(result['bytes'], [0, 1, 255, 128])
+        self.assertEqual(result['toasts'], [])
+
+    def test_magic_threshold_is_16kb(self):
+        """The limit test_large_payload_skips_magic crosses - see the
+        measurements in the comment above CYBERCHEF_MAGIC_MAX_BYTES."""
+        self.assertIn('const CYBERCHEF_MAGIC_MAX_BYTES = 16 * 1024;', JS_CONTENT)
+
+    def test_large_payload_skips_magic(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch(body_js="new Blob([new Uint8Array(16 * 1024 + 1)])") + '''
+            currentMd5 = 'abc';
+            sendExtractedFileToCyberChef('b'.repeat(64), 'big.bin');
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { recipe: calls.recipe, loaded: !!calls.files, order: calls.order };
+        ''')
+        self.assertIsNone(result['recipe'])
+        self.assertTrue(result['loaded'])
+        self.assertEqual(result['order'][1], 'fetch:/api/extracted-file?md5=abc&sha256=' + 'b' * 64)
+
+    def test_server_error_closes_tab_and_shows_message(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch(status=413, json_body={'error': 'Stream payload too large'}) + '''
+            currentMd5 = 'abc';
+            sendStreamToCyberChef('10.0.0.1', '1', '10.0.0.2', '2', 'both');
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { closed: calls.closed, loaded: !!calls.files, toasts: toasts };
+        ''')
+        self.assertTrue(result['closed'])
+        self.assertFalse(result['loaded'])
+        self.assertEqual(result['toasts'], ['Stream payload too large'])
+
+    def test_popup_blocked_does_not_fetch(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch() + '''
+            window.open = function() { calls.order.push('open'); return null; };
+            currentMd5 = 'abc';
+            sendStreamToCyberChef('10.0.0.1', '1', '10.0.0.2', '2', 'both');
+            await new Promise(function(r) { setTimeout(r, 100); });
+            window.__jsdom_result = { order: calls.order, toasts: toasts };
+        ''')
+        self.assertEqual(result['order'], ['open'])
+        self.assertEqual(len(result['toasts']), 1)
+        self.assertIn('pop-ups', result['toasts'][0])
+
+    def test_cyberchef_never_ready_times_out_with_message(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch() + '''
+            fakeWin.app = undefined;
+            currentMd5 = 'abc';
+            var realNow = Date.now;
+            var start = realNow();
+            Date.now = function() { return realNow() + 60000 * (realNow() - start > 50 ? 1 : 0); };
+            sendStreamToCyberChef('10.0.0.1', '1', '10.0.0.2', '2', 'both');
+            await new Promise(function(r) { setTimeout(r, 600); });
+            Date.now = realNow;
+            window.__jsdom_result = { toasts: toasts };
+        ''')
+        self.assertEqual(len(result['toasts']), 1)
+        self.assertIn('did not finish loading', result['toasts'][0])
 
 
 class TestCorrelatePivotMenu(unittest.TestCase):

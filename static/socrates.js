@@ -3427,6 +3427,20 @@
             return html;
         }
 
+        // Send to CyberChef, one button per direction - Source/Dest dots use
+        // the ASCII transcript's own red/blue direction colors (see
+        // loadAsciiTranscript's flushGroup) so the pairing is visible.
+        // .stream-btn, so they join the same Left/Right keyboard group as
+        // Download PCAP and, like it, only fire on Enter, never on arrival.
+        // Arguments are already HTML-escaped / integer-coerced.
+        function cyberChefStreamButtonsHtml(srcIpHtml, srcPort, dstIpHtml, dstPort) {
+            const btn = (direction, label, dotColor, title) => `<button class="stream-btn" data-action="send-stream-to-cyberchef" data-direction="${direction}" title="${title}" aria-label="${title}">${dotColor ? `<span class="cyberchef-direction-dot" style="background:${dotColor};"></span>` : ''}${label}</button>`;
+            return `<span class="cyberchef-send-label">Send to CyberChef:</span>`
+                + btn('both', 'Both', '', 'Send both directions to CyberChef')
+                + btn('src', 'Source', '#ff6b6b', `Send bytes sent by ${srcIpHtml}:${srcPort} to CyberChef`)
+                + btn('dst', 'Dest', '#58a6ff', `Send bytes sent by ${dstIpHtml}:${dstPort} to CyberChef`);
+        }
+
         function _formatEventPayload(e) {
             if (!e.src_ip || !e.src_port || !e.dest_ip || !e.dest_port) return '';
             const srcIpHtml = escapeHtml(e.src_ip);
@@ -3440,7 +3454,7 @@
             // endpoints - the 'switch-stream-view'/'download-stream-pcap'
             // STATIC_ACTIONS entries read them back via closest(), so the
             // buttons themselves only carry the view name.
-            return `<div class="stream-payload" data-src-ip="${srcIpHtml}" data-src-port="${srcPort}" data-dst-ip="${dstIpHtml}" data-dst-port="${dstPort}" style="margin-top: 15px;"><div style="color: var(--text-muted); font-size: 0.85rem; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-bottom: 5px;">Payload</div><div style="display: flex; justify-content: flex-start; align-items: center; margin-bottom: 10px;"><div class="view-tabs"><button class="view-tab active" data-action="switch-stream-view" data-view="ascii">ASCII Transcript</button><button class="view-tab" data-action="switch-stream-view" data-view="hexdump">Hexdump</button></div><button class="stream-btn" data-action="download-stream-pcap" style="margin-left: 12px;">Download PCAP</button></div><div class="stream-view-container" style="background: var(--bg-primary); padding: 15px; border-radius: 8px; font-size: 0.8rem; margin: 0;"><div class="ascii-transcript" style="white-space: pre-wrap; overflow-wrap: break-word;"></div><div class="hexdump-content" style="display: none;"></div></div></div>`;
+            return `<div class="stream-payload" data-src-ip="${srcIpHtml}" data-src-port="${srcPort}" data-dst-ip="${dstIpHtml}" data-dst-port="${dstPort}" style="margin-top: 15px;"><div style="color: var(--text-muted); font-size: 0.85rem; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-bottom: 5px;">Payload</div><div style="display: flex; flex-wrap: wrap; row-gap: 6px; justify-content: flex-start; align-items: center; margin-bottom: 10px;"><div class="view-tabs"><button class="view-tab active" data-action="switch-stream-view" data-view="ascii">ASCII Transcript</button><button class="view-tab" data-action="switch-stream-view" data-view="hexdump">Hexdump</button></div><button class="stream-btn" data-action="download-stream-pcap" style="margin-left: 12px;">Download PCAP</button>${cyberChefStreamButtonsHtml(srcIpHtml, srcPort, dstIpHtml, dstPort)}</div><div class="stream-view-container" style="background: var(--bg-primary); padding: 15px; border-radius: 8px; font-size: 0.8rem; margin: 0;"><div class="ascii-transcript" style="white-space: pre-wrap; overflow-wrap: break-word;"></div><div class="hexdump-content" style="display: none;"></div></div></div>`;
         }
 
         // Hidden anchor for an AI Summary field - see
@@ -3714,6 +3728,12 @@
             html += htmlRowText('SHA1', e.fileinfo?.sha1, 'mono');
             html += htmlRowText('SHA256', e.fileinfo?.sha256, 'mono');
             html += htmlRowText('Size', `${(e.fileinfo?.size || 0).toLocaleString()} bytes`);
+            // Only files Suricata actually stored exist in the filestore -
+            // it logs a fileinfo event for every transfer it sees.
+            if (e.fileinfo?.stored && e.fileinfo?.sha256 && currentMd5) {
+                const name = String(e.fileinfo.filename || '').split('/').pop();
+                html += htmlRow('CyberChef', `<button class="cyberchef-file-btn" data-action="send-file-to-cyberchef" data-sha256="${escapeHtml(e.fileinfo.sha256)}" data-filename="${escapeHtml(name)}">Send to CyberChef</button>`);
+            }
 
             const meta = e.fileinfo?.metadata || {};
             if (meta.file_type || meta.mime_type || meta.entropy !== undefined || (meta.strings && meta.strings.length)) {
@@ -4393,7 +4413,7 @@
         // before that (they simply don't exist yet, contributing nothing), and
         // the offsetParent filter below (not this selector) is what keeps them
         // out of the list while the ASCII Transcript view is showing instead.
-        const EXPANDED_ROW_ITEM_SELECTOR = '[data-detail-pivot], .row-note-edit-link, .view-tab, .stream-btn, .packet-control-btn, .packet-header';
+        const EXPANDED_ROW_ITEM_SELECTOR = '[data-detail-pivot], .row-note-edit-link, .view-tab, .stream-btn, .cyberchef-file-btn, .packet-control-btn, .packet-header';
 
         // Scoped to the currently visible primary section (excludes
         // .agg-section, mirroring buildStats()'s own "visible section"
@@ -4815,10 +4835,11 @@
             return column;
         }
 
-        // True for the 3 controls that behave as one horizontal group within
+        // True for the controls that behave as one horizontal group within
         // an expanded row's Payload section (see navigateStreamControls/
         // navigateStreamControlsVertical below) - ASCII Transcript, Hexdump
-        // (both .view-tab) and Download PCAP (.stream-btn). Excludes
+        // (both .view-tab), Download PCAP and the three Send to CyberChef
+        // buttons (.stream-btn). Excludes
         // .packet-control-btn (Expand All/Collapse All) deliberately - that
         // pair is its own separate group one level below this one, not part
         // of the row/tab strip.
@@ -4846,13 +4867,14 @@
 
         // Left/Right's other section-local behavior once
         // leftRightSwitchesStatTabs is false (see its own comment) - cycles
-        // through all 3 stream controls (ASCII Transcript, Hexdump, Download
-        // PCAP - .stream-payload's own DOM order) as one horizontal group.
+        // through all the stream controls (ASCII Transcript, Hexdump,
+        // Download PCAP, Send to CyberChef Both/Source/Dest - .stream-payload's
+        // own DOM order) as one horizontal group.
         // Only the two view-tabs activate on arrival (tabs[nextIndex].click(),
         // same as navigateStatTabs() does for data-type tabs - a real
-        // tab-strip, not preview-then-Enter) - Download PCAP deliberately
-        // does NOT, since unlike switching a view it's a real side effect
-        // (triggers an actual file download), and arrowing past a button
+        // tab-strip, not preview-then-Enter) - the .stream-btn buttons
+        // deliberately do NOT, since unlike switching a view each is a real
+        // side effect (a file download, a new CyberChef tab), and arrowing past a button
         // must never fire its action on its own (same reasoning as every
         // other Enter-to-activate item in this app - see verticalNavSelection's
         // own comment). keyboard-selected moves along regardless - .active
@@ -4874,7 +4896,7 @@
             return true;
         }
 
-        // Up/Down's other section-local behavior for the same 3-item group
+        // Up/Down's other section-local behavior for the same group
         // navigateStreamControls() cycles with Left/Right - treats the whole
         // group as a single row in a small 2D layout (Add Note above, the
         // Expand All/Collapse All section below), so Up/Down jump straight
@@ -4925,9 +4947,9 @@
         // Up/Down's other section-local behavior for the Expand All/Collapse
         // All pair - mirrors navigateStreamControlsVertical()'s own jump
         // logic, one level down: Up from either button jumps to Download
-        // PCAP (its nearest DOM neighbor in the group above, same "jump to
-        // the boundary neighbor" pattern navigateStreamControlsVertical()
-        // uses for Add Note), Down jumps to the first packet regardless of
+        // PCAP (the group above's first .stream-btn, same "jump to a fixed
+        // neighbor" pattern navigateStreamControlsVertical() uses for Add
+        // Note), Down jumps to the first packet regardless of
         // which of the two is currently selected. Both search from the
         // shared .stream-payload ancestor (not just .packet-controls, which
         // only wraps the two buttons themselves) since that's the closest
@@ -10364,6 +10386,93 @@
             }
         }
 
+        // Send to CyberChef (stream Payload panel, File Info): whole payloads
+        // are far too big for cyberChefUrl()'s #input= URL, so instead the
+        // bundled CyberChef - same origin as this page - is opened in a new
+        // tab and the bytes are handed straight to it as a File. That goes
+        // through CyberChef's internal window.app object, not a published
+        // API (scripts/fetch-cyberchef.sh fails the build if an upgrade
+        // renames any of the pieces used here). A File, not a string,
+        // so binary survives intact: verified byte-exact on all 256 values.
+        //
+        // Magic (auto-detect encodings) is applied only up to this size.
+        // Measured on decodable input in the bundled v11.5.0: 1.3s at 16KB,
+        // 16s at 64KB, 38s at 100KB, still running after 2 minutes at 1MB -
+        // larger payloads open with an empty recipe instead.
+        const CYBERCHEF_MAGIC_MAX_BYTES = 16 * 1024;
+        const CYBERCHEF_READY_TIMEOUT_MS = 15000;
+
+        async function sendToCyberChef(fetchUrl, filename) {
+            // Opened synchronously, before any await - browsers block a
+            // window.open() that follows an async step as a pop-up. And
+            // without noopener, unlike the lookup links: the handle to the
+            // new window is how the data gets in.
+            const win = window.open('/cyberchef/', '_blank');
+            if (!win) {
+                showToast('Could not open CyberChef - allow pop-ups for this page');
+                return;
+            }
+            let blob;
+            try {
+                const resp = await fetch(fetchUrl);
+                if (!resp.ok) {
+                    let message = `Could not load data for CyberChef (HTTP ${resp.status})`;
+                    try {
+                        const data = await resp.json();
+                        if (data.error) message = data.error;
+                    } catch (e) { /* not JSON - keep the status message */ }
+                    win.close();
+                    showToast(message);
+                    return;
+                }
+                blob = await resp.blob();
+            } catch (e) {
+                win.close();
+                showToast('Could not load data for CyberChef');
+                return;
+            }
+            const deadline = Date.now() + CYBERCHEF_READY_TIMEOUT_MS;
+            const tryLoad = () => {
+                if (win.closed) return;
+                let app = null;
+                try {
+                    if (win.document.body && win.document.body.classList.contains('loaded')) app = win.app;
+                } catch (e) { /* still navigating - try again */ }
+                if (app && app.manager && app.manager.input) {
+                    // CyberChef's "update the URL" option rewrites the tab's
+                    // URL with the recipe and, for smaller inputs, the input
+                    // itself (history.replaceState) - which would put the
+                    // payload into browser history, and into synced history
+                    // with it. Off for this tab only: app.options is
+                    // in-memory here, not the saved preferences.
+                    if (app.options) app.options.updateUrl = false;
+                    if (blob.size <= CYBERCHEF_MAGIC_MAX_BYTES) {
+                        app.setRecipeConfig([{ op: 'Magic', args: [3, false, false, ''] }]);
+                    }
+                    // win.File, not this page's File: CyberChef's own
+                    // instanceof checks run in its window's realm.
+                    app.manager.input.loadUIFiles([new win.File([blob], filename, { type: 'application/octet-stream' })]);
+                    return;
+                }
+                if (Date.now() > deadline) {
+                    showToast('CyberChef did not finish loading - the data was not sent');
+                    return;
+                }
+                setTimeout(tryLoad, 200);
+            };
+            tryLoad();
+        }
+
+        function sendStreamToCyberChef(src, sport, dst, dport, direction) {
+            const url = buildStreamUrl('raw-stream', src, sport, dst, dport) + `&direction=${encodeURIComponent(direction)}`;
+            sendToCyberChef(url, `stream_${src}_${sport}_to_${dst}_${dport}_${direction}.bin`.replace(/:/g, '-'));
+        }
+
+        function sendExtractedFileToCyberChef(sha256, filename) {
+            const url = `/api/extracted-file?md5=${encodeURIComponent(currentMd5)}&sha256=${encodeURIComponent(sha256)}`;
+            sendToCyberChef(url, filename || `${sha256}.bin`);
+        }
+
         // OSINT/threat-intel lookup sites offered from the pivot menu -
         // naive general-purpose links (no field-type detection: the same
         // value is handed to every site regardless of whether it's
@@ -11872,6 +11981,11 @@
                 const p = el.closest('.stream-payload');
                 if (p) downloadPcap(p.dataset.srcIp, p.dataset.srcPort, p.dataset.dstIp, p.dataset.dstPort);
             },
+            'send-stream-to-cyberchef': (el) => {
+                const p = el.closest('.stream-payload');
+                if (p) sendStreamToCyberChef(p.dataset.srcIp, p.dataset.srcPort, p.dataset.dstIp, p.dataset.dstPort, el.dataset.direction);
+            },
+            'send-file-to-cyberchef': (el) => sendExtractedFileToCyberChef(el.dataset.sha256, el.dataset.filename),
             // The note-icon <td>: clicks that miss the icon must do
             // nothing (not toggle the row) - shadowing handles that; the
             // preventDefault/stopPropagation mirror the old inline pair.
