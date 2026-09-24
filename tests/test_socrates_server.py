@@ -6772,6 +6772,16 @@ class TestDockerfile(unittest.TestCase):
         for path in glob.glob(os.path.join(root, '*.py')):
             self.assertIn(' ' + os.path.basename(path) + ' ', copy_line[0], path)
 
+    def test_pip_removed_from_zircolite_venv(self):
+        """pip is only needed to build the venv - it's uninstalled in the
+        builder stage, after the requirements install, so the final image
+        doesn't carry it."""
+        with open(DOCKERFILE, 'r') as f:
+            content = f.read()
+        install = content.index('/usr/local/lib/zircolite-venv/bin/pip install')
+        uninstall = content.index('/usr/local/lib/zircolite-venv/bin/pip uninstall -y pip')
+        self.assertLess(install, uninstall)
+
     def test_cyberchef_baked_from_resources_builder(self):
         """The bundled CyberChef is downloaded by the shared
         resources-builder stage (not a stage of its own - see

@@ -4,7 +4,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Build-only stage: compiles the Zircolite venv (evtx/orjson have Rust
 # extensions, lxml has a C extension) so the Rust toolchain, build-essential,
-# dev headers, and git never need to exist in the final runtime image.
+# dev headers, and git never need to exist in the final runtime image. pip
+# itself (~12MB) is uninstalled from the venv once the requirements are in -
+# nothing imports it at runtime, and the image never installs packages
+# after build time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
@@ -24,6 +27,7 @@ RUN git clone --depth 1 --branch v3.7.1 \
     python3 -m venv /usr/local/lib/zircolite-venv && \
     /usr/local/lib/zircolite-venv/bin/pip install --no-cache-dir \
     -r /usr/local/lib/zircolite/requirements.txt && \
+    /usr/local/lib/zircolite-venv/bin/pip uninstall -y pip && \
     rm -rf /usr/local/lib/zircolite/rules /usr/local/lib/zircolite/gui \
     /usr/local/lib/zircolite/pics /usr/local/lib/zircolite/tests \
     /usr/local/lib/zircolite/docs /usr/local/lib/zircolite/templates \
