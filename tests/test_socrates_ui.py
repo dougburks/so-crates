@@ -8021,6 +8021,63 @@ class TestSendToCyberChef(unittest.TestCase):
         self.assertIn('did not finish loading', result['toasts'][0])
 
 
+class TestCyberChefThemeSync(unittest.TestCase):
+    """syncCyberChefTheme(): the bundled CyberChef follows SO-CRATES's
+    light/dark theme via the localStorage 'options' key the two share,
+    without overriding a theme picked in CyberChef itself. (Every real
+    THEMES entry was checked in Chromium: all 'dark' group -> dark, all
+    'light' group -> classic.)"""
+
+    def test_background_brightness_decides(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.__jsdom_result = [
+                cyberChefThemeForBackground('rgb(13, 17, 23)'),
+                cyberChefThemeForBackground('rgb(255, 255, 255)'),
+                cyberChefThemeForBackground('rgba(0, 0, 0, 1)'),
+                cyberChefThemeForBackground('rgb(250, 244, 237)'),
+                cyberChefThemeForBackground(''),
+            ];
+        ''')
+        self.assertEqual(result, ['dark', 'classic', 'dark', 'classic', None])
+
+    def _sync(self, bg, stored_options_js, last_synced_js='null'):
+        from tests.jsdom_helper import js_statements
+        return js_statements('''
+            localStorage.clear();
+            var stored = %s;
+            if (stored !== null) localStorage.setItem('options', stored);
+            var last = %s;
+            if (last !== null) localStorage.setItem('socrates-cyberchef-theme', last);
+            document.body.style.backgroundColor = '%s';
+            syncCyberChefTheme();
+            window.__jsdom_result = {
+                options: localStorage.getItem('options'),
+                last: localStorage.getItem('socrates-cyberchef-theme')
+            };
+        ''' % (stored_options_js, last_synced_js, bg))
+
+    def test_first_sync_writes_theme(self):
+        result = self._sync('rgb(10, 10, 10)', 'null')
+        self.assertEqual(json.loads(result['options']), {'theme': 'dark'})
+        self.assertEqual(result['last'], 'dark')
+
+    def test_keeps_other_cyberchef_options(self):
+        result = self._sync('rgb(255, 255, 255)', "JSON.stringify({theme: 'dark', wordWrap: false})", "'dark'")
+        self.assertEqual(json.loads(result['options']), {'theme': 'classic', 'wordWrap': False})
+        self.assertEqual(result['last'], 'classic')
+
+    def test_theme_picked_in_cyberchef_is_left_alone(self):
+        result = self._sync('rgb(255, 255, 255)', "JSON.stringify({theme: 'geocities'})", "'dark'")
+        self.assertEqual(json.loads(result['options']), {'theme': 'geocities'})
+        self.assertEqual(result['last'], 'dark')
+
+    def test_unreadable_options_not_overwritten(self):
+        result = self._sync('rgb(10, 10, 10)', "'not json'")
+        self.assertEqual(result['options'], 'not json')
+        self.assertIsNone(result['last'])
+
+
 class TestCorrelatePivotMenu(unittest.TestCase):
     """The pivot menu's Correlate entry - re-searches the whole analysis
     for this row's community_id (see huntFilterValue), regardless of

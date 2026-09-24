@@ -8,6 +8,10 @@ Click any screenshot below to zoom in.
 
 If SO-CRATES was launched via [OhMyDebn](installation/ohmydebn.md), the Themes modal also has a "Sync theme to OhMyDebn theme" toggle (off by default). While enabled, SO-CRATES follows your OhMyDebn desktop theme automatically and the manual picker below is hidden, since OhMyDebn owns the theme choice. A theme name that matches one of the built-ins below is applied directly; for a custom or Aether-generated OhMyDebn theme with no built-in match, a full theme is instead generated at runtime from that theme's own color palette (its `colors.toml`, or `alacritty.toml` as a fallback), with contrast-safety adjustments so muted/tag/accent text stays legible regardless of the source palette. This toggle is hidden entirely on any deployment not launched via OhMyDebn.
 
+## CyberChef follows along
+
+The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a dark theme, and to its Classic (light) theme otherwise. That's decided by the theme's actual background, so each Fun theme lands on whichever it looks like - Retro Handheld's pale screen gets Classic, the rest get Dark - and an OhMyDebn-generated theme works too. It takes effect the next time CyberChef opens. If you pick a theme in CyberChef's own Options, that choice is kept and SO-CRATES stops changing it.
+
 ## Dark Themes
 
 - **Catppuccin** - dark theme based on the soothing pastel Catppuccin Mocha palette

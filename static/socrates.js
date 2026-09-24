@@ -187,6 +187,7 @@
             updateFunThemeClass();
             updateAllAmbientThemes();
             updateFavicon();
+            syncCyberChefTheme();
             // If the themes modal is open, treat this as the new baseline so
             // a later close/revert does not undo the change, and keep the
             // preview iframe in sync - otherwise changing the theme some
@@ -219,6 +220,50 @@
             updateFunThemeClass();
             updateAllAmbientThemes();
             updateFavicon();
+            syncCyberChefTheme();
+        }
+
+        // Keeps the bundled CyberChef (/cyberchef/) light or dark to match
+        // SO-CRATES. CyberChef shares this page's origin, so it also shares
+        // localStorage, and reads its theme from the 'options' key there -
+        // both in its inline boot script (before first paint, so no flash)
+        // and at setup. Writing it here covers every way CyberChef opens:
+        // the pivot-menu lookup, Send to CyberChef, or typing the URL.
+        //
+        // Light/dark is decided from the theme's actual page background,
+        // not THEMES' group: the 'fun' group mixes both (Hacker is dark,
+        // Luna Blue isn't), and an OhMyDebn palette has no THEMES entry.
+        //
+        // A theme picked by hand in CyberChef's own Options wins: the theme
+        // this last wrote is remembered, and if CyberChef's saved theme is
+        // ever something else, the user chose it there - leave it alone.
+        const CYBERCHEF_THEME_SYNC_KEY = 'socrates-cyberchef-theme';
+
+        function cyberChefThemeForBackground(cssColor) {
+            const m = String(cssColor || '').match(/\d+(\.\d+)?/g);
+            if (!m || m.length < 3) return null;
+            const [r, g, b] = m.slice(0, 3).map(Number);
+            // Perceived brightness (ITU-R BT.601 weights), 0-1.
+            return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5 ? 'dark' : 'classic';
+        }
+
+        function syncCyberChefTheme() {
+            if (!document.body) return;
+            const desired = cyberChefThemeForBackground(getComputedStyle(document.body).backgroundColor);
+            if (!desired) return;
+            let options;
+            try {
+                options = JSON.parse(safeStorageGet(localStorage, 'options') || '{}');
+            } catch (e) {
+                return;  // not CyberChef's JSON - don't overwrite what we can't read
+            }
+            if (!options || typeof options !== 'object' || Array.isArray(options)) return;
+            const lastSynced = safeStorageGet(localStorage, CYBERCHEF_THEME_SYNC_KEY);
+            if (options.theme && options.theme !== lastSynced) return;
+            if (options.theme === desired) return;
+            options.theme = desired;
+            safeStorageSet(localStorage, 'options', JSON.stringify(options));
+            safeStorageSet(localStorage, CYBERCHEF_THEME_SYNC_KEY, desired);
         }
 
         // Real app markup/classes (.app-header, .stats-grid, .stat-card)
@@ -12164,6 +12209,7 @@
                 updateFunThemeClass();
                 updateAllAmbientThemes();
                 updateFavicon();
+                syncCyberChefTheme();
                 startThemeSync();
 
                 // Fetch and display version from server
