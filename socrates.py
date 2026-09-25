@@ -1366,8 +1366,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         dport = result['dport']
 
         try:
+            proto = 'tcp'
             lines = self._extract_payload_lines(pcap, src, sport, dst, dport, 'tcp')
             if not lines:
+                proto = 'udp'
                 lines = self._extract_payload_lines(pcap, src, sport, dst, dport, 'udp')
 
             truncated = False
@@ -1387,7 +1389,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 kept.append(line)
             lines = kept
 
-            self._send_json({'lines': lines, 'truncated': truncated})
+            # proto lets the transcript join a TCP stream's segments back
+            # into one byte stream (a UDP datagram is its own message).
+            self._send_json({'lines': lines, 'truncated': truncated, 'proto': proto})
         except subprocess.TimeoutExpired:
             self._send_error(500, 'ASCII transcript extraction timed out')
         except Exception:

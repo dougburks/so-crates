@@ -7786,6 +7786,14 @@ class TestRawBytesEndpoints(unittest.TestCase):
     def test_raw_stream_unknown_flow_404(self):
         self.assertEqual(self._stream('both', '10.9.9.9', 1, '10.8.8.8', 2)[0], 404)
 
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_ascii_stream_reports_proto(self):
+        """The transcript joins a TCP stream's segments but keeps UDP
+        datagrams apart - it needs to know which it got."""
+        status, _, body = self._get(f'/api/ascii-stream?md5={self.MD5}&src=10.0.0.1&sport=40000&dst=10.0.0.2&dport=80')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['proto'], 'tcp')
+
     def test_raw_stream_rejects_bad_params(self):
         self.assertEqual(self._stream('client')[0], 400)
         self.assertEqual(self._stream('both', src='10.0.0.1;ls')[0], 400)

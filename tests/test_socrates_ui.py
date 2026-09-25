@@ -1178,6 +1178,41 @@ class TestUXFeatures(unittest.TestCase):
         self.assertIn('HTTP/1.1 200 OK', result['secondGroupText'])
         self.assertIn('trailing request line', result['thirdGroupText'])
 
+    def _transcript_lines(self, payload):
+        from tests.jsdom_helper import js_statements
+        return js_statements('''
+            window.fetch = function() {
+                return Promise.resolve({ text: () => Promise.resolve(JSON.stringify(%s)) });
+            };
+            var pre = document.createElement('pre');
+            await loadAsciiTranscript('1.1.1.1', 1234, '2.2.2.2', 80, pre);
+            window.__jsdom_result = Array.from(pre.querySelectorAll('div[style*="display:flex"]')).map(function(g) {
+                return Array.from(g.querySelectorAll('div[style*="flex:1"] > div')).map(function(d) { return d.textContent; });
+            });
+        ''' % json.dumps(payload))
+
+    def test_transcript_joins_tcp_segments_into_one_stream(self):
+        """REGRESSION: a line spanning several TCP segments was broken at
+        every segment boundary - so selecting a base64 blob and sending it
+        to CyberChef carried bogus newlines and Magic missed it."""
+        groups = self._transcript_lines({'proto': 'tcp', 'lines': [
+            {'direction': 'src', 'text': '{"blob": "QUJD'},
+            {'direction': 'src', 'text': 'REVG"}\r\nnext line'},
+            {'direction': 'dst', 'text': 'HTTP/1.1 200 OK\r\n'},
+        ]})
+        # (HTML parsing turns each line's trailing \r into \n - compare
+        # without line-ending characters.)
+        strip = lambda g: [t.rstrip('\r\n') for t in g]
+        self.assertEqual(strip(groups[0]), ['{"blob": "QUJDREVG"}', 'next line'])
+        self.assertEqual(strip(groups[1]), ['HTTP/1.1 200 OK', ''])
+
+    def test_transcript_keeps_udp_datagrams_apart(self):
+        groups = self._transcript_lines({'proto': 'udp', 'lines': [
+            {'direction': 'src', 'text': '<13>syslog message one'},
+            {'direction': 'src', 'text': '<13>syslog message two'},
+        ]})
+        self.assertEqual(groups[0], ['<13>syslog message one', '<13>syslog message two'])
+
     def test_table_sorting_ui(self):
         self.assertIn('cursor: pointer', CSS_CONTENT)
         self.assertIn('sort-arrow', JS_CONTENT)

@@ -3266,27 +3266,42 @@
                     const data = JSON.parse(text);
                     if (data.lines && data.lines.length > 0) {
                         let html = '';
-                        let groupHtml = '';
+                        let groupText = '';
+                        let groupStarted = false;
                         let lastDirection = '';
+                        // Each entry is one packet's payload. A TCP stream's
+                        // segments are pieces of one byte stream, so
+                        // consecutive same-direction segments are joined and
+                        // only then split on the data's own newlines -
+                        // splitting per packet broke a long line wherever a
+                        // segment happened to end, which also put bogus
+                        // newlines into a selection sent to CyberChef (a
+                        // base64 blob spanning 4 segments came out as 4
+                        // lines). A UDP datagram is its own message, so
+                        // those keep a line break between packets.
+                        const joinSegments = data.proto !== 'udp';
                         // Appends the just-finished direction's group (with
-                        // its colored left bar) to html and resets groupHtml
-                        // for the next one - called both mid-loop (on a
-                        // direction change) and once more after the loop for
-                        // the final trailing group.
+                        // its colored left bar) to html and resets it for the
+                        // next one - called both mid-loop (on a direction
+                        // change) and once more after the loop for the final
+                        // trailing group.
                         const flushGroup = () => {
                             const bar = `<span style="display:inline-block;width:3px;background:${lastDirection === 'src' ? '#ff6b6b' : '#58a6ff'};margin-right:8px;flex-shrink:0;"></span>`;
+                            const groupHtml = groupText.split('\n').map(t => `<div>${escapeHtml(t)}</div>`).join('');
                             html += `<div style="display:flex;align-items:stretch;">${bar}<div style="flex:1;">${groupHtml}</div></div>`;
-                            groupHtml = '';
+                            groupText = '';
+                            groupStarted = false;
                         };
                         for (const line of data.lines) {
                             const direction = line.direction;
-                            if (direction !== lastDirection && groupHtml) {
+                            if (direction !== lastDirection && groupStarted) {
                                 flushGroup();
                             }
-                            groupHtml += line.text.split('\n').map(t => `<div>${escapeHtml(t)}</div>`).join('');
+                            groupText += (groupStarted && !joinSegments ? '\n' : '') + line.text;
+                            groupStarted = true;
                             lastDirection = direction;
                         }
-                        if (groupHtml) {
+                        if (groupStarted) {
                             flushGroup();
                         }
                         pre.innerHTML = html;
