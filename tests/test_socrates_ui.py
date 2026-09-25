@@ -1320,9 +1320,12 @@ class TestUXFeatures(unittest.TestCase):
         self.assertIn('.packet-block.dst-dir { border-left: 3px solid var(--tag-blue-text); }', CSS_CONTENT)
 
     def test_hexdump_direction_detection(self):
-        """loadHexdumpData must detect direction by splitting on ' > ' and checking src."""
+        """loadHexdumpData must detect direction by splitting on ' > ' and
+        matching the sender exactly (hexdumpSenderIs - a substring check
+        confused 10.0.0.1 with 10.0.0.10; see TestHexdumpDirection)."""
         self.assertIn("pkt.header.split(' > ')", JS_CONTENT)
-        self.assertIn("dirParts[0].includes(src)", JS_CONTENT)
+        self.assertIn("hexdumpSenderIs(dirParts[0], src, sport)", JS_CONTENT)
+        self.assertNotIn("dirParts[0].includes(src)", JS_CONTENT)
 
     def test_loadAnalysis_calls_loadTabData_after_buildSections(self):
         """loadAnalysis must call loadTabData after buildSections since buildSections no longer loads data."""
@@ -3088,6 +3091,23 @@ class TestThemeAndMenu(unittest.TestCase):
                       'FOUC script must remap Daylight to White')
         self.assertIn("localStorage.setItem('socrates-theme',t='white')", boot,
                       'FOUC script must persist the White migration back to localStorage')
+
+    def test_fouc_script_migrates_c64_to_breadbin_blue(self):
+        """REGRESSION: 'c64' was a THEMES key in 3.0.0-3.1.0 before being
+        renamed Breadbin Blue, but only 'light' was migrated - upgraders
+        who'd picked it got data-theme="c64": the unstyled default
+        palette, a 404 favicon and no active tile."""
+        boot = self._theme_boot_source().replace(' ', '')
+        self.assertIn("if(t=='c64')localStorage.setItem('socrates-theme',t='breadbin-blue');", boot)
+
+    def test_unknown_stored_theme_falls_back_to_default(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            document.documentElement.setAttribute('data-theme', 'no-such-theme');
+            await init();
+            window.__jsdom_result = { theme: getCurrentTheme(), stored: localStorage.getItem('socrates-theme') };
+        ''')
+        self.assertEqual(result, {'theme': 'dark', 'stored': 'dark'})
 
     def test_hacker_theme_override_exists(self):
         self.assertIn('[data-theme="hacker"]', CSS_CONTENT,
@@ -11254,6 +11274,113 @@ class TestRowNoteIconState(unittest.TestCase):
         self.assertIn('title="' + 'x' * 200 + '"', result['html'])
         self.assertIn('data-note="' + 'x' * 300 + '"', result['html'],
                       'the data-note attribute must carry the full, untruncated note')
+
+
+class TestSmallRenderingFixes(unittest.TestCase):
+    """Release-review findings in row/detail rendering."""
+
+    def test_http_row_user_agent_and_status_dot(self):
+        from tests.jsdom_helper import js_statements
+        ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120'
+        result = js_statements('''
+            function uaCell(status) {
+                var html = buildRowForEvent({event_type: 'http', timestamp: '2026-01-01T00:00:00', src_ip: '1.1.1.1',
+                    src_port: 1, dest_ip: '2.2.2.2', dest_port: 80, proto: 'TCP',
+                    http: {http_method: 'GET', hostname: 'h', url: '/', status: status, http_user_agent: %s}});
+                var t = document.createElement('table'); t.innerHTML = html;
+                var cells = t.querySelectorAll('tr')[0].children;
+                return { ua: cells[cells.length - 3].textContent,
+                         dot: cells[cells.length - 2].querySelector('.value-dot').getAttribute('style') };
+            }
+            window.__jsdom_result = { none: uaCell(''), ok: uaCell(200) };
+        ''' % json.dumps(ua))
+        self.assertEqual(result['ok']['ua'], ua[:50])
+        self.assertIn('--badge-success-text', result['ok']['dot'])
+        self.assertIn('--text-muted', result['none']['dot'])
+        self.assertNotIn('danger', result['none']['dot'])
+
+    def test_flow_age_zero_shown(self):
+        self.assertIn("e.flow?.age == null ? '' : `${e.flow.age} seconds`", JS_CONTENT)
+
+
+class TestJumpToPageClamped(unittest.TestCase):
+    """REGRESSION: in server-paged mode a page past the end was fetched
+    before renderPaginatedTable clamped it - page 99 of a 5-page table
+    fetched offset 9800, got nothing, and showed "Showing 401-400 of 500"."""
+
+    def test_page_clamped_to_last_page(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.__jsdom_result = [clampPageNumber(99, 5), clampPageNumber(0, 5), clampPageNumber(3, 5),
+                                     clampPageNumber(7, NaN)];
+        ''')
+        self.assertEqual(result, [5, 1, 3, 7])
+
+    def test_jump_to_page_clamps_before_rerender(self):
+        body = JS_CONTENT[JS_CONTENT.index('async function jumpToPage()'):]
+        body = body[:body.index('async function changeTablePage')]
+        self.assertLess(body.index('clampPageNumber('), body.index('rerender()'))
+
+
+class TestHexdumpDirection(unittest.TestCase):
+    """REGRESSION: packet direction used dirParts[0].includes(src), so with
+    src 10.0.0.1 and dst 10.0.0.10 the dst's packets were colored as src,
+    and a same-IP (loopback) flow was colored all-src."""
+
+    def test_sender_matched_exactly(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.__jsdom_result = [
+                hexdumpSenderIs('12:00:00.000000 IP 10.0.0.1.40000', '10.0.0.1', 40000),
+                hexdumpSenderIs('12:00:00.000000 IP 10.0.0.10.80', '10.0.0.1', 40000),
+                hexdumpSenderIs('12:00:00.000000 IP 127.0.0.1.8000', '127.0.0.1', 40000),
+                hexdumpSenderIs('12:00:00.000000 IP 127.0.0.1.40000', '127.0.0.1', 40000),
+                hexdumpSenderIs('12:00:00.000000 IP6 2001:db8::1.40001', '2001:0db8:0000:0000:0000:0000:0000:0001', 40001),
+                hexdumpSenderIs('12:00:00.000000 IP6 2001:db8::2.8080', '2001:db8::1', 40001),
+                hexdumpSenderIs('garbage', '10.0.0.1', 40000),
+            ];
+        ''')
+        self.assertEqual(result, [True, False, False, True, True, False, False])
+
+
+class TestRowNoteSaveTargetsRightRows(unittest.TestCase):
+    """REGRESSION: saving a row note updated only the first
+    tr[data-id="N"] in the document - often a hidden tab's copy of the
+    same row, so the visible row still showed "+ Add Note" - and in log
+    mode events.id and sigma_alerts.id can share a number, so a log-row
+    note could land on a Sigma row."""
+
+    def test_note_reaches_every_copy_of_its_row_and_no_other_table(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            function rowPair(table, id) {
+                return '<tr data-id="' + id + '">' + rowNoteIconHtml(table, id, null) + '<td>x</td></tr>'
+                    + '<tr class="detail-row"><td>' + rowNoteDetailValueHtml(table, id, null) + '</td></tr>';
+            }
+            var host = document.createElement('div');
+            host.innerHTML = '<table id="hiddenTab" style="display:none"><tbody>' + rowPair('events', 42) + '</tbody></table>'
+                + '<table id="visibleTab"><tbody>' + rowPair('events', 42) + '</tbody></table>'
+                + '<table id="sigmaTab"><tbody>' + rowPair('sigma_alerts', 42) + '</tbody></table>';
+            document.body.appendChild(host);
+            currentMd5 = 'abc';
+            window.fetch = function() {
+                return Promise.resolve({ ok: true, json: function() { return Promise.resolve({ success: true, note: 'triaged' }); } });
+            };
+            currentRowNoteScope = { table: 'events', rowId: 42 };
+            document.getElementById('analysisNotesInput').value = 'triaged';
+            await saveAnalysisNotes();
+            function state(id) {
+                var t = document.getElementById(id);
+                return { icon: !!t.querySelector('.row-note-icon'),
+                         detail: t.querySelector('.row-note-detail-value').textContent.trim() };
+            }
+            window.__jsdom_result = { hidden: state('hiddenTab'), visible: state('visibleTab'), sigma: state('sigmaTab') };
+        ''')
+        self.assertTrue(result['visible']['icon'])
+        self.assertTrue(result['visible']['detail'].startswith('triaged'))
+        self.assertTrue(result['hidden']['icon'])
+        self.assertFalse(result['sigma']['icon'])
+        self.assertEqual(result['sigma']['detail'], '+ Add Note')
 
 
 class TestRowNoteDetailPanel(unittest.TestCase):

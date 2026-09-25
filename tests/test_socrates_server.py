@@ -6830,6 +6830,16 @@ class TestDockerfile(unittest.TestCase):
         self.assertEqual(content.count('FROM debian:13-slim'), 3,
                           'Dockerfile must have exactly three build stages')
 
+    def test_zircolite_version_matches_config(self):
+        """The Dockerfile's pinned Zircolite tag and config.ZIRCOLITE_VERSION
+        (shown in the "install with" hint) are separate literals - keep
+        them from drifting apart."""
+        with open(DOCKERFILE, 'r') as f:
+            content = f.read()
+        m = re.search(r'--branch v([0-9][0-9.]*)\s', content)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), config.ZIRCOLITE_VERSION)
+
     def test_every_app_module_copied_into_image(self):
         """A top-level module missing from the final stage's COPY line only
         fails at import time inside the built image - catch it here."""

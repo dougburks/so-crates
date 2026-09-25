@@ -1883,7 +1883,6 @@
         .mitre-tag:hover { text-decoration: underline; }
         .log-detail-panel { background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; font-size: 0.85rem; color: var(--text-primary); overflow-wrap: break-word; }
         .log-detail-panel .mono { font-family: 'Consolas', 'Monaco', monospace; }
-        .playbook-question { border-top: 1px solid var(--border-color); padding: 10px 0; }
         .playbook-question-text { color: var(--text-primary); font-weight: 600; }
         .playbook-question-context { color: var(--text-muted); font-size: 0.85rem; margin-top: 4px; }
         .playbook-questions-toggle:hover { color: var(--text-primary); }

@@ -195,13 +195,20 @@ window.eval(jsContent);
         script_path = f.name
 
     try:
-        result = subprocess.run(
-            ['node', script_path],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            env=env
-        )
+        # A timeout, so a hung node process fails this one test instead of
+        # hanging the whole suite with no error (this file's own comments
+        # describe node hanging before).
+        try:
+            result = subprocess.run(
+                ['node', script_path],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+                env=env,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('JSDOM test timed out after 120s (node never exited)')
     finally:
         try:
             os.unlink(script_path)

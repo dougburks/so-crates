@@ -3354,6 +3354,30 @@
             }
         }
         
+        // Canonical text form of an IP for comparison: IPv6 expanded to
+        // eight lowercase 4-digit groups (tcpdump prints it compressed,
+        // Suricata logs it expanded), IPv4 unchanged.
+        function canonicalIp(ip) {
+            ip = String(ip).toLowerCase();
+            if (!ip.includes(':')) return ip;
+            const halves = ip.split('::');
+            const head = halves[0] ? halves[0].split(':') : [];
+            const tail = halves.length > 1 && halves[1] ? halves[1].split(':') : [];
+            const fill = halves.length > 1 ? Array(8 - head.length - tail.length).fill('0') : [];
+            return head.concat(fill, tail).map(g => g.padStart(4, '0')).join(':');
+        }
+
+        // Whether a tcpdump -nn header's sending side ("... IP 10.0.0.1.80",
+        // the text before " > ") is exactly src:sport. A substring check
+        // colored 10.0.0.10's packets as 10.0.0.1's, and couldn't tell the
+        // two sides of a same-IP (loopback) flow apart at all.
+        function hexdumpSenderIs(senderPart, src, sport) {
+            const token = senderPart.trim().split(/\s+/).pop() || '';
+            const dot = token.lastIndexOf('.');
+            if (dot <= 0) return false;
+            return token.slice(dot + 1) === String(sport) && canonicalIp(token.slice(0, dot)) === canonicalIp(src);
+        }
+
         async function loadHexdumpData(src, sport, dst, dport, container) {
             const url = buildStreamUrl('hexdump-stream', src, sport, dst, dport);
             
@@ -3372,7 +3396,9 @@
                     // per-packet state.
                     data.packets.forEach((pkt) => {
                         const dirParts = pkt.header.split(' > ');
-                        const isSrc = dirParts.length >= 2 ? dirParts[0].includes(src) : pkt.header.indexOf(src) < pkt.header.indexOf(dst);
+                        const isSrc = dirParts.length >= 2
+                            ? hexdumpSenderIs(dirParts[0], src, sport)
+                            : pkt.header.indexOf(src) < pkt.header.indexOf(dst);
                         const dirClass = isSrc ? 'src-dir' : 'dst-dir';
                         html += `
                             <div class="packet-block ${dirClass}">
@@ -3631,7 +3657,8 @@
         function renderFlowDetails(e) {
             let html = htmlSection('Flow Details', COLORS.EVENT.flow);
             html += htmlRowText('State', e.flow?.state);
-            html += htmlRowText('Age', `${e.flow?.age || ''} seconds`);
+            // An age of 0 is real (not missing) - only a missing one is blank.
+            html += htmlRowText('Age', e.flow?.age == null ? '' : `${e.flow.age} seconds`);
             html += htmlRowText('Pkts to Server', (e.flow?.pkts_toserver || 0).toLocaleString());
             html += htmlRowText('Pkts to Client', (e.flow?.pkts_toclient || 0).toLocaleString());
             html += htmlRowText('Bytes to Server', (e.flow?.bytes_toserver || 0).toLocaleString());
@@ -6997,8 +7024,13 @@
                     const host = e.http?.hostname || '';
                     const url = e.http?.url || '';
                     const status = e.http?.status || '';
-                    const ua = (e.http?.http_user_agent || '').slice(0, CONFIG.TLS_ISSUER_MAX_LENGTH);
-                    const statusColor = status && parseInt(status) < 400 ? 'var(--badge-success-text)' : status && parseInt(status) < 500 ? 'var(--badge-warning-text)' : 'var(--badge-danger-text)';
+                    // USER_AGENT_MAX_LENGTH, the same cut extractValue()
+                    // (filters, chips, aggregations) uses - not the TLS
+                    // issuer's shorter one.
+                    const ua = (e.http?.http_user_agent || '').slice(0, CONFIG.USER_AGENT_MAX_LENGTH);
+                    // No status (no response seen) gets the neutral dot,
+                    // not the red one for a 5xx.
+                    const statusColor = !status ? '' : parseInt(status) < 400 ? 'var(--badge-success-text)' : parseInt(status) < 500 ? 'var(--badge-warning-text)' : 'var(--badge-danger-text)';
                     colSpan = 11;
                     row = rowPrefixCells(e) + `<td>${valueDotSpan(DOT_COLORS.HTTP_METHOD[method.toUpperCase()])}${escapeHtml(method)}</td><td class="mono">${escapeHtml(host)}</td><td class="mono">${escapeHtml(url)}</td><td>${escapeHtml(ua)}</td><td>${valueDotSpan(statusColor)}${escapeHtml(String(status))}</td></tr>`;
                     break;
@@ -10039,13 +10071,22 @@
             </div>`;
         }
 
+        function clampPageNumber(page, maxPage) {
+            return Math.max(1, isNaN(maxPage) ? page : Math.min(page, maxPage));
+        }
+
         async function jumpToPage() {
             if (!activeTableRender) return;
             const input = document.getElementById('paginationPageInput');
             if (!input) return;
             const page = parseInt(input.value, 10);
             if (!isNaN(page)) {
-                currentPage = page; // renderPaginatedTable clamps to the valid [1, totalPages] range
+                // Clamp BEFORE fetching: in scalable (server-paged) mode the
+                // page is fetched first and renderPaginatedTable only clamps
+                // afterwards, so page 99 of 5 fetched an empty page and showed
+                // it as "Showing 401-400 of 500". The input's max is the
+                // table's real page count.
+                currentPage = clampPageNumber(page, parseInt(input.max, 10));
                 await activeTableRender.rerender();
             } else {
                 input.value = currentPage;
@@ -11349,8 +11390,25 @@
                     });
                     const result = await resp.json();
                     if (resp.ok && result.success) {
-                        const rowEl = document.querySelector('tr[data-id="' + rowScope.rowId + '"]');
-                        if (rowEl) {
+                        // Every rendered row for this record, not just the
+                        // first tr[data-id] in the document: tabs you've
+                        // left keep their rows (so the same alert can be
+                        // rendered twice, and the first match was often the
+                        // hidden one), and events.id and sigma_alerts.id
+                        // can share a number in log mode - so match the
+                        // note's table as well as the id.
+                        const rowEls = Array.from(document.querySelectorAll('tr[data-id="' + rowScope.rowId + '"]'))
+                            .filter(tr => {
+                                // The row's own icon carries the table only
+                                // when it already has a note; its detail
+                                // panel's Add Note/Edit link always does.
+                                const detail = tr.nextElementSibling;
+                                const tagged = tr.querySelector('[data-action="open-row-note-editor"][data-table]')
+                                    || (detail && detail.classList.contains('detail-row')
+                                        ? detail.querySelector('.row-note-edit-link[data-table]') : null);
+                                return !!tagged && tagged.dataset.table === rowScope.table;
+                            });
+                        for (const rowEl of rowEls) {
                             const cell = rowEl.querySelector('.row-note-cell');
                             if (cell) cell.outerHTML = rowNoteIconHtml(rowScope.table, rowScope.rowId, result.note);
                             // The detail panel is rendered once and only
@@ -11950,13 +12008,7 @@
             document.getElementById('deleteConfirmModal').classList.remove('active');
             restoreModalFocus();
         }
-        
-        function handleDeleteBackdropClick(event) {
-            if (event.target.id === 'deleteConfirmModal') {
-                closeDeleteModal();
-            }
-        }
-        
+                
         function showError(message) {
             document.getElementById('errorMessage').textContent = message;
             document.getElementById('errorModal').classList.add('active');
@@ -12019,13 +12071,7 @@
             document.getElementById('deleteAllConfirmModal').classList.remove('active');
             restoreModalFocus();
         }
-        
-        function handleDeleteAllBackdropClick(event) {
-            if (event.target.id === 'deleteAllConfirmModal') {
-                closeDeleteAllModal();
-            }
-        }
-        
+                
         async function confirmDeleteAll() {
             if (!pendingDeleteAllCount) return;
             closeDeleteAllModal();
@@ -12085,13 +12131,7 @@
             document.getElementById('reanalyzeConfirmModal').classList.remove('active');
             restoreModalFocus();
         }
-        
-        function handleReanalyzeBackdropClick(event) {
-            if (event.target.id === 'reanalyzeConfirmModal') {
-                closeReanalyzeModal();
-            }
-        }
-        
+                
         async function confirmReanalyze() {
             if (!pendingReanalyze) return;
             const { md5, name, phase } = pendingReanalyze;
@@ -12441,6 +12481,15 @@
 
         async function init() {
             try {
+                // A stored theme key this version doesn't know (a theme
+                // since removed or renamed without a migration in
+                // theme-boot.js) would leave the page on the unstyled
+                // default palette with no active tile and a 404 favicon -
+                // fall back to the default theme instead.
+                const bootTheme = getCurrentTheme();
+                if (!Object.prototype.hasOwnProperty.call(THEMES, bootTheme) && bootTheme !== OHMYDEBN_CUSTOM_THEME) {
+                    setTheme('dark');
+                }
                 // Initialize theme state, ambient theme backgrounds, and favicon.
                 updateThemeMenu();
                 updateFunThemeClass();
