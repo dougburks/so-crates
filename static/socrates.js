@@ -10570,7 +10570,13 @@
             cyberChefSelectionFrame = 0;
             const sel = window.getSelection();
             const transcript = transcriptForSelection(sel);
-            const text = transcript ? sel.toString() : '';
+            // Not while a transcript drag is still going: the button sits
+            // just past the selection's end - exactly where a rightward
+            // drag is heading - and caret hit-testing under the pointer
+            // would find the button instead of text, stopping the drag
+            // (real report). It appears once the drag ends instead - see
+            // endTranscriptDrag.
+            const text = transcript && !transcriptDrag ? sel.toString() : '';
             const btn = document.getElementById('cyberChefSelectionBtn');
             if (!text.trim()) {
                 if (btn) btn.hidden = true;
@@ -10659,8 +10665,10 @@
         }
 
         function endTranscriptDrag() {
-            if (transcriptDrag) clearInterval(transcriptDrag.scrollTimer);
+            if (!transcriptDrag) return;
+            clearInterval(transcriptDrag.scrollTimer);
             transcriptDrag = null;
+            scheduleCyberChefSelectionButton();  // now show it, if there's a selection
         }
 
         document.addEventListener('mousedown', e => {

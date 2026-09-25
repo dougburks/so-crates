@@ -8219,6 +8219,25 @@ class TestTranscriptDragSelection(unittest.TestCase):
         ''')
         self.assertEqual(result, {'doubleClick': False, 'shiftClick': False, 'rightButton': False, 'outside': False})
 
+    def test_selection_button_waits_for_drag_to_end(self):
+        """REGRESSION (real report): the button appeared mid-drag, just
+        past the selection's end, and blocked dragging further right -
+        caret hit-testing under the pointer found the button, not text."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            function btnShown() { var b = document.getElementById('cyberChefSelectionBtn'); return !!b && !b.hidden; }
+            down('l1', 0, 10);
+            move(90, 10);
+            updateCyberChefSelectionButton();
+            var during = btnShown();
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            updateCyberChefSelectionButton();
+            window.__jsdom_result = { during: during, after: btnShown(), text: getSelection().toString() };
+        ''')
+        self.assertFalse(result['during'])
+        self.assertTrue(result['after'])
+        self.assertEqual(result['text'], 'GET /x HT')
+
     def test_drag_ends_on_mouseup(self):
         from tests.jsdom_helper import js_statements
         result = js_statements(self.SETUP + '''
