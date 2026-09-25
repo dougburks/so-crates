@@ -228,6 +228,20 @@ def find_chromium():
     return None
 
 
+
+async def _arrow_down_to(page, target, max_presses=5):
+    """Press Down until target is the keyboard selection. With nothing
+    selected yet, Down starts from the first navigable item - the filter
+    bar or the active stat card (see getVerticalNavItems in
+    static/socrates.js) - and whether something is already selected
+    depends on the steps before, so a fixed press count can stop short."""
+    for _ in range(max_presses):
+        await page.keyboard.press('ArrowDown')
+        await page.wait_for_timeout(500)
+        if await target.evaluate("el => el.classList.contains('keyboard-selected')"):
+            return
+    raise RuntimeError('Down never reached the expected toggle bar')
+
 async def caption(page, text, target=None):
     """Sets the caption text and, if target (a Playwright Locator) is
     given, points an arrow at it - otherwise clears any arrow left over
@@ -530,8 +544,7 @@ async def main(base_url):
         selected = page.locator('.keyboard-selected')
         sankey_toggle = page.locator('.section-toggle-bar', has_text='Sankey Diagram').first
         if await sankey_toggle.count() > 0:
-            await page.keyboard.press('ArrowDown')
-            await page.wait_for_timeout(500)
+            await _arrow_down_to(page, sankey_toggle)
             await caption(page, "Arrow keys navigate the whole page too - Down selects the "
                                 "Sankey Diagram toggle, Enter collapses it to make room for "
                                 "the Data Table", selected)
@@ -541,8 +554,7 @@ async def main(base_url):
 
         # Expand Aggregation Tables the same way - Down moves to the next
         # toggle bar, Enter expands it.
-        await page.keyboard.press('ArrowDown')
-        await page.wait_for_timeout(500)
+        await _arrow_down_to(page, page.locator('.section-toggle-bar', has_text='Aggregation Tables').first)
         await caption(page, "Down again, Enter again - expanding Aggregation Tables", selected)
         await page.wait_for_timeout(2800)
         await page.keyboard.press('Enter')

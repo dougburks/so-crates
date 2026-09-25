@@ -220,6 +220,12 @@ Before cutting a release:
    after) worked without issue. If you must re-run either script a second
    time for any reason, remove and recreate the container first rather than
    reusing one either script has already driven a real analysis against.
+   (The same timeout also hit an untouched container during 4.3.0: Down
+   with nothing selected starts at the active stat card, not the Sankey
+   toggle, so a fixed number of Down presses never expanded Aggregation
+   Tables. The script now presses Down until the intended toggle bar is
+   selected - `_arrow_down_to` - which may have been the real cause of the
+   ordering failure above too.)
 
    Also re-record the Home page's "CyberChef, built in" video with
    `python3 scripts/record_cyberchef_demo.py --base-url
