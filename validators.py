@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
+import gzip
 import os
 import ipaddress
 import re
+import shutil
 import socket
 import threading
 import time
+import zlib
 from urllib.parse import urlparse
 import config
 
@@ -80,6 +83,10 @@ RESERVED_FILENAMES = {
     # FILE_ANALYSIS_ARTIFACTS in socrates.py.
     'yara_matches.json', 'sigma_matches.json', 'zircolite.log',
     '.zircolite_events.db', 'file_metadata.json',
+    # Suricata's own outputs - an upload named stats.log would be appended
+    # to by Suricata while Suricata is reading it; 'filestore' is the
+    # directory it extracts files into.
+    'fast.log', 'stats.log', 'suricata.log', 'filestore',
 }
 
 
@@ -278,6 +285,44 @@ def is_epoch_stale(epoch, max_age_hours):
     files) can reuse the exact same comparison instead of re-deriving it,
     which would otherwise risk silently drifting from this definition."""
     return (time.time() - epoch) > max_age_hours * 3600
+
+
+def gunzip_atomically(src, dest):
+    """Decompress src (.gz) to dest, carrying src's mtime over.
+
+    Writes a temp file and renames it into place, so dest either doesn't
+    exist or is complete: the baked-in rule copies that use this treat an
+    existing dest as a valid cached ruleset forever, and decompressing
+    straight into dest left a truncated one behind on any failure partway
+    (disk full, a corrupt archive) - which YARA then failed to compile on
+    every scan. A corrupt or truncated archive is raised as OSError, like
+    every other failure here, since EOFError/zlib.error aren't OSErrors and
+    used to escape the callers' OSError handling.
+
+    mtime: decompressing writes a brand-new file, which would otherwise be
+    "now" (container start) rather than when the ruleset was baked into the
+    image - so the Rules modal's "updated" date reflects reality, not
+    container uptime.
+    """
+    tmp = dest + '.tmp'
+    try:
+        with gzip.open(src, 'rb') as f_in, open(tmp, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        shutil.copystat(src, tmp)
+        os.replace(tmp, dest)
+    except (EOFError, zlib.error, gzip.BadGzipFile) as e:
+        _remove_quietly(tmp)
+        raise OSError(f'corrupt archive {os.path.basename(src)}: {e}') from e
+    except OSError:
+        _remove_quietly(tmp)
+        raise
+
+
+def _remove_quietly(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def is_file_stale(path, max_age_hours):

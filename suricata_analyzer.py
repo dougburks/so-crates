@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import gzip
 import json
 import os
 import re
@@ -11,7 +10,7 @@ import time
 
 import config
 from db import create_sqlite_db
-from validators import is_host_reachable, is_epoch_stale
+from validators import is_host_reachable, is_epoch_stale, gunzip_atomically
 from yara_analyzer import run_yara_pipeline
 
 REQUIRED_EXECUTABLES = ['tcpdump', 'tshark', 'suricata', 'suricata-update']
@@ -554,15 +553,9 @@ def _seed_active_from_library(baked_in_library_dir, data_dir, source_names, on_p
                 continue
             src = os.path.join(baked_in_library_dir, filename)
             if filename.endswith('.gz'):
-                with gzip.open(src, 'rb') as f_in, open(dest, 'wb') as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-                # Decompressing writes a brand-new file, so its mtime would
-                # otherwise be "now" (container start) rather than when the
-                # ruleset was actually baked into the image at build time -
-                # carry the compressed source's mtime over (as shutil.copy2
-                # already does for the uncompressed branch below) so the
-                # Rules modal's "updated" date reflects reality, not uptime.
-                shutil.copystat(src, dest)
+                # Atomic, and carries the baked-in mtime over (as copy2
+                # does below) - see gunzip_atomically.
+                gunzip_atomically(src, dest)
             else:
                 shutil.copy2(src, dest)
     except OSError as e:

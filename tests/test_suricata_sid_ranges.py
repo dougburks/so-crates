@@ -23,6 +23,7 @@ SAMPLE_SIDS = {
     'stamus/lateral': 3115300,
     'pawpatrules': 3310000,
     'aleksibovellan/nmap': 3400010,
+    'the-hunters-ledger/open': 3500100,
     'etnetera/aggressive': 5000010,
     'julioliraup/antiphishing': 6005000,
     'ptrules/open': 10500000,
@@ -42,16 +43,29 @@ class TestClassifyAlertRuleset(unittest.TestCase):
             self.assertEqual(sr.classify_alert_ruleset(sid), by_slug[slug], slug)
 
     def test_builtin_range(self):
-        # Both well below et/open's min (2000005) so there's no ambiguity
-        # with the documented et/open-vs-builtin span overlap - see
-        # SURICATA_BUILTIN_SID_RANGE's comment.
         self.assertEqual(sr.classify_alert_ruleset(1), sr.SURICATA_BUILTIN_LABEL)
         self.assertEqual(sr.classify_alert_ruleset(500000), sr.SURICATA_BUILTIN_LABEL)
 
+    def test_builtin_event_rules_inside_et_open_span(self):
+        """REGRESSION: Suricata's own decoder/stream/app-layer event rules
+        (2200000-2299999) sit inside et/open's span - et/open was checked
+        first, so essentially every protocol-decode alert said 'Emerging
+        Threats Open'. 2210054 is a real stream-events rule; 2290021 is a
+        real built-in rule just past the old single range's end."""
+        for sid in (2200000, 2210054, 2260000, 2290021, 2299999):
+            self.assertEqual(sr.classify_alert_ruleset(sid), sr.SURICATA_BUILTIN_LABEL, sid)
+        # et/open either side of the event-rule block is still et/open.
+        self.assertEqual(sr.classify_alert_ruleset(2199999), 'Emerging Threats Open')
+        self.assertEqual(sr.classify_alert_ruleset(2300000), 'Emerging Threats Open')
+
+    def test_builtin_ranges_never_cover_a_curated_floor(self):
+        """Checked first, so a built-in range must not swallow the start of
+        any curated source's own range."""
+        for min_sid, _max, slug, label in sr.SURICATA_SID_RANGES:
+            self.assertEqual(sr.classify_alert_ruleset(min_sid), label, slug)
+
     def test_unmatched_sid_is_other(self):
-        # Genuine gaps between known ranges (not e.g. 2290021, which is
-        # still inside et/open's 2000005-2527021 span despite being past
-        # the builtin range's own end).
+        # Genuine gaps between known ranges.
         self.assertEqual(sr.classify_alert_ruleset(2600000), sr.OTHER_RULESET_LABEL, 'gap between et/open and tgreen/hunting')
         self.assertEqual(sr.classify_alert_ruleset(7000000), sr.OTHER_RULESET_LABEL, 'gap between antiphishing and ptrules/open')
 
@@ -59,9 +73,8 @@ class TestClassifyAlertRuleset(unittest.TestCase):
         for min_sid, max_sid, slug, label in sr.SURICATA_SID_RANGES:
             self.assertEqual(sr.classify_alert_ruleset(min_sid), label, f'{slug} min')
             # Not necessarily 'Other' one below the floor - et/open's own
-            # min-1 (2000004) still legitimately falls inside the builtin
-            # range (documented overlap) - only assert it stops being
-            # *this* source, not what it becomes instead.
+            # min-1 (2000004) falls inside the low built-in range - only
+            # assert it stops being *this* source, not what it becomes.
             self.assertNotEqual(sr.classify_alert_ruleset(min_sid - 1), label, f'{slug} min-1 must not still classify as {slug}')
             if max_sid is not None:
                 self.assertEqual(sr.classify_alert_ruleset(max_sid), label, f'{slug} max')
@@ -84,13 +97,13 @@ class TestClassifyAlertRuleset(unittest.TestCase):
         must still work correctly wherever it might be used - verified
         directly against classify_alert_ruleset's logic with a synthetic
         entry rather than via the real (bounded) table. Also patches
-        SURICATA_BUILTIN_SID_RANGE out of the way (to something disjoint
-        from every test value here) since it's a separate, always-active
-        fallback that isn't part of SURICATA_SID_RANGES."""
+        SURICATA_BUILTIN_SID_RANGES out of the way (to something disjoint
+        from every test value here) since it's separate, always-active and
+        not part of SURICATA_SID_RANGES."""
         import unittest.mock
         synthetic = [(1000, None, 'fake/source', 'Fake Source')]
         with unittest.mock.patch.object(sr, 'SURICATA_SID_RANGES', synthetic), \
-             unittest.mock.patch.object(sr, 'SURICATA_BUILTIN_SID_RANGE', (99990000, 99999999)):
+             unittest.mock.patch.object(sr, 'SURICATA_BUILTIN_SID_RANGES', [(99990000, 99999999)]):
             self.assertEqual(sr.classify_alert_ruleset(1000), 'Fake Source')
             self.assertEqual(sr.classify_alert_ruleset(999999999999), 'Fake Source')
             self.assertEqual(sr.classify_alert_ruleset(999), sr.OTHER_RULESET_LABEL)
@@ -117,7 +130,7 @@ class TestSidRangesSqlCase(unittest.TestCase):
         conn = sqlite3.connect(':memory:')
         try:
             all_sids = list(SAMPLE_SIDS.values()) + [
-                1, 2290020, 2290021, 999999999, -5,
+                1, 2210054, 2290020, 2290021, 2199999, 2300000, 999999999, -5,
             ]
             for sid in all_sids:
                 row = conn.execute(f'SELECT {case_sql}', {'sid': sid}).fetchone()
@@ -147,6 +160,14 @@ class TestConsistencyWithSuricataAnalyzer(unittest.TestCase):
         import suricata_analyzer
         for _min, _max, slug, _label in sr.SURICATA_SID_RANGES:
             self.assertIn(slug, suricata_analyzer.SURICATA_RULE_SOURCES, slug)
+
+    def test_every_curated_source_has_a_range(self):
+        """The other direction: a source with no range here shows all its
+        alerts as 'Other / Unrecognized' - The Hunter's Ledger did."""
+        import suricata_analyzer
+        ranged = {slug for _min, _max, slug, _label in sr.SURICATA_SID_RANGES}
+        for slug in suricata_analyzer.SURICATA_RULE_SOURCES:
+            self.assertIn(slug, ranged, slug)
 
     def test_labels_match_suricata_rule_sources_exactly(self):
         import suricata_analyzer

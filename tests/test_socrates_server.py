@@ -3033,6 +3033,25 @@ bright_magenta = "#D9B9D9"
         self.assertEqual(meta['original'], 'capture.zip')
         self.assertEqual(meta['extracted'], 'inner.pcap')
 
+    def test_upload_zip_extensionless_pcap_detected_by_magic(self):
+        """REGRESSION: ZIP members were classified as pcaps by extension
+        only, so an extension-less pcap (Security Onion's so-pcap.<ts>)
+        inside a ZIP got just a YARA scan - a direct upload of the same
+        file is detected by magic bytes and gets network analysis."""
+        import io
+        import zipfile
+        import random
+        pcap_data = b'\xd4\xc3\xb2\xa1' + bytes([random.randint(0, 255) for _ in range(100)])
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w') as zf_obj:
+            zf_obj.writestr('so-pcap.1784942755', pcap_data)
+        status, body = self._post_multipart('/api/upload', 'capture.zip', zip_buffer.getvalue())
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data.get('phase'), 'network')
+        with open(os.path.join(server.DATA_DIR, data['md5'], '.meta')) as f:
+            self.assertEqual(json.load(f)['detected_type'], 'pcap')
+
     def test_upload_evtx_writes_meta_with_detected_type(self):
         """Direct EVTX upload must write .meta with detected_type 'log'."""
         file_data = b'<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System><EventID>1</EventID><Channel>Security</Channel></System></Event>'
@@ -3337,6 +3356,57 @@ bright_magenta = "#D9B9D9"
         self.assertEqual(preserved_meta['detected_type'], original_meta['detected_type'])
         self.assertEqual(preserved_meta['original'], original_meta['original'])
         self.assertEqual(preserved_meta['extracted'], original_meta['extracted'])
+
+    def test_concurrent_reanalyze_starts_only_one(self):
+        """REGRESSION: the in-progress check and the launch weren't atomic,
+        so two concurrent reanalyze requests could both pass the check and
+        the second would delete the first's .phase lock and output."""
+        md5 = 'd' * 32
+        dir_path = os.path.join(server.DATA_DIR, md5)
+        os.makedirs(dir_path, exist_ok=True)
+        with open(os.path.join(dir_path, 'capture.pcap'), 'wb') as f:
+            f.write(b'\xd4\xc3\xb2\xa1' + b'\x00' * 20)
+        launches = []
+        def slow_spawn(d, *a, **k):
+            time.sleep(0.4)   # widen the window a racing request would hit
+            with open(os.path.join(d, '.phase'), 'w') as f:
+                f.write('network')
+            launches.append(d)
+            return True
+        results = []
+        with unittest.mock.patch.object(server, 'spawn_suricata', side_effect=slow_spawn):
+            threads = [threading.Thread(target=lambda: results.append(
+                self._post('/api/reanalyze', {'md5': md5})[0])) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(sorted(results), [200, 409])
+        self.assertEqual(len(launches), 1)
+        shutil.rmtree(dir_path)
+
+    def test_reanalyze_detects_log_by_content(self):
+        """REGRESSION: reanalyze chose log vs binary by extension only, so a
+        log upload recognized by its content (JSON with no log extension)
+        was Sigma-analyzed at upload, then YARA-scanned as a binary on
+        reanalyze."""
+        md5 = 'c' * 32
+        dir_path = os.path.join(server.DATA_DIR, md5)
+        os.makedirs(dir_path, exist_ok=True)
+        with open(os.path.join(dir_path, 'export'), 'wb') as f:
+            f.write(b'{"EventID": 1, "Channel": "Security"}\n')
+        with open(os.path.join(dir_path, 'events.db'), 'w') as f:
+            f.write('')
+        calls = []
+        with unittest.mock.patch.object(server.Handler, '_analyze_log_file',
+                                        lambda self, *a: calls.append('log')), \
+             unittest.mock.patch.object(server.Handler, '_analyze_standalone_file',
+                                        lambda self, *a: calls.append('binary')):
+            status, body = self._post('/api/reanalyze', {'md5': md5})
+        self.assertEqual(status, 200)
+        self.assertEqual(calls, ['log'])
+        self.assertEqual(json.loads(body)['phase'], 'logs')
+        shutil.rmtree(dir_path)
 
     def test_reanalyze_rewrites_meta(self):
         """Re-analyzing must rewrite .meta with the same detected_type after cleanup."""
@@ -5317,7 +5387,7 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
         # Artifact lists are centralized in module-level constants
-        self.assertIn("PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json')", content,
+        self.assertIn("PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json', 'fast.log', 'stats.log', 'suricata.log')", content,
                       'PCAP artifact list must be centralized in PCAP_ANALYSIS_ARTIFACTS')
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
         # The actual per-artifact loop lives in the shared _remove_artifacts
@@ -7577,6 +7647,24 @@ with socrates.ThreadedTCPServer(('127.0.0.1', 0), socrates.Handler) as httpd:
         rc, elapsed = self._stop_and_time(proc)
         self.assertEqual(rc, 0)
         self.assertLess(elapsed, 3)
+
+
+class TestArtifactNamesReserved(unittest.TestCase):
+    """validators.RESERVED_FILENAMES says to keep it in sync with the
+    artifact lists - an upload sharing an artifact's name would be
+    overwritten mid-scan, or deleted by reanalyze's sweep. Nothing checked
+    that until Suricata's own logs turned out to be in neither."""
+
+    def test_every_artifact_is_a_reserved_upload_name(self):
+        from validators import RESERVED_FILENAMES
+        for name in server.PCAP_ANALYSIS_ARTIFACTS + server.FILE_ANALYSIS_ARTIFACTS:
+            self.assertIn(name, RESERVED_FILENAMES, name)
+
+    def test_suricata_logs_removed_on_reanalyze(self):
+        for name in ('fast.log', 'stats.log', 'suricata.log'):
+            self.assertIn(name, server.PCAP_ANALYSIS_ARTIFACTS)
+            from validators import RESERVED_FILENAMES
+            self.assertIn(name, RESERVED_FILENAMES)
 
 
 class TestRuleUpdateErrorSanitized(unittest.TestCase):

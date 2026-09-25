@@ -49,7 +49,7 @@ from suricata_analyzer import (
 )
 from stream_payload import DIRECTIONS as STREAM_DIRECTIONS, run_follow_raw
 from suricata_sid_ranges import (
-    SURICATA_SID_RANGES, SURICATA_BUILTIN_SID_RANGE, SURICATA_BUILTIN_LABEL,
+    SURICATA_SID_RANGES, SURICATA_BUILTIN_SID_RANGES, SURICATA_BUILTIN_LABEL,
 )
 from yara_analyzer import check_yara_executable, setup_yara_rules, scan_single_file, get_yara_rules_info
 from sigma_analyzer import (
@@ -91,7 +91,9 @@ MD5_RE = re.compile(r'^[a-f0-9]{32}$')
 THEME_NAME_RE = re.compile(r'^[a-z0-9_-]{1,40}$')
 
 # Pipeline output artifacts removed by /api/reanalyze before re-running analysis
-PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json')
+# fast.log/stats.log/suricata.log are Suricata's own logs, written in append
+# mode - left in place, every reanalyze added another copy of each.
+PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json', 'fast.log', 'stats.log', 'suricata.log')
 FILE_ANALYSIS_ARTIFACTS = ('events.db', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'zircolite.log', '.zircolite_events.db')
 
 MAX_URL_REDIRECTS = 5
@@ -109,6 +111,7 @@ _AGGREGATION_TOTALS_CACHE = {}
 # added here is automatically evicted/cleared in both places.
 _ALL_CACHES = (_SANKEY_CACHE, _AGGREGATION_CACHE, _AGGREGATION_TOTALS_CACHE)
 _CACHE_LOCK = threading.Lock()
+_REANALYZE_LOCK = threading.Lock()
 # Backstop against cache-fill abuse: cache keys include client-supplied
 # strings, so even with per-key validation the total entry count is bounded.
 _CACHE_MAX_ENTRIES = 2048
@@ -579,6 +582,17 @@ def _resolve_upload_size_limit(requested):
     if value <= 0:
         return config.DEFAULT_UPLOAD_SIZE
     return min(value, config.MAX_UPLOAD_SIZE)
+
+
+def _is_pcap_path(path):
+    """is_pcap_file() on a file's first bytes - for extracted ZIP members,
+    which, like a direct upload, may be a real pcap with no recognized
+    extension (e.g. Security Onion's so-pcap.<timestamp>)."""
+    try:
+        with open(path, 'rb') as fh:
+            return is_pcap_file(fh.read(4))
+    except OSError:
+        return False
 
 
 def _hash_file(path):
@@ -2063,11 +2077,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # reads this instead of hardcoding a duplicate range table, mirroring
         # db.py's sid_ranges_sql_case() (both generated from
         # suricata_sid_ranges.SURICATA_SID_RANGES).
+        # classifyRuleset() takes the first match, so the built-in ranges
+        # go first here too - same order as classify_alert_ruleset().
         suricata_info['sidRanges'] = (
-            [{'min': min_sid, 'max': max_sid, 'label': label}
-             for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES]
-            + [{'min': SURICATA_BUILTIN_SID_RANGE[0], 'max': SURICATA_BUILTIN_SID_RANGE[1],
-                'label': SURICATA_BUILTIN_LABEL}]
+            [{'min': lo, 'max': hi, 'label': SURICATA_BUILTIN_LABEL}
+             for lo, hi in SURICATA_BUILTIN_SID_RANGES]
+            + [{'min': min_sid, 'max': max_sid, 'label': label}
+               for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES]
         )
         self._send_json({
             'suricata': suricata_info,
@@ -2380,7 +2396,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     # now only ever reflects genuine per-file failures, not
                     # by-design drops.
                     non_hidden_extracted = [f for f in extracted_files if not os.path.basename(f).startswith('.')]
-                    pcap_files = [f for f in extracted_files if f.lower().endswith(PCAP_EXTENSIONS)]
+                    # By extension, or by magic bytes like a direct upload -
+                    # an extension-less pcap was otherwise only YARA-scanned.
+                    pcap_files = [f for f in extracted_files
+                                  if f.lower().endswith(PCAP_EXTENSIONS)
+                                  or (f in non_hidden_extracted and _is_pcap_path(f))]
                     pcap_file_set = set(pcap_files)
                     non_pcap_files = [f for f in non_hidden_extracted if f not in pcap_file_set]
 
@@ -2873,74 +2893,90 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(*error)
             return
 
-        phase_file = os.path.join(dir_path, '.phase')
-        if os.path.exists(phase_file):
-            self._send_error(409, 'Analysis already in progress')
-            return
+        # Held from the in-progress check until Suricata/the file analysis
+        # has been launched: otherwise two concurrent reanalyze requests
+        # could both pass the check, and the second would delete the
+        # first's .phase lock and in-progress output (its artifact sweep
+        # includes .phase) and start a second Suricata on the same
+        # directory. Launching returns quickly - the analysis itself runs
+        # in the background, outside the lock.
+        with _REANALYZE_LOCK:
+            phase_file = os.path.join(dir_path, '.phase')
+            if os.path.exists(phase_file):
+                self._send_error(409, 'Analysis already in progress')
+                return
 
-        _evict_analysis_cache(md5)
+            _evict_analysis_cache(md5)
 
-        pcap_file = _find_pcap_file(dir_path)
-        non_pcap_files = self._non_artifact_files(dir_path, pcap_file=pcap_file)
+            pcap_file = _find_pcap_file(dir_path)
+            non_pcap_files = self._non_artifact_files(dir_path, pcap_file=pcap_file)
 
-        # Preserve existing .meta so we can rewrite it after cleanup
-        meta_path = os.path.join(dir_path, '.meta')
-        preserved_meta = None
-        if os.path.exists(meta_path):
-            try:
-                with open(meta_path, 'r') as f:
-                    preserved_meta = json.load(f)
-            except (OSError, ValueError):
-                preserved_meta = None
-
-        # Determine if this is a PCAP, log file, or standalone file analysis
-        if pcap_file:
-            pcap_path = os.path.join(dir_path, pcap_file)
-
-            self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)
-
-            # Clean up extracted files from previous analysis
-            filestore_dir = os.path.join(dir_path, 'filestore')
-            if os.path.isdir(filestore_dir):
+            # Preserve existing .meta so we can rewrite it after cleanup
+            meta_path = os.path.join(dir_path, '.meta')
+            preserved_meta = None
+            if os.path.exists(meta_path):
                 try:
-                    shutil.rmtree(filestore_dir)
-                except OSError:
-                    pass
+                    with open(meta_path, 'r') as f:
+                        preserved_meta = json.load(f)
+                except (OSError, ValueError):
+                    preserved_meta = None
 
-            self._restore_meta(meta_path, preserved_meta)
+            # Determine if this is a PCAP, log file, or standalone file analysis
+            if pcap_file:
+                pcap_path = os.path.join(dir_path, pcap_file)
 
-            if spawn_suricata(dir_path, pcap_path, os.path.join(SURICATA_DIR, 'suricata.yaml'), data_dir=DATA_DIR):
-                self._send_json({'status': 'processing', 'md5': md5, 'phase': 'network'})
-            else:
-                # spawn_suricata() returns False for two different reasons -
-                # already in progress (no .error written), or a genuine
-                # failure to start (Suricata missing/permissions/etc, which
-                # does write .error) - check which one actually happened
-                # rather than always reporting "already in progress" for a
-                # real startup failure.
-                error_file = os.path.join(dir_path, '.error')
-                if os.path.exists(error_file):
+                self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)
+
+                # Clean up extracted files from previous analysis
+                filestore_dir = os.path.join(dir_path, 'filestore')
+                if os.path.isdir(filestore_dir):
                     try:
-                        with open(error_file, 'r') as f:
-                            error_msg = _sanitize_error_text(f.read().strip())
+                        shutil.rmtree(filestore_dir)
                     except OSError:
-                        error_msg = 'Suricata failed to start'
-                    self._send_error(500, error_msg)
-                else:
-                    self._send_error(409, 'Analysis already in progress')
-        elif non_pcap_files:
-            file_path = os.path.join(dir_path, non_pcap_files[0])
-            self._remove_artifacts(dir_path, FILE_ANALYSIS_ARTIFACTS)
-            self._restore_meta(meta_path, preserved_meta)
+                        pass
 
-            if is_log_file_by_extension(file_path):
-                self._analyze_log_file(dir_path, file_path, non_pcap_files[0])
-                self._send_json({'status': 'processing', 'md5': md5, 'phase': 'logs'})
+                self._restore_meta(meta_path, preserved_meta)
+
+                if spawn_suricata(dir_path, pcap_path, os.path.join(SURICATA_DIR, 'suricata.yaml'), data_dir=DATA_DIR):
+                    self._send_json({'status': 'processing', 'md5': md5, 'phase': 'network'})
+                else:
+                    # spawn_suricata() returns False for two different reasons -
+                    # already in progress (no .error written), or a genuine
+                    # failure to start (Suricata missing/permissions/etc, which
+                    # does write .error) - check which one actually happened
+                    # rather than always reporting "already in progress" for a
+                    # real startup failure.
+                    error_file = os.path.join(dir_path, '.error')
+                    if os.path.exists(error_file):
+                        try:
+                            with open(error_file, 'r') as f:
+                                error_msg = _sanitize_error_text(f.read().strip())
+                        except OSError:
+                            error_msg = 'Suricata failed to start'
+                        self._send_error(500, error_msg)
+                    else:
+                        self._send_error(409, 'Analysis already in progress')
+            elif non_pcap_files:
+                file_path = os.path.join(dir_path, non_pcap_files[0])
+                self._remove_artifacts(dir_path, FILE_ANALYSIS_ARTIFACTS)
+                self._restore_meta(meta_path, preserved_meta)
+
+                # The same test upload used (content or extension), so a log
+                # recognized by its content - JSON/CSV/EVTX without a log
+                # extension - isn't reanalyzed as a binary.
+                try:
+                    with open(file_path, 'rb') as fh:
+                        prefix = fh.read(4096)
+                except OSError:
+                    prefix = b''
+                if is_log_file(prefix) or is_log_file_by_extension(file_path):
+                    self._analyze_log_file(dir_path, file_path, non_pcap_files[0])
+                    self._send_json({'status': 'processing', 'md5': md5, 'phase': 'logs'})
+                else:
+                    self._analyze_standalone_file(dir_path, file_path, non_pcap_files[0])
+                    self._send_json({'status': 'processing', 'md5': md5, 'phase': 'files'})
             else:
-                self._analyze_standalone_file(dir_path, file_path, non_pcap_files[0])
-                self._send_json({'status': 'processing', 'md5': md5, 'phase': 'files'})
-        else:
-            self._send_error(404, 'No analysis file found')
+                self._send_error(404, 'No analysis file found')
 
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):

@@ -68,6 +68,30 @@ class TestZircoliteResultParsing(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_json_data_does_not_repeat_every_match(self):
+        """REGRESSION: each alert stored the whole detection, including
+        its full 'matches' list - N copies of N events per rule, so storage
+        grew with the square of the match count, and a search term found in
+        any other match of the rule matched every one of its alerts."""
+        matches = [{'SystemTime': f'2024-01-01T00:00:{i:02d}Z', 'CommandLine': f'cmd-{i}',
+                    'Channel': 'Security'} for i in range(50)]
+        results = [{'title': 'Brute force', 'id': 'r1', 'rule_level': 'high',
+                    'tags': ['attack.t1110'], 'count': 50, 'matches': matches}]
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as f:
+            json.dump(results, f)
+            path = f.name
+        try:
+            alerts = sigma_analyzer.parse_zircolite_results(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(len(alerts), 50)
+        for i, alert in enumerate(alerts):
+            data = json.loads(alert['json_data'])
+            self.assertNotIn('matches', data)
+            self.assertEqual(data['title'], 'Brute force')
+            self.assertEqual(json.loads(alert['original_log'])['CommandLine'], f'cmd-{i}')
+            self.assertNotIn('cmd-', alert['json_data'])
+
     def test_parse_zircolite_v3_output(self):
         results = [
             {

@@ -6,7 +6,6 @@ are scanned with Sigma rules after upload. Rules are baked into Docker
 images; non-Docker deployments download on first run if internet is available.
 """
 
-import gzip
 import json
 import os
 import re
@@ -18,7 +17,7 @@ import urllib.request
 
 import config
 from db import import_log_events
-from validators import is_host_reachable, is_file_stale
+from validators import is_host_reachable, is_file_stale, gunzip_atomically
 
 ZIRCOLITE_RULES_URLS = {
     'windows': 'https://raw.githubusercontent.com/wagga40/Zircolite-Rules-v2/main/rules_windows_merged.json',
@@ -176,14 +175,7 @@ def setup_sigma_rules(data_dir=None, on_progress=print, network_allowed=True, fo
         baked_in = os.path.join(BAKED_IN_SIGMA_DIR, f'{ruleset_name}.json.gz')
         if os.path.isfile(baked_in):
             try:
-                with gzip.open(baked_in, 'rb') as f_in, open(rules_file, 'wb') as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-                # Decompressing writes a brand-new file, so its mtime would
-                # otherwise be "now" (container start) rather than when the
-                # ruleset was actually baked into the image at build time -
-                # carry the compressed source's mtime over so the Rules
-                # modal's "updated" date reflects reality, not uptime.
-                shutil.copystat(baked_in, rules_file)
+                gunzip_atomically(baked_in, rules_file)
                 result[ruleset_name] = rules_file
                 continue
             except OSError as e:
@@ -465,7 +457,7 @@ def parse_zircolite_results(output_json):
         - tags
         - mitre_techniques
         - original_log (the specific matched event)
-        - json_data (full Zircolite result entry)
+        - json_data (the Zircolite result entry minus its 'matches' list)
     """
     if not os.path.exists(output_json):
         return []
@@ -533,7 +525,13 @@ def parse_zircolite_results(output_json):
                 'tags': tags,
                 'mitre_techniques': mitre_techniques,
                 'original_log': json.dumps(match),
-                'json_data': json.dumps(detection),
+                # The rule-level detection WITHOUT its 'matches' list: each
+                # alert already carries its own event in original_log, and
+                # a copy of every match in every one of a rule's N alerts
+                # is N x N events - a rule matching 5,000 ~1.5KB events
+                # stored ~37GB. It also made search wrong: a term found in
+                # any other match of the same rule matched every alert of it.
+                'json_data': json.dumps({k: v for k, v in detection.items() if k != 'matches'}),
             }
             alerts.append(alert)
 

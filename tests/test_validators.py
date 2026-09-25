@@ -611,3 +611,52 @@ class TestSecurityValidatorsHardening(unittest.TestCase):
             self.assertTrue(validators.validate_port(good), repr(good))
         for bad in ('65536', '8_0', ' 80', '80\n', '+80', '-1', '', None, '1e3', '٨٠'):
             self.assertFalse(validators.validate_port(bad), repr(bad))
+
+
+class TestGunzipAtomically(unittest.TestCase):
+    """REGRESSION: baked-in rule archives were decompressed straight into
+    the destination, so a failure partway (disk full, a truncated archive)
+    left a partial file every later run trusted as a valid cached ruleset,
+    and a truncated archive's EOFError escaped the callers' OSError
+    handling entirely."""
+
+    def setUp(self):
+        import gzip
+        self.tmp = tempfile.mkdtemp()
+        self.src = os.path.join(self.tmp, 'rules.yar.gz')
+        self.payload = b'rule r { condition: true }\n' * 2000
+        with gzip.open(self.src, 'wb') as f:
+            f.write(self.payload)
+        os.utime(self.src, (1700000000, 1700000000))
+        self.dest = os.path.join(self.tmp, 'rules.yar')
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_success_writes_full_file_with_source_mtime(self):
+        validators.gunzip_atomically(self.src, self.dest)
+        with open(self.dest, 'rb') as f:
+            self.assertEqual(f.read(), self.payload)
+        self.assertEqual(int(os.path.getmtime(self.dest)), 1700000000)
+        self.assertFalse(os.path.exists(self.dest + '.tmp'))
+
+    def test_truncated_archive_leaves_nothing_behind(self):
+        with open(self.src, 'rb') as f:
+            data = f.read()
+        with open(self.src, 'wb') as f:
+            f.write(data[:len(data) // 2])
+        with self.assertRaises(OSError):
+            validators.gunzip_atomically(self.src, self.dest)
+        self.assertFalse(os.path.exists(self.dest))
+        self.assertFalse(os.path.exists(self.dest + '.tmp'))
+
+    def test_failure_partway_keeps_old_dest_intact(self):
+        with open(self.dest, 'wb') as f:
+            f.write(b'previous complete ruleset')
+        with unittest.mock.patch('shutil.copyfileobj', side_effect=OSError(28, 'No space left on device')):
+            with self.assertRaises(OSError):
+                validators.gunzip_atomically(self.src, self.dest)
+        with open(self.dest, 'rb') as f:
+            self.assertEqual(f.read(), b'previous complete ruleset')
+        self.assertFalse(os.path.exists(self.dest + '.tmp'))
