@@ -1206,6 +1206,39 @@ class TestUXFeatures(unittest.TestCase):
         self.assertEqual(strip(groups[0]), ['{"blob": "QUJDREVG"}', 'next line'])
         self.assertEqual(strip(groups[1]), ['HTTP/1.1 200 OK', ''])
 
+    def _transcript_text(self, payload_js):
+        from tests.jsdom_helper import js_statements
+        return js_statements('''
+            window.fetch = function() {
+                return Promise.resolve({ status: 500, text: () => Promise.resolve(%s) });
+            };
+            var pre = document.createElement('pre');
+            pre.className = 'ascii-transcript';
+            await loadAsciiTranscript('1.1.1.1', 1234, '2.2.2.2', 80, pre);
+            var note = pre.querySelector('.ascii-transcript-note');
+            window.__jsdom_result = { text: pre.textContent, note: note ? note.textContent : null };
+        ''' % payload_js)
+
+    def test_transcript_error_and_empty_never_show_raw_json(self):
+        """REGRESSION: an empty or failed transcript fell through to a
+        legacy plain-text path and printed the server's JSON itself."""
+        err = self._transcript_text("JSON.stringify({error: 'ASCII transcript extraction timed out'})")
+        self.assertEqual(err['text'], 'Error loading transcript: ASCII transcript extraction timed out')
+        empty = self._transcript_text("JSON.stringify({lines: [], truncated: false, proto: 'udp'})")
+        self.assertEqual(empty['text'], 'No payload data')
+        garbage = self._transcript_text("'<html>proxy error</html>'")
+        self.assertEqual(garbage['text'], 'Error loading transcript (HTTP 500)')
+
+    def test_truncation_note_is_unselectable(self):
+        """The note sits inside the transcript (so it hides with it in the
+        Hexdump view) but must never be part of a selection sent to
+        CyberChef."""
+        r = self._transcript_text("JSON.stringify({lines: [{direction: 'src', text: 'abc'}], truncated: true, proto: 'tcp'})")
+        self.assertIn('Truncated', r['note'])
+        self.assertIn('.ascii-transcript-note', CSS_CONTENT)
+        rule = re.search(r'\.ascii-transcript-note\s*\{([^}]*)\}', CSS_CONTENT).group(1)
+        self.assertIn('user-select: none', rule)
+
     def test_transcript_keeps_udp_datagrams_apart(self):
         groups = self._transcript_lines({'proto': 'udp', 'lines': [
             {'direction': 'src', 'text': '<13>syslog message one'},
@@ -8043,8 +8076,10 @@ class TestSendToCyberChef(unittest.TestCase):
     TRANSCRIPT = """
         // jsdom has no layout, so no Range geometry - stub it (real
         // browsers all implement both).
+        // A small on-screen rect: the button hides for a zero-size rect
+        // (a collapsed row) or one outside the viewport.
         Range.prototype.getClientRects = function() { return []; };
-        Range.prototype.getBoundingClientRect = function() { return { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 }; };
+        Range.prototype.getBoundingClientRect = function() { return { left: 10, right: 110, top: 10, bottom: 30, width: 100, height: 20 }; };
         var tr = document.createElement('div');
         tr.innerHTML = '<div class="stream-payload"><div class="ascii-transcript"><div><span></span><div>'
             + '<div id="l1">GET /x HTTP/1.1</div><div id="l2">X-Data: aGVsbG8=</div></div></div></div>'
@@ -8272,6 +8307,30 @@ class TestTranscriptDragSelection(unittest.TestCase):
         self.assertFalse(result['during'])
         self.assertTrue(result['after'])
         self.assertEqual(result['text'], 'GET /x HT')
+
+    def test_selection_button_hides_when_selection_leaves_view(self):
+        """The button used to be pinned to the top edge when its selection
+        scrolled off-screen, and jump to the corner when its row collapsed
+        (a zero-size rect)."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            function shownWith(rect) {
+                Range.prototype.getClientRects = function() { return [rect]; };
+                var r = document.createRange();
+                r.setStart(document.getElementById('l1').firstChild, 0);
+                r.setEnd(document.getElementById('l1').firstChild, 5);
+                var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+                updateCyberChefSelectionButton();
+                var b = document.getElementById('cyberChefSelectionBtn');
+                return !!b && !b.hidden;
+            }
+            window.__jsdom_result = {
+                inView: shownWith({ left: 10, right: 60, top: 100, bottom: 120, width: 50, height: 20 }),
+                scrolledAbove: shownWith({ left: 10, right: 60, top: -80, bottom: -60, width: 50, height: 20 }),
+                collapsed: shownWith({ left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 }),
+            };
+        ''')
+        self.assertEqual(result, {'inView': True, 'scrolledAbove': False, 'collapsed': False})
 
     def test_drag_ends_on_mouseup(self):
         from tests.jsdom_helper import js_statements

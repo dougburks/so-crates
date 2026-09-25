@@ -3259,63 +3259,74 @@
             const url = buildStreamUrl('ascii-stream', src, sport, dst, dport);
             try {
                 const resp = await fetch(url);
-                const text = await resp.text();
-                
-                // Try to parse as JSON (new format with direction)
+                let data = null;
                 try {
-                    const data = JSON.parse(text);
-                    if (data.lines && data.lines.length > 0) {
-                        let html = '';
-                        let groupText = '';
-                        let groupStarted = false;
-                        let lastDirection = '';
-                        // Each entry is one packet's payload. A TCP stream's
-                        // segments are pieces of one byte stream, so
-                        // consecutive same-direction segments are joined and
-                        // only then split on the data's own newlines -
-                        // splitting per packet broke a long line wherever a
-                        // segment happened to end, which also put bogus
-                        // newlines into a selection sent to CyberChef (a
-                        // base64 blob spanning 4 segments came out as 4
-                        // lines). A UDP datagram is its own message, so
-                        // those keep a line break between packets.
-                        const joinSegments = data.proto !== 'udp';
-                        // Appends the just-finished direction's group (with
-                        // its colored left bar) to html and resets it for the
-                        // next one - called both mid-loop (on a direction
-                        // change) and once more after the loop for the final
-                        // trailing group.
-                        const flushGroup = () => {
-                            const bar = `<span style="display:inline-block;width:3px;background:${lastDirection === 'src' ? '#ff6b6b' : '#58a6ff'};margin-right:8px;flex-shrink:0;"></span>`;
-                            const groupHtml = groupText.split('\n').map(t => `<div>${escapeHtml(t)}</div>`).join('');
-                            html += `<div style="display:flex;align-items:stretch;">${bar}<div style="flex:1;">${groupHtml}</div></div>`;
-                            groupText = '';
-                            groupStarted = false;
-                        };
-                        for (const line of data.lines) {
-                            const direction = line.direction;
-                            if (direction !== lastDirection && groupStarted) {
-                                flushGroup();
-                            }
-                            groupText += (groupStarted && !joinSegments ? '\n' : '') + line.text;
-                            groupStarted = true;
-                            lastDirection = direction;
-                        }
-                        if (groupStarted) {
-                            flushGroup();
-                        }
-                        pre.innerHTML = html;
-                        if (data.truncated) {
-                            pre.innerHTML += '<div style="margin-top:10px;color:var(--text-muted);font-style:italic;">[Truncated - stream too large. Use Download PCAP to view full capture.]</div>';
-                        }
-                        return;
-                    }
-                } catch (jsonErr) {
-                    // Not JSON or parse failed, continue to plain text
+                    data = JSON.parse(await resp.text());
+                } catch (e) { /* not JSON - handled below */ }
+                // The server only ever answers with JSON: {lines, truncated,
+                // proto} or an {error}. Anything else is a failure, and an
+                // empty list is a flow with no payload - never show the raw
+                // response body (it used to fall through to a plain-text
+                // path and print the JSON itself).
+                if (!data || typeof data !== 'object') {
+                    pre.textContent = `Error loading transcript (HTTP ${resp.status})`;
+                    return;
                 }
-                
-                // Legacy plain text format (backward compatibility)
-                pre.textContent = text || 'No payload data';
+                if (data.error) {
+                    pre.textContent = 'Error loading transcript: ' + data.error;
+                    return;
+                }
+                if (!Array.isArray(data.lines) || data.lines.length === 0) {
+                    pre.textContent = 'No payload data';
+                    return;
+                }
+                let html = '';
+                let groupText = '';
+                let groupStarted = false;
+                let lastDirection = '';
+                // Each entry is one packet's payload. A TCP stream's
+                // segments are pieces of one byte stream, so
+                // consecutive same-direction segments are joined and
+                // only then split on the data's own newlines -
+                // splitting per packet broke a long line wherever a
+                // segment happened to end, which also put bogus
+                // newlines into a selection sent to CyberChef (a
+                // base64 blob spanning 4 segments came out as 4
+                // lines). A UDP datagram is its own message, so
+                // those keep a line break between packets.
+                const joinSegments = data.proto !== 'udp';
+                // Appends the just-finished direction's group (with
+                // its colored left bar) to html and resets it for the
+                // next one - called both mid-loop (on a direction
+                // change) and once more after the loop for the final
+                // trailing group.
+                const flushGroup = () => {
+                    const bar = `<span style="display:inline-block;width:3px;background:${lastDirection === 'src' ? '#ff6b6b' : '#58a6ff'};margin-right:8px;flex-shrink:0;"></span>`;
+                    const groupHtml = groupText.split('\n').map(t => `<div>${escapeHtml(t)}</div>`).join('');
+                    html += `<div style="display:flex;align-items:stretch;">${bar}<div style="flex:1;">${groupHtml}</div></div>`;
+                    groupText = '';
+                    groupStarted = false;
+                };
+                for (const line of data.lines) {
+                    const direction = line.direction;
+                    if (direction !== lastDirection && groupStarted) {
+                        flushGroup();
+                    }
+                    groupText += (groupStarted && !joinSegments ? '\n' : '') + line.text;
+                    groupStarted = true;
+                    lastDirection = direction;
+                }
+                if (groupStarted) {
+                    flushGroup();
+                }
+                pre.innerHTML = html;
+                if (data.truncated) {
+                    // Inside the transcript, so it shows and hides with it,
+                    // but unselectable (.ascii-transcript-note) and below the
+                    // text that a drag-selection clamps to - it's never part
+                    // of what gets sent to CyberChef.
+                    pre.insertAdjacentHTML('beforeend', '<div class="ascii-transcript-note">[Truncated - stream too large. Use Download PCAP to view full capture.]</div>');
+                }
             } catch(err) {
                 pre.textContent = 'Error loading transcript: ' + err.message;
             }
@@ -10599,9 +10610,16 @@
                 return;
             }
             cyberChefSelectionText = text;
-            const shown = getCyberChefSelectionButton();
             const rects = sel.getRangeAt(0).getClientRects();
             const last = rects.length ? rects[rects.length - 1] : sel.getRangeAt(0).getBoundingClientRect();
+            // Its row collapsed (a zero-size rect) or the selection's end
+            // scrolled out of view: hide rather than pin the button to an
+            // edge of the screen, away from anything it belongs to.
+            if ((!last.width && !last.height) || last.bottom < 0 || last.top > window.innerHeight) {
+                if (btn) btn.hidden = true;
+                return;
+            }
+            const shown = getCyberChefSelectionButton();
             shown.hidden = false;
             // position: fixed (see .cyberchef-selection-btn), so viewport
             // coordinates straight from the range. Just right of where the
@@ -10664,8 +10682,12 @@
             // the start of the whole direction group, not the line.
             const column = transcript.querySelector(':scope > div > div');
             const left = column ? column.getBoundingClientRect().left : box.left;
+            // Bottom of the last line of text, not of the whole transcript,
+            // which may end with the (unselectable) truncation note.
+            const groups = transcript.querySelectorAll(':scope > div:not(.ascii-transcript-note)');
+            const bottom = groups.length ? groups[groups.length - 1].getBoundingClientRect().bottom : box.bottom;
             const cx = Math.min(Math.max(x, left + 1), box.right - 1);
-            const cy = Math.min(Math.max(y, box.top + 1), box.bottom - 1);
+            const cy = Math.min(Math.max(y, box.top + 1), bottom - 1);
             const caret = caretAtPoint(cx, cy);
             if (!caret) return null;
             const el = caret.node.nodeType === Node.ELEMENT_NODE ? caret.node : caret.node.parentElement;

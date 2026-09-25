@@ -7786,6 +7786,38 @@ class TestRawBytesEndpoints(unittest.TestCase):
     def test_raw_stream_unknown_flow_404(self):
         self.assertEqual(self._stream('both', '10.9.9.9', 1, '10.8.8.8', 2)[0], 404)
 
+    def _ascii(self, src, sport, dst, dport):
+        status, _, body = self._get(f'/api/ascii-stream?md5={self.MD5}&src={src}&sport={sport}&dst={dst}&dport={dport}')
+        self.assertEqual(status, 200)
+        return json.loads(body)
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_ascii_stream_ipv6(self):
+        """REGRESSION: tshark's ip.addr doesn't match IPv6 - the transcript
+        was always empty for IPv6 flows. Suricata logs IPv6 fully expanded,
+        so the direction must still come out right for that form."""
+        data = self._ascii('2001:0db8:0000:0000:0000:0000:0000:0001', 40001, '2001:db8::2', 8080)
+        self.assertEqual([l['direction'] for l in data['lines']][:1], ['src'])
+        self.assertIn('GET /x HTTP/1.1', ''.join(l['text'] for l in data['lines']))
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_ascii_stream_skips_retransmissions(self):
+        """The 10.0.0.1 flow's first response segment is retransmitted -
+        joined into one stream, a duplicate would land mid-line."""
+        data = self._ascii('10.0.0.1', 40000, '10.0.0.2', 80)
+        dst_text = ''.join(l['text'] for l in data['lines'] if l['direction'] == 'dst')
+        self.assertEqual(dst_text.count('HTTP/1.1 200 OK'), 1)
+        self.assertTrue(dst_text.endswith('END'))
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_ascii_stream_keeps_whitespace_only_segments(self):
+        """REGRESSION: whitespace-only segments (an interactive session's
+        Enter keys) were dropped, so once the transcript joins segments the
+        commands ran together ('lspwd')."""
+        data = self._ascii('10.0.0.5', 40003, '10.0.0.6', 23)
+        src_text = ''.join(l['text'] for l in data['lines'] if l['direction'] == 'src')
+        self.assertEqual(src_text, 'ls\r\npwd\r\n')
+
     @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
     def test_ascii_stream_reports_proto(self):
         """The transcript joins a TCP stream's segments but keeps UDP

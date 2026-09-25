@@ -63,6 +63,29 @@ def tcp_conversation(client, server, cport, sport, request, response, retransmit
     return pkts
 
 
+def tcp_segments(client, server, cport, sport, segments):
+    """Handshake, then each (from_client, payload) in order as its own
+    segment - e.g. an interactive session's keystrokes - then FIN/FIN."""
+    pkts = []
+    cs, ss = 7000, 9000
+    pkts.append(_tcp_packet(client, server, cport, sport, cs, 0, 0x02)); cs += 1
+    pkts.append(_tcp_packet(server, client, sport, cport, ss, cs, 0x12)); ss += 1
+    pkts.append(_tcp_packet(client, server, cport, sport, cs, ss, 0x10))
+    for from_client, payload in segments:
+        if from_client:
+            pkts.append(_tcp_packet(client, server, cport, sport, cs, ss, 0x18, payload)); cs += len(payload)
+        else:
+            pkts.append(_tcp_packet(server, client, sport, cport, ss, cs, 0x18, payload)); ss += len(payload)
+    pkts.append(_tcp_packet(client, server, cport, sport, cs, ss, 0x11))
+    pkts.append(_tcp_packet(server, client, sport, cport, ss, cs + 1, 0x11))
+    return pkts
+
+
+# An interactive (telnet-style) session: each command and each Enter is its
+# own segment, the way a terminal sends keystrokes.
+TELNET_SEGMENTS = [(True, b'ls'), (True, b'\r\n'), (False, b'file1\r\n'), (True, b'pwd'), (True, b'\r\n'), (False, b'/root\r\n')]
+
+
 def write_pcap(path, packets):
     with open(path, 'wb') as f:
         f.write(struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1))
@@ -74,11 +97,13 @@ def write_http_pcap(path):
     """An IPv4 flow 10.0.0.1:40000 -> 10.0.0.2:80 (with a retransmitted
     response segment), an IPv6 flow [2001:db8::1]:40001 ->
     [2001:db8::2]:8080, and a VLAN 244-tagged IPv4 flow 10.0.0.3:40002 ->
-    10.0.0.4:443, all carrying HTTP_REQUEST/HTTP_RESPONSE."""
+    10.0.0.4:443, all carrying HTTP_REQUEST/HTTP_RESPONSE - plus the
+    TELNET_SEGMENTS session 10.0.0.5:40003 -> 10.0.0.6:23."""
     write_pcap(path,
                tcp_conversation('10.0.0.1', '10.0.0.2', 40000, 80,
                                 HTTP_REQUEST, HTTP_RESPONSE, retransmit=True)
                + tcp_conversation('2001:db8::1', '2001:db8::2', 40001, 8080,
                                   HTTP_REQUEST, HTTP_RESPONSE)
                + tcp_conversation('10.0.0.3', '10.0.0.4', 40002, 443,
-                                  HTTP_REQUEST, HTTP_RESPONSE, vlan=244))
+                                  HTTP_REQUEST, HTTP_RESPONSE, vlan=244)
+               + tcp_segments('10.0.0.5', '10.0.0.6', 40003, 23, TELNET_SEGMENTS))

@@ -1398,15 +1398,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(500, 'Internal server error')
 
     def _extract_payload_lines(self, pcap, src, sport, dst, dport, proto):
+        # tshark's ip.* fields don't match IPv6 at all ("not a valid
+        # hostname or IPv4 address", silently giving an empty transcript) -
+        # IPv6 flows need the ipv6.* fields instead.
+        family = 'ipv6' if ipaddress.ip_address(src).version == 6 else 'ip'
+        display_filter = (f'{family}.addr == {src} && {family}.addr == {dst} && '
+                          f'{proto}.port == {sport} && {proto}.port == {dport}')
+        if proto == 'tcp':
+            # The transcript joins a TCP stream's segments into one byte
+            # stream, so a retransmitted segment would be spliced into the
+            # middle of a line rather than show as a harmless duplicate.
+            display_filter += ' && !tcp.analysis.retransmission'
         # Capped read: the response is trimmed to MAX_TRANSCRIPT_* far below
         # this, so anything past the cap could never be shown anyway.
         _, stdout, _ = _run_capped(
-            ['tshark', '-r', pcap, '-Y',
-             f'ip.addr == {src} && ip.addr == {dst} && {proto}.port == {sport} && {proto}.port == {dport}',
-             '-T', 'fields', '-e', 'ip.src', '-e', f'{proto}.payload'],
+            ['tshark', '-r', pcap, '-Y', display_filter,
+             '-T', 'fields', '-e', f'{family}.src', '-e', f'{proto}.payload'],
             max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
             timeout=config.STREAM_TIMEOUT_SECONDS, text=True
         )
+        src_addr = ipaddress.ip_address(src)
         lines = []
         for line in stdout.strip().split('\n'):
             if not line.strip():
@@ -1421,10 +1432,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     payload_bytes = bytes.fromhex(payload_hex)
                     payload_str = payload_bytes.decode('utf-8', errors='replace')
                     cleaned = ''.join(c if c in '\n\r\t' or 32 <= ord(c) < 127 else '.' for c in payload_str)
-                    if cleaned.strip():
-                        direction = 'src' if packet_src == src else 'dst'
-                        lines.append({'text': cleaned, 'direction': direction})
-                except (ValueError, UnicodeDecodeError):
+                    # Whitespace-only payloads are kept: an interactive
+                    # session sends Enter or a space as its own segment, and
+                    # dropping it ran the neighboring commands together once
+                    # the transcript joins segments.
+                    # Compared as addresses, not strings: Suricata logs IPv6
+                    # fully expanded, tshark prints it compressed.
+                    direction = 'src' if ipaddress.ip_address(packet_src) == src_addr else 'dst'
+                    lines.append({'text': cleaned, 'direction': direction})
+                except ValueError:
                     pass
         return lines
 

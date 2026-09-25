@@ -1460,6 +1460,7 @@
            modals (z-index 1001) so an opened modal always covers it. */
         .cyberchef-selection-btn { position: fixed; z-index: 1000; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--accent); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
         .cyberchef-selection-btn:hover { background: var(--bg-hover); }
+        .ascii-transcript-note { margin-top: 10px; color: var(--text-muted); font-style: italic; user-select: none; }
         .cyberchef-direction-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
         /* The "+ Add Note"/"Edit" link (see rowNoteDetailValueHtml) is otherwise
            unstyled apart from its own inline color - same outline treatment as
