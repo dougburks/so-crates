@@ -10609,6 +10609,92 @@
         window.addEventListener('scroll', scheduleCyberChefSelectionButton, true);
         window.addEventListener('resize', scheduleCyberChefSelectionButton);
 
+        // Click-and-drag selection inside an ASCII transcript, done by hand.
+        // Left to the browser, dragging past a transcript line's end or the
+        // transcript's edge put the pointer over the surrounding padding,
+        // which Chrome resolves to the end of the whole results table - so
+        // every row below lit up and went dark again as the pointer moved
+        // (measured: the selection was outside the transcript in 30-50% of
+        // animation frames during such drags). Neither user-select: none
+        // around it (snaps to odd positions) nor correcting the browser's
+        // selection afterwards (the two fight, flipping every frame) fixed
+        // it. So a plain drag that starts in a transcript sets the selection
+        // itself on each move, from the caret under the pointer - clamped
+        // into the transcript's text column when the pointer is outside,
+        // like dragging out of a text box: past a line's end stops at its
+        // end, below the transcript stops on the last line. Double/triple
+        // click and Shift+click are left to the browser.
+        let transcriptDrag = null;  // { transcript, anchor, x, y, scrollTimer }
+
+        function caretAtPoint(x, y) {
+            if (document.caretPositionFromPoint) {
+                const p = document.caretPositionFromPoint(x, y);
+                return p ? { node: p.offsetNode, offset: p.offset } : null;
+            }
+            const r = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
+            return r ? { node: r.startContainer, offset: r.startOffset } : null;
+        }
+
+        // The caret nearest (x, y) that lies inside transcript, or null.
+        function transcriptCaretAt(transcript, x, y) {
+            const box = transcript.getBoundingClientRect();
+            // The text column, not the whole transcript: its left edge
+            // holds the red/blue direction bars, whose caret position is
+            // the start of the whole direction group, not the line.
+            const column = transcript.querySelector(':scope > div > div');
+            const left = column ? column.getBoundingClientRect().left : box.left;
+            const cx = Math.min(Math.max(x, left + 1), box.right - 1);
+            const cy = Math.min(Math.max(y, box.top + 1), box.bottom - 1);
+            const caret = caretAtPoint(cx, cy);
+            if (!caret) return null;
+            const el = caret.node.nodeType === Node.ELEMENT_NODE ? caret.node : caret.node.parentElement;
+            return el && transcript.contains(el) ? caret : null;
+        }
+
+        function extendTranscriptDrag() {
+            const d = transcriptDrag;
+            if (!d) return;
+            const caret = transcriptCaretAt(d.transcript, d.x, d.y);
+            if (caret) window.getSelection().setBaseAndExtent(d.anchor.node, d.anchor.offset, caret.node, caret.offset);
+        }
+
+        function endTranscriptDrag() {
+            if (transcriptDrag) clearInterval(transcriptDrag.scrollTimer);
+            transcriptDrag = null;
+        }
+
+        document.addEventListener('mousedown', e => {
+            endTranscriptDrag();
+            if (e.button !== 0 || e.detail !== 1 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+            const transcript = e.target.closest && e.target.closest('.ascii-transcript');
+            if (!transcript) return;
+            const anchor = transcriptCaretAt(transcript, e.clientX, e.clientY);
+            if (!anchor) return;
+            e.preventDefault();  // no native drag-selection (or text drag-and-drop)
+            window.getSelection().collapse(anchor.node, anchor.offset);
+            transcriptDrag = { transcript, anchor, x: e.clientX, y: e.clientY, scrollTimer: 0 };
+            // The browser's own autoscroll went with its drag-selection:
+            // keep scrolling while the pointer sits near the top/bottom edge.
+            transcriptDrag.scrollTimer = setInterval(() => {
+                const d = transcriptDrag;
+                if (!d) return;
+                const edge = 30;
+                const dy = d.y < edge ? -20 : d.y > window.innerHeight - edge ? 20 : 0;
+                if (dy) { window.scrollBy(0, dy); extendTranscriptDrag(); }
+            }, 50);
+        });
+
+        document.addEventListener('mousemove', e => {
+            if (!transcriptDrag) return;
+            if (!(e.buttons & 1)) { endTranscriptDrag(); return; }
+            transcriptDrag.x = e.clientX;
+            transcriptDrag.y = e.clientY;
+            extendTranscriptDrag();
+        });
+
+        document.addEventListener('mouseup', endTranscriptDrag);
+        window.addEventListener('blur', endTranscriptDrag);
+
         function sendSelectionToCyberChef() {
             if (cyberChefSelectionText.trim()) sendTextToCyberChef(cyberChefSelectionText);
         }

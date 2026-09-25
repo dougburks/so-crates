@@ -8149,6 +8149,88 @@ class TestCyberChefThemeSync(unittest.TestCase):
         self.assertIsNone(result['last'])
 
 
+class TestTranscriptDragSelection(unittest.TestCase):
+    """REGRESSION (real report: "other areas outside of the transcript
+    are selecting and de-selecting" while selecting in it): a plain drag
+    that starts in an ASCII transcript is done by hand, clamped into the
+    transcript, instead of by the browser - whose drag over the
+    transcript's surrounding padding extended the selection to the end of
+    the whole results table and back as the pointer moved. jsdom has no
+    layout, so geometry and caret hit-testing are stubbed; the real
+    behavior was measured in Chromium (0 escaped frames, previously
+    30-50%)."""
+
+    SETUP = TestSendToCyberChef.TRANSCRIPT + """
+        // A 500x100 transcript: y < 50 is line 1, below is line 2; each
+        // 10px across is one character.
+        Element.prototype.getBoundingClientRect = function() {
+            return { left: 0, top: 0, right: 500, bottom: 100, width: 500, height: 100 };
+        };
+        document.caretRangeFromPoint = function(x, y) {
+            var node = document.getElementById(y < 50 ? 'l1' : 'l2').firstChild;
+            var r = document.createRange();
+            r.setStart(node, Math.min(Math.floor(x / 10), node.length));
+            return r;
+        };
+        getSelection().removeAllRanges();
+        function down(targetId, x, y, opts) {
+            var ev = new MouseEvent('mousedown', Object.assign({ bubbles: true, cancelable: true, button: 0, detail: 1, clientX: x, clientY: y }, opts || {}));
+            document.getElementById(targetId).dispatchEvent(ev);
+            return ev.defaultPrevented;
+        }
+        function move(x, y) {
+            document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1, clientX: x, clientY: y }));
+        }
+    """
+
+    def test_drag_is_clamped_into_transcript(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            var prevented = down('l1', 40, 10);           // 'GET |/x...' - 4 chars in
+            var afterDown = getSelection().isCollapsed;
+            move(9000, 9000);                              // far outside, down-right
+            var sel = getSelection();
+            var r = sel.getRangeAt(0);
+            window.__jsdom_result = {
+                prevented: prevented, afterDown: afterDown,
+                text: sel.toString(),
+                endsIn: r.endContainer.parentElement.id,
+                inside: !!r.commonAncestorContainer.parentElement.closest('.ascii-transcript')
+                        || !!(r.commonAncestorContainer.closest && r.commonAncestorContainer.closest('.ascii-transcript'))
+            };
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        ''')
+        self.assertTrue(result['prevented'], 'native drag-selection must be taken over')
+        self.assertTrue(result['afterDown'])
+        self.assertEqual(result['endsIn'], 'l2', 'clamped to the transcript, not beyond it')
+        self.assertTrue(result['inside'])
+        self.assertTrue(result['text'].startswith('/x HTTP/1.1'))
+        self.assertTrue(result['text'].endswith('X-Data: aGVsbG8='))
+
+    def test_native_behavior_kept_where_it_works(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            window.__jsdom_result = {
+                doubleClick: down('l1', 40, 10, { detail: 2 }),
+                shiftClick: down('l1', 40, 10, { shiftKey: true }),
+                rightButton: down('l1', 40, 10, { button: 2 }),
+                outside: down('outside', 40, 10),
+            };
+        ''')
+        self.assertEqual(result, {'doubleClick': False, 'shiftClick': False, 'rightButton': False, 'outside': False})
+
+    def test_drag_ends_on_mouseup(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            down('l1', 40, 10);
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            var before = getSelection().toString();
+            move(9000, 9000);   // a later move with no drag must not touch the selection
+            window.__jsdom_result = { unchanged: getSelection().toString() === before };
+        ''')
+        self.assertTrue(result['unchanged'])
+
+
 class TestCorrelatePivotMenu(unittest.TestCase):
     """The pivot menu's Correlate entry - re-searches the whole analysis
     for this row's community_id (see huntFilterValue), regardless of
