@@ -46,11 +46,12 @@ SURICATA_RULE_SOURCES = {
 DEFAULT_SURICATA_SOURCES = ['et/open']
 
 # ipfire/dbl deliberately excluded from what the Docker image bakes in -
-# it's the single biggest space cost of the curated set (~51 of ~83 MiB
-# when baking in everything else, via its dataset:-based domain lists) and
-# is actually a content-*filtering* blocklist (ads/dating/gambling/social/
-# streaming/etc. categories), not threat detection - most of it would just
-# add alert noise on ordinary browsing traffic. It stays in
+# it's the single biggest source in the curated set (~51 MiB on its own,
+# via its dataset:-based domain lists - the other 14 together are ~84 MB
+# uncompressed, measured 2026-09-25) and is actually a content-*filtering*
+# blocklist (ads/dating/gambling/social/streaming/etc. categories), not
+# threat detection - most of it would just add alert noise on ordinary
+# browsing traffic. It stays in
 # SURICATA_RULE_SOURCES so online users can still fetch it on demand via
 # the Rules modal; Dockerfile's bake loop derives its own list from this
 # (BAKED_IN_SURICATA_SOURCES), not a separately hand-maintained one.
@@ -441,8 +442,7 @@ def _reconcile_suricata_sources(suricata_dir, data_dir, desired_names, on_progre
 
     Unlike the old suricata-update-CLI-based design (enable-source/
     disable-source, whose state lived in a --data-dir with no relationship
-    between build-time/image and run-time/DATA_DIR - see this module's
-    module-level notes), toggling a source that's already in the library
+    between build-time/image and run-time/DATA_DIR), toggling a source that's already in the library
     is pure local file copy/delete, no network at all - this is what lets
     an airgapped user choose among whatever was baked into the image.
     Only a source that has never been staged locally (not baked in, never
@@ -534,8 +534,9 @@ def _seed_active_from_library(baked_in_library_dir, data_dir, source_names, on_p
     as a last-resort fallback if every live refresh attempt fails.
 
     The image bakes these in gzip-compressed (`<name>.rules.gz` - see the
-    Dockerfile's bake loop; plain-text Suricata rules compress ~93%, 73MB
-    down to 5MB across all 14 curated sources) - decompressed here into the
+    Dockerfile's bake loop; plain-text Suricata rules compress ~93%, ~84MB
+    down to ~6MB across the 14 baked-in sources, measured 2026-09-25) -
+    decompressed here into the
     plain `.rules` filename every other reader in this module already
     expects, so nothing downstream needs to know the baked-in copy was ever
     compressed.

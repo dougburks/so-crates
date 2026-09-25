@@ -366,7 +366,8 @@ def _is_mostly_text(data):
 
 
 def is_log_file(data):
-    """Detect if file data is a log file by magic bytes or extension.
+    """Detect if file data is a log file by its content (magic bytes and
+    structure) - see is_log_file_by_extension for the extension check.
 
     Returns True if the data appears to be a supported log format.
     """

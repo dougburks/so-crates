@@ -324,7 +324,8 @@ for slug in BAKED_IN_SURICATA_SOURCES:
             check=True,
         )
         # Baked in gzip-compressed - plain-text Suricata rules compress
-        # ~93% (measured: 73MB -> 5MB across all 14 curated sources) - see
+        # ~93% (measured 2026-09-25: ~84MB -> ~6MB across the 14 baked-in
+        # sources) - see
         # _seed_active_from_library() in suricata_analyzer.py for the
         # matching decompress-on-read.
         dest = f'/usr/share/suricata/rules-available/{_source_filename(slug)}.gz'

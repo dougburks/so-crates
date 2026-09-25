@@ -1126,9 +1126,9 @@ class TestUXFeatures(unittest.TestCase):
     def test_feature_comparison_table_links(self):
         """Feature comparison table must include links to Security Onion resources"""
         self.assertIn('https://securityonion.net', JS_CONTENT)
-        self.assertIn('http://securityonion.net/docs/about', JS_CONTENT)
+        self.assertIn('https://securityonion.net/docs/about', JS_CONTENT)
         self.assertIn('https://securityonion.com/pro', JS_CONTENT)
-        self.assertIn('http://securityonion.net/docs/security-onion-pro', JS_CONTENT)
+        self.assertIn('https://securityonion.net/docs/security-onion-pro', JS_CONTENT)
 
     def test_ascii_transcript_loading(self):
         self.assertIn('ASCII Transcript', JS_CONTENT)

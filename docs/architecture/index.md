@@ -11,14 +11,17 @@ Browser ──▶ socrates.py (Python HTTP server, port 8000)
                 ├──▶ exiftool (subprocess, optional EXIF metadata on binary files)
                 ├──▶ SQLite (indexes eve.json/Sigma matches → events.db)
                 ├──▶ tcpdump (carves individual streams & hexdumps)
-                └──▶ tshark (extracts ASCII transcripts)
+                └──▶ tshark (ASCII transcripts, exact stream payloads)
+
+Browser ──▶ /cyberchef/ (bundled CyberChef, served by the same process;
+                         Send to CyberChef hands it payloads from the app)
 ```
 
 All state is file-based under `~/socrates-data/`. No database server, no external services.
 
 ## Server
 
-A stdlib-only Python HTTP server (`http.server.SimpleHTTPRequestHandler`). Handles static file serving for `socrates.html` and JSON API endpoints.
+A stdlib-only Python HTTP server (`http.server.SimpleHTTPRequestHandler`). Handles static file serving for `socrates.html`, `static/` and the bundled CyberChef at `/cyberchef/`, and the JSON API endpoints.
 
 ### Modules
 
@@ -37,6 +40,8 @@ A stdlib-only Python HTTP server (`http.server.SimpleHTTPRequestHandler`). Handl
 | `playbook_lookup.py` | Looks up per-rule investigation playbooks from the pre-generated index |
 | `ai_summary_lookup.py` | Looks up pre-generated AI rule summaries |
 | `ohmydebn_colors.py` | Derives a full SO-CRATES theme from an OhMyDebn/Aether color palette (`colors.toml` or `alacritty.toml`), for the theme-sync feature |
+| `cyberchef.py` | The bundled CyberChef: where it lives (`CYBERCHEF_DIR`) and the Content-Security-Policy its responses get |
+| `stream_payload.py` | Exact-byte stream payloads for `/api/raw-stream`, via `tshark`'s follow mode |
 | `config.py` | Centralized application constants: size limits, timeouts, thresholds |
 
 ### Request Flow

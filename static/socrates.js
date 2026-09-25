@@ -191,9 +191,10 @@
             // If the themes modal is open, treat this as the new baseline so
             // a later close/revert does not undo the change, and keep the
             // preview iframe in sync - otherwise changing the theme some
-            // other way while the modal is open (the 't' hotkey, a cheat
-            // code) would leave the preview showing a stale theme while the
-            // real page and the grid's checkmark have already moved on.
+            // other way while the modal is open (the '<'/'>' hotkeys, the
+            // command palette) would leave the preview showing a stale theme
+            // while the real page and the grid's active tile have already
+            // moved on.
             const themesModal = document.getElementById('themesModal');
             if (themesModal && themesModal.classList.contains('active')) {
                 menuBaseTheme = themeName;
@@ -323,7 +324,7 @@
 
         // Only ever touches the isolated preview iframe's own document,
         // never the real page's document.documentElement. Hovering across a
-        // packed grid of ~26 tiles with no debounce would otherwise mean a
+        // packed grid of ~35 tiles with no debounce would otherwise mean a
         // full-page, high-contrast recolor on every mouseenter - exactly
         // the large-area rapid-flash pattern WCAG 2.3.1 (Three Flashes or
         // Below Threshold) exists to prevent. Scoping the change to this
@@ -470,9 +471,11 @@
         }
 
         function updateThemeMenu() {
-            // Mark the menu item for the currently applied theme. Tracks
-            // hover previews too (setTheme/previewTheme both call this), so
-            // the checkmark always matches what is on screen.
+            // Mark the tile for the currently applied theme (the
+            // theme-active class: an accent border and bold label). Hover
+            // previews don't call this - previewTheme() only touches the
+            // isolated preview iframe - so it always shows the theme that's
+            // really applied.
             const current = getCurrentTheme();
             const items = document.querySelectorAll('[data-theme-option]');
             items.forEach(function(item) {
@@ -2353,7 +2356,7 @@
                             <td style="text-align: center; padding: 8px 10px; color: var(--badge-success-text);">${CHECKMARK_ICON_SVG}</td>
                         </tr>
                         <tr>
-                            <td style="padding: 8px 10px; color: var(--text-primary); font-size: 0.85rem;">Open ID Connect (OIDC)</td>
+                            <td style="padding: 8px 10px; color: var(--text-primary); font-size: 0.85rem;">OpenID Connect (OIDC)</td>
                             <td style="text-align: center; padding: 8px 10px; color: var(--bg-hover-light);">-</td>
                             <td style="text-align: center; padding: 8px 10px; color: var(--bg-hover-light);">-</td>
                             <td style="text-align: center; padding: 8px 10px; color: var(--badge-success-text);">${CHECKMARK_ICON_SVG}</td>
@@ -2399,11 +2402,11 @@
                 <div style="margin-top: 15px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; font-size: 0.85rem;">
                     <a href="https://securityonion.net/software" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion</a>
                     <span style="color: var(--bg-hover);">|</span>
-                    <a href="http://securityonion.net/docs/about" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Documentation</a>
+                    <a href="https://securityonion.net/docs/about" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Documentation</a>
                     <span style="color: var(--bg-hover);">|</span>
                     <a href="https://securityonion.com/pro" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Pro</a>
                     <span style="color: var(--bg-hover);">|</span>
-                    <a href="http://securityonion.net/docs/security-onion-pro" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Pro Documentation</a>
+                    <a href="https://securityonion.net/docs/security-onion-pro" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Pro Documentation</a>
                 </div>
         `;
         let lastSampleUrl = DEFAULT_SAMPLE_URL;
@@ -2656,8 +2659,8 @@
         // the detail-row below), or this cell has no pivot data (the
         // excluded Time column, or an empty value - see
         // pivotDataAttrsHtml). The note-icon <td> never reaches here at
-        // all: its own onclick already calls stopPropagation (see
-        // rowNoteIconHtml). Passes tr through to showPivotMenu so its
+        // all: its own data-action="row-note-cell" shadows the row's action
+        // (see rowNoteIconHtml). Passes tr through to showPivotMenu so its
         // "Expand Row" entry (see there) has a way back to the
         // expand/collapse behavior this click just bypassed.
         function handleRowCellClick(tr, event) {
@@ -2727,7 +2730,8 @@
         // hadSomethingOpen would otherwise be computed too late to matter.
 
         // The columns list a detail-panel field's label is checked against
-        // (see handleDetailValueClick) to decide whether it gets the full
+        // (see the document-level [data-detail-pivot] click listener) to
+        // decide whether it gets the full
         // Include/Exclude/Only/Hunt menu or the trimmed Hunt-only one -
         // mirrors pivotDataAttrsHtml's own per-eventType column source, but
         // as a standalone lookup (a detail value has no ready-made columns
@@ -2942,7 +2946,8 @@
 
         // trimmed: true omits Include/Exclude/Only - for a value that has
         // no real filterable column behind it (most detail-panel fields,
-        // see handleDetailValueClick), Include/Exclude/Only would have
+        // see the [data-detail-pivot] click listener), Include/Exclude/Only
+        // would have
         // nothing valid to filter on. Hunt/Copy/the lookup sites need no
         // column at all (just the raw value), so they're offered either way.
         // expandRowEl: the <tr> the click originated from (see
@@ -3451,8 +3456,8 @@
             return `<span class="detail-label">${escapeHtml(label)}</span><span class="${valueCls}"${sty}>${innerHtml}</span>`;
         }
         
-        // Wraps a non-empty value in its own clickable span (see
-        // handleDetailValueClick) so the ~120 call sites that go through
+        // Wraps a non-empty value in its own clickable span (see the
+        // document-level [data-detail-pivot] click listener) so the ~120 call sites that go through
         // this one shared helper all get the detail-panel pivot menu for
         // free, without each needing its own change. data-detail-pivot
         // carries [label, value] as percent-encoded JSON rather than an
@@ -4618,8 +4623,9 @@
         // directly) catches every way a bar can be hidden - #sankeyPanel's
         // own inline display:none when cleared, and the CSS rule that
         // force-hides it in binary/file-analysis mode - without needing to
-        // know which one applies. Each bar already has an onclick handler
-        // (toggleDiagram()/toggleAggregations()), so no change is needed in
+        // know which one applies. Each bar already has a click action
+        // (toggleDiagram()/toggleAggregations() via data-action), so no
+        // change is needed in
         // activateKeyboardSelection(): its existing generic
         // verticalNavSelection.click() fallback (used for data rows too)
         // already fires it.
@@ -5201,8 +5207,8 @@
         // (Up/Down, via themeTileGridColumnCount()) - close enough to true
         // 2D movement in practice, since group boundaries rarely land
         // exactly on a row boundary anyway. Each move calls previewTheme()
-        // on the newly-selected tile, exactly mirroring onmouseenter's
-        // live-preview behavior, so keyboard navigation feels like
+        // on the newly-selected tile, exactly mirroring hovering it with
+        // the mouse, so keyboard navigation feels like
         // hovering with the keyboard rather than a separate mechanism.
         function navigateThemeTiles(direction, vertical) {
             const themesModal = document.getElementById('themesModal');
@@ -5408,7 +5414,7 @@
             // click.
             { code: 'documentation', label: 'Documentation', action: () => { closeAutocompleteModal(); window.open('https://so-crates.org', '_blank', 'noopener,noreferrer'); } },
             { code: 'security onion', label: 'Security Onion', action: () => { closeAutocompleteModal(); window.open('https://securityonion.net', '_blank', 'noopener,noreferrer'); } },
-            { code: 'github repo', label: 'Github repo', action: () => { closeAutocompleteModal(); window.open('https://github.com/dougburks/so-crates', '_blank', 'noopener,noreferrer'); } },
+            { code: 'github repo', label: 'GitHub repo', action: () => { closeAutocompleteModal(); window.open('https://github.com/dougburks/so-crates', '_blank', 'noopener,noreferrer'); } },
             { code: 'pcap samples', label: 'PCAP samples', action: () => { closeAutocompleteModal(); window.open('https://malware-traffic-analysis.net', '_blank', 'noopener,noreferrer'); } },
             { code: 'log samples', label: 'Log samples', action: () => { closeAutocompleteModal(); window.open('https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES', '_blank', 'noopener,noreferrer'); } },
             { code: 'binary samples', label: 'Binary samples', action: () => { closeAutocompleteModal(); window.open('https://www.eicar.org/', '_blank', 'noopener,noreferrer'); } },
@@ -5509,7 +5515,7 @@
         // Naturally contributes nothing on the welcome screen, where
         // #statsGrid has no .stat-card children yet - no separate
         // analysisOnly flag needed the way the other analysis-only
-        // commands have. Reuses the card's own real onclick (card.click(),
+        // commands have. Reuses the card's own real click action (card.click(),
         // same as navigateStatTabs() does) rather than duplicating
         // showTab()'s section-id logic here.
         function getDataTypeAutocompleteCommands() {
@@ -9672,8 +9678,8 @@
         // can't inherit stale row scope.
         var currentRowNoteScope = null;
         // NOTE: these must stay `var` (not let/const) so they attach to the
-        // global object — the JSDOM test harness and inline handlers assign
-        // them via separate script evaluations.
+        // global object — the JSDOM test harness assigns them from a
+        // separate script evaluation.
         var currentFilters = {};
         let currentSearch = [];
         var advancedMode = false;
@@ -10597,8 +10603,9 @@
         }
 
         // Send a selection of an ASCII transcript to CyberChef: a small
-        // floating button appears just below any non-empty selection that
-        // lies entirely inside one .ascii-transcript. It sends the text as
+        // floating button appears just past the end of any non-empty
+        // selection that lies entirely inside one .ascii-transcript, once the
+        // selection is finished (see updateCyberChefSelectionButton). It sends the text as
         // displayed - the transcript already shows non-printable bytes as
         // '.', so this is for text (a base64 blob, a header, a URL); whole
         // binary payloads go through the Both/Source/Dest buttons instead.

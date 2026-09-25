@@ -69,17 +69,18 @@ SO-CRATES's backend is split into domain modules. Do not add new logic directly 
 
 ### Frontend Structure
 
-The frontend is split into three files under `static/`:
+The frontend is four files - `socrates.html` in the repo root, the rest under `static/`:
 
 | File | Content |
 |---|---|
-| `socrates.html` | HTML shell (one minimal inline theme-restore script in `<head>` to prevent FOUC; otherwise no inline CSS/JS) |
+| `socrates.html` | HTML shell - no inline CSS or JS at all |
+| `static/theme-boot.js` | The theme restore that runs before first paint (prevents a flash of the default theme) |
 | `static/socrates.css` | All styles |
 | `static/socrates.js` | All JavaScript |
 
-`socrates.html` references them via `<link rel="stylesheet" href="static/socrates.css">` and `<script src="static/socrates.js"></script>`.
+`socrates.html` references them via `<script src="static/theme-boot.js">` (parser-blocking, in `<head>`), `<link rel="stylesheet" href="static/socrates.css">` and `<script src="static/socrates.js"></script>`.
 
-When updating styles or frontend logic, edit the appropriate split file. Keep `socrates.html` free of inline `<style>` blocks. The single inline `<script>` in `<head>` restores the user's theme before the first paint; keep it minimal and fault-tolerant.
+When updating styles or frontend logic, edit the appropriate file. Keep `socrates.html` free of inline `<style>` and `<script>` blocks and inline event handlers: the Content-Security-Policy is a strict `script-src 'self'` with no inline carve-out. Keep `theme-boot.js` minimal and fault-tolerant - it runs before anything else.
 
 ### Theming Conventions
 
@@ -101,7 +102,7 @@ To add a new theme:
 
 1. Add it to the `THEMES` registry in `static/socrates.js` with the correct `group` (`'dark'`, `'fun'`, or `'light'`). `setTheme()`, `previewTheme()`, the `toggleTheme()` hotkey cycle, and the Themes modal's tile grid (`renderThemesModalGrid()`) are all generated automatically from the registry (grouped and alphabetical by label within each group) - there is nothing to add in `socrates.html`; its `<div id="themesModalBody">` starts empty and is filled entirely by `renderThemesModalGrid()`. (`renderGearMenu()`, the gear dropdown itself, is unrelated - it's a static 5-item list (Help, Settings, Themes, Rules, About), not driven by the registry.)
 2. Add a `[data-theme="your-name"]` CSS override block in `static/socrates.css`.
-3. If the theme needs a custom favicon, add `static/favicon-your-name.svg` - `updateFavicon()` resolves per-theme favicons by naming convention (the `dark` and `light` themes use the plain `static/favicon.svg`).
+3. If the theme needs a custom favicon, add `static/favicon-your-name.svg` - `updateFavicon()` resolves per-theme favicons by naming convention (the default `dark` theme uses the plain `static/favicon.svg`).
 4. Add any theme-specific runtime behavior (e.g. background effects) and gate it on `getCurrentTheme()`.
 5. Add it to the `THEMES` list in `scripts/capture_screenshots.py` (a separate hardcoded list, not derived from the registry) and re-run the script to generate its Themes-page screenshot - see the Release Checklist below.
 6. Nothing else to wire up for the command palette - `AUTOCOMPLETE_COMMANDS` in `static/socrates.js` generates a typed-autocomplete entry for every theme straight from the `THEMES` registry (matched against the theme's own `label`, lowercased), so step 1 alone already makes the new theme reachable by typing its name outside a text field.
@@ -136,7 +137,7 @@ a third one.
 `config.RULES_MAX_AGE_HOURS` (currently 2 days, `2 * 24` - tuned toward Sigma's/Suricata's roughly-daily release cadence rather than YARA Forge's slower weekly one, since a single shared threshold can't match all three) is the server-side default for "how old is too old" - see its comment in `config.py` for the full breakdown, including that its original job (gating an actual auto-refresh inside `setup_yara_rules()`/`setup_sigma_rules()`) is presently dead code given every current caller passes `force=True` or `network_allowed=False`. It's exposed to the frontend via `/api/rules-info`'s `staleThresholdHours` field, but the *effective* threshold actually used everywhere in the frontend goes through one more step: `_resolveStaleThresholdHours(serverHours)` returns the user's per-browser override (`getUserStaleThresholdDays()`, from the `socrates_staleThresholdDays` localStorage key and the number input next to the Rules modal's checkbox - same `localStorage`-preference-over-a-server-default pattern as `getUserQueryLimit()`/`getUserMaxUploadSizeMB()` in Settings, except there's no client-side fallback constant here, so an unset/invalid override resolves to `null` and falls through to the server value) if one is set, otherwise the server's `staleThresholdHours` unchanged. Both real consumers go through this same resolver, so they can't independently drift the way they did before being unified:
 
 - **The Rules modal's own date-color warning** (`isRulesetStale()`/`formatDateSpan()` in `static/socrates.js`) - colors a ruleset's "updated" date amber once it's older than the resolved threshold. `renderRulesModalBody()` computes `const t = _resolveStaleThresholdHours(info.staleThresholdHours);` once and passes it to every `formatDateSpan()` call.
-- **`checkForStaleRules()`** - opt-in via the `socrates_checkForStaleRules` localStorage key, same default-off mechanics as the `socrates_checkForUpdates` app-version checker, but with no manual "check now" trigger - the Rules modal already shows the same staleness live via `isRulesetStale()`'s amber-date warning, so a separate on-demand button was redundant and was removed. The checkbox (and the day-count input next to it) live in the Rules modal, not About, since they're rules-level settings rather than app-level ones, and are initialized in `showRulesModal()`/`refreshRulesModal()`, not `showAboutModal()`. Fires on every `showWelcomeUI()` view (not just once at `init()`, so it also catches a mid-session return to Welcome). `_staleRulesetLabels(rulesInfo, thresholdHours)` computes staleness itself from each ruleset's raw `updated` epoch via `isRulesetStale()` - the same function the date-color warning uses - rather than trusting `/api/rules-info`'s server-precomputed `stale` field, since the server has no way to already know about a client-side override. (That `stale` field, added to `get_suricata_rules_info()`/`get_yara_rules_info()`/`get_sigma_rules_info()`'s return dicts via `is_file_stale(rules_file, config.RULES_MAX_AGE_HOURS)`, still reflects the server's own default threshold and remains part of the API contract for any consumer that doesn't care about the client override - the frontend just no longer relies on it for this decision.)
+- **`checkForStaleRules()`** - opt-in via the `socrates_checkForStaleRules` localStorage key, same default-off mechanics as the `socrates_checkForUpdates` app-version checker, but with no manual "check now" trigger - the Rules modal already shows the same staleness live via `isRulesetStale()`'s amber-date warning, so a separate on-demand button was redundant and was removed. The checkbox (and the day-count input next to it) live in the Rules modal, not About, since they're rules-level settings rather than app-level ones, and are initialized in `showRulesModal()`/`refreshRulesModal()`, not `showAboutModal()`. Fires on every `showWelcomeUI()` view (not just once at `init()`, so it also catches a mid-session return to Welcome). `_staleRulesetLabels(rulesInfo, thresholdHours)` computes staleness itself from each ruleset's raw `updated` epoch via `isRulesetStale()` - the same function the date-color warning uses - rather than trusting `/api/rules-info`'s server-precomputed `stale` field, since the server has no way to already know about a client-side override. (That `stale` field, added to `get_suricata_rules_info()`/`get_yara_rules_info()`/`get_sigma_rules_info()`'s return dicts via `is_file_stale(rules_file, config.RULES_MAX_AGE_HOURS)` (YARA/Sigma) or `is_epoch_stale(oldest_mtime, config.RULES_MAX_AGE_HOURS)` over the active curated sources (Suricata), still reflects the server's own default threshold and remains part of the API contract for any consumer that doesn't care about the client override - the frontend just no longer relies on it for this decision.)
 - The day-count `<input>` (`#staleThresholdDaysInput`) is static HTML, not part of `#rulesModalBody`'s poll-regenerated template (`refreshRulesModal()` replaces that wholesale every 2s) - it's updated separately each poll via a direct `.value =` assignment, guarded by `document.activeElement !== daysInput` so a poll tick never yanks back a value the user is mid-typing (same class of guard as the log-scroll-position preservation for `.rule-update-log`).
 - The Rules modal is a fixed normal width (`#rulesModal .modal-content { max-width: 900px; ... }`, matching every other modal). It used to widen while Suricata's log was expanded, back when that log streamed `suricata-update`'s full internal output; `_fetch_single_source()` now reports one concise line per source instead (see its docstring), so `.rule-update-log`'s existing `white-space: pre-wrap` handles it at normal width and the widen-on-expand mechanism was removed.
 
@@ -222,7 +223,7 @@ Before cutting a release:
 4. **Regenerate screenshots.** Run `pip install -r requirements-screenshots.txt
    && python3 scripts/capture_screenshots.py --base-url
    http://127.0.0.1:<port>/socrates.html` against the same container, now
-   that step 3's video is done with it. This refreshes all 7
+   that step 3's video is done with it. This refreshes all 8
    `docs/images/so-crates-*.png` (Home page) and all 35
    `docs/images/themes/*.png` (Themes page) against the app's own default
    sample pcap (`DEFAULT_SAMPLE_URL` in `static/socrates.js` - a one-click
@@ -274,15 +275,15 @@ Before cutting a release:
    **This only catches claims that are wrong - it does not catch a feature
    that's simply absent from user-facing docs.** A new feature can ship
    with `docs/release-notes.md` and the technical `docs/architecture/*.md`
-   pages updated while `docs/usage.md` (the actual how-to-use-the-app guide)
+   pages updated while `docs/usage/*.md` (the actual how-to-use-the-app guide)
    never gets a new section at all - there's no false claim there to catch
    by verifying accuracy, just a silent gap. This happened for real: the
    pivot menu, per-row notes, Security Onion Playbooks, and Decoder Alerts
-   all shipped without a single mention in `docs/usage.md`, caught only
+   all shipped without a single mention in the usage guide, caught only
    because someone asked directly. So: for every user-facing feature added
    or changed since the last release (check `docs/release-notes.md`'s
-   latest section for the list), explicitly confirm `docs/usage.md`
-   describes it - not just that everything already in `docs/usage.md` is
+   latest section for the list), explicitly confirm `docs/usage/*.md`
+   describes it - not just that everything already in `docs/usage/*.md` is
    still true.
 7. **Review all source and docs** for spelling errors, grammar issues, logic
    issues, security issues, orphaned code, and code that needs refactoring.

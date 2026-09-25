@@ -30,7 +30,7 @@ legible against the app's own near-black UI (see CAPTION_JS's own comment).
 
 Playwright's own video muxing can only record to WebM, but that raw
 recording is treated as a discarded intermediate, not a published asset -
-it's immediately re-encoded to H.264/AAC MP4 via a system `ffmpeg` binary,
+it's immediately re-encoded to H.264 MP4 (video only - the recording has no audio) via a system `ffmpeg` binary,
 since MP4 is universally browser-supported (unlike WebM, whose Safari/iOS
 support is spotty) and is also the format required to upload the same clip
 directly to X/Instagram/LinkedIn/Facebook, none of which accept WebM. A
@@ -181,8 +181,9 @@ CAPTION_REMOVE_JS = ("() => { "
 # on the very first navigation - shows the caption from the first paint, over
 # the real page as it loads in behind it (matching what a real user actually
 # sees, rather than hiding the load behind an opaque cover - the app's own
-# inline FOUC-prevention script in <head> already applies the right theme
-# background before first paint, so there's nothing that needs covering).
+# FOUC-prevention script (static/theme-boot.js, parser-blocking in <head>)
+# already applies the right theme background before first paint, so there's
+# nothing that needs covering).
 # document.documentElement is null the instant this runs (before the HTML
 # parser creates <html>), so it retries via setTimeout rather than assuming
 # it already exists.

@@ -14,7 +14,7 @@ You'll need these prerequisites:
 - **Suricata** - for PCAP analysis and rule-based alerting
 - **suricata-update** - for downloading/updating Suricata rules (internet access required; the app will warn and continue without rules if offline)
 - **tcpdump** - for stream carving (`/api/download-stream`) and hexdump extraction (`/api/hexdump-stream`)
-- **tshark** - for ASCII transcript extraction (`/api/ascii-stream`)
+- **tshark** - for ASCII transcript extraction (`/api/ascii-stream`) and exact stream payloads (`/api/raw-stream`, which also carves the flow with tcpdump first)
 - **yara** (optional) - if installed, SO-CRATES scans extracted/uploaded files with YARA rules (baked-in in Docker; otherwise downloaded on demand via the Rules modal). If missing, YARA scanning and File Alerts are skipped (files are still extracted).
 - **Zircolite** (optional) - for Sigma rule detection on log files. SO-CRATES auto-detects if Zircolite is installed and skips log analysis if absent. The Dockerfile bakes in Zircolite v3.7.1.
 - **exiftool** (optional) - for extracting EXIF/media metadata from binary files. If missing, EXIF extraction is silently skipped (the rest of the file analysis still runs).

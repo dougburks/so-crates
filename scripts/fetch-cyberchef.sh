@@ -7,8 +7,8 @@
 #   scripts/fetch-cyberchef.sh ./cyberchef
 #   CYBERCHEF_DIR=./cyberchef python3 socrates.py
 #
-# To upgrade, change the four pins below - see AGENTS.md's "Updating
-# CyberChef" section. The release asset's filename carries a commit hash,
+# To upgrade, change the four pins below - see AGENTS.md's "CyberChef"
+# section under "Updating Vendored Dependencies". The release asset's filename carries a commit hash,
 # not the version, so it's pinned separately. CYBERCHEF_ZIP_SHA256 is
 # GitHub's own published digest for that asset.
 set -eu

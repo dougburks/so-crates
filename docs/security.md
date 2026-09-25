@@ -18,5 +18,6 @@ potentially malicious files. What's built in by default (see
 - **Upload limits** - a hard size ceiling plus an upfront disk-space check before accepting an upload
 - **Generic error messages** - no internal details or stack traces leaked
 - **Content-Security-Policy** - sent on every response, along with `X-Frame-Options: DENY` and `X-Content-Type-Options: nosniff`
+- **Only GET and POST** - `HEAD` requests are refused, since the web server's built-in HEAD handling bypassed the app's own request checks
 - **Non-root container** - the Docker/Podman image runs as a non-root user
 - **No startup network calls** - rule refresh is always an explicit, on-demand action from the Rules modal, never automatic

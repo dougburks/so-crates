@@ -4,6 +4,9 @@
 
 Clicking a value in a data table row, an expanded row's detail panel, or an aggregation table opens a pivot menu instead of immediately filtering or expanding the row:
 
+- **Expand Row / Collapse Row** - expand or collapse the row's detail panel (the row's timestamp cell also does this directly on click, without opening the menu)
+- **Acknowledge this alert / Acknowledge all instances of this alert** - on a Network Alert or Sigma Alert row, immediately removes it from view (or every row sharing the same signature/rule, for "all instances") and moves it into the **Acknowledged Alerts** tab. Reduced counts show up everywhere else the alert would have counted - its own tab, All Events, and the Sankey diagram
+- **Un-acknowledge this alert** - shown instead of the above when the row is already inside the Acknowledged Alerts tab; returns it to its original tab
 - **Include** - broaden the current filter to also match this value
 - **Exclude** - narrow the current filter to hide this value
 - **Only** - start a new filter scoped to just this value, clearing every other filter
@@ -11,9 +14,9 @@ Clicking a value in a data table row, an expanded row's detail panel, or an aggr
 - **Correlate** - shown on any row whose flow has a community ID (computed for every PCAP analysis); searches for every other log across the whole capture sharing that same flow, protocol events and alerts alike. Not offered when the value you clicked is the community ID itself, since Hunt above already does the same search in that case
 - **Copy to Clipboard** - copy the value as-is
 - **Lookups** - one-click lookups against Google, VirusTotal, Shodan, AbuseIPDB, urlscan.io, and CyberChef, plus any custom lookup sites you've added in Settings. CyberChef is built into SO-CRATES, so it opens with the value already loaded and works without internet access (its Optical Character Recognition operation is the exception - it downloads language data when run)
-- **Expand Row / Collapse Row** - expand or collapse the row's detail panel (the row's timestamp cell also does this directly on click, without opening the menu)
-- **Acknowledge this alert / Acknowledge all instances of this alert** - on a Network Alert or Sigma Alert row, immediately removes it from view (or every row sharing the same signature/rule, for "all instances") and moves it into the **Acknowledged Alerts** tab. Reduced counts show up everywhere else the alert would have counted - its own tab, All Events, and the Sankey diagram
-- **Un-acknowledge this alert** - shown instead of the above when the row is already inside the Acknowledged Alerts tab; returns it to its original tab
+- **Add Custom Lookup...** - add a lookup site of your own (opens Settings' Custom Lookup Sites)
+
+Values in a row's detail panel that aren't also a table column get a shorter menu, without Include/Exclude/Only, since there's no column to filter on.
 
 The **Acknowledged Alerts** stat-card tab (PCAP analyses only) is the only place acknowledged alerts still show, for review or undo - acknowledging is per-analysis and does not affect any other analysis. It groups Network Alerts and Sigma Alerts under separate sub-sections only when both have acknowledged rows; with just one type present, it displays as a single sortable table identical to that type's own tab. Un-acknowledging the last row switches you back to Network Alerts automatically.
 

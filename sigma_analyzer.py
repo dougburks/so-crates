@@ -117,7 +117,7 @@ def setup_sigma_rules(data_dir=None, on_progress=print, network_allowed=True, fo
     force: when True, checks for an update even if the cached copy isn't
     stale yet - used by the on-demand "check for rule updates" action, so
     it actually checks rather than just reporting the cached copy as fine
-    because the 24h cache window hasn't expired. Has no effect if there's
+    because the config.RULES_MAX_AGE_HOURS cache window hasn't expired. Has no effect if there's
     no cached copy to begin with. When network_allowed is False, force
     also controls whether a "using cached" message is emitted: a plain
     staleness check (server startup, per-file background scans) stays

@@ -4,6 +4,27 @@ Base URL: `http://localhost:8000`
 
 All endpoints return `Content-Type: application/json` unless noted. Errors return `{"error": "<message>"}` with the appropriate HTTP status code.
 
+## Request Requirements
+
+These apply to every request, before any endpoint-specific checks:
+
+- **Host header:** a DNS name other than `localhost` is rejected with `403` unless it's allowed by the `ALLOWED_HOSTS` environment variable (see [Configuration](configuration.md)); IP literals always work
+- **Cross-site POSTs:** a POST whose `Origin` names an untrusted host, or whose `Sec-Fetch-Site` is `cross-site`, is rejected with `403`
+- **JSON bodies:** every POST endpoint that takes a JSON body - all of them except `/api/upload` (multipart) and `/api/csp-report` - requires `Content-Type: application/json` (`415` otherwise) and a JSON object body of at most 1 MB (`MAX_REQUEST_BODY_SIZE`)
+- **Methods:** only GET and POST are served. `HEAD` returns `405` with `Allow: GET, POST` and no body; other methods return `501`
+- **Unknown paths** return `404` with a JSON error
+
+## Static Paths
+
+| Path | Serves |
+|---|---|
+| `/socrates.html`, `/static/*` | The app itself |
+| `/cyberchef` | `301` redirect to `/cyberchef/` |
+| `/cyberchef/*` | The bundled [CyberChef](https://github.com/gchq/CyberChef), served from `CYBERCHEF_DIR` with its own Content-Security-Policy (see [Security Model](architecture/security-model.md)) |
+| `/favicon.ico` | `204`, no body (each theme sets its own favicon) |
+
+Directory listings are never served (`404`).
+
 ## GET Endpoints
 
 ### `GET /`
@@ -16,7 +37,7 @@ Redirects to `/socrates.html`.
 
 Returns the running SO-CRATES version.
 
-**Response:** `{"version": "4.2.0"}`
+**Response:** `{"version": "4.3.0"}`
 
 ---
 
@@ -55,7 +76,7 @@ Returns event data from Suricata's eve.json (via SQLite index or direct JSON par
 | `md5` | Yes | - | MD5 hash of a historical analysis (`400` if omitted) |
 | `type` | No | all | Filter by event type - any `event_type` Suricata's eve.json can produce (see [Event Types](architecture/event-types.md)), plus the app's own synthetic types (`filealerts`, `log`, `protocol_decode`). Sigma alerts live in their own table and are served by `GET /api/sigma-alerts`, not here. |
 | `q` | No | none | Full-text search query (searches all event JSON). Multiple `q` params AND together. |
-| `offset` | No | `0` | Pagination offset |
+| `offset` | No | `0` | Pagination offset. A non-integer `offset` or `limit` returns an empty list (`200`), not an error |
 | `limit` | No | `1000` | Max events to return (capped at `MAX_QUERY_LIMIT`, 100,000 by default - see `GET /api/limits`) |
 | `order_by` | No | none (sorts by `timestamp`) | Server-side sort column, e.g. `Source IP`. Only sortable for columns with a static JSON path for the given `type` (mirrors the same source-of-truth constraint as `GET /api/aggregation-data`); silently falls back to `timestamp` if the column isn't server-sortable for that type, rather than erroring |
 | `sort_dir` | No | `asc` | `asc` or `desc`; any other value is treated as `asc` |
@@ -239,6 +260,8 @@ Carves a single TCP/UDP stream from the PCAP using `tcpdump` and returns it as a
 
 **Validation:** IP addresses and ports are validated before passing to tcpdump. Invalid values return `400`.
 
+**Errors:** `404` if no packets match, `413` if the carved stream is over 200 MB (`MAX_STREAM_DOWNLOAD_SIZE`) - never a truncated file, `500` if carving times out.
+
 ---
 
 ### `GET /api/ascii-stream`
@@ -255,7 +278,7 @@ Extracts ASCII payload from a TCP/UDP stream using `tshark`. Tries TCP first, fa
 | `dport` | Yes | Destination port |
 | `md5` | Yes | MD5 hash of a historical analysis |
 
-**Response:** `application/json` - `{"lines": [{"text": "...", "direction": "src"|"dst"}, ...], "truncated": false}`. Non-printable characters replaced with `.`. Each line is tagged with which side of the connection sent it.
+**Response:** `application/json` - `{"lines": [{"text": "...", "direction": "src"|"dst"}, ...], "truncated": false, "proto": "tcp"|"udp"}`. Each entry is one packet's payload, with non-printable characters replaced with `.`, tagged with which side of the connection sent it. TCP retransmissions are left out. `proto` says which protocol the flow was found as: the app joins a TCP stream's consecutive same-direction entries into one byte stream before splitting it into lines, but keeps each UDP datagram separate.
 
 ---
 
@@ -398,7 +421,7 @@ Returns Sigma alerts stored in `events.db` for the specified analysis.
 | Parameter | Required | Default | Description |
 |---|---|---|---|
 | `md5` | Yes | - | MD5 hash of a historical analysis (`400` if omitted) |
-| `offset` | No | `0` | Pagination offset |
+| `offset` | No | `0` | Pagination offset. A non-integer `offset` or `limit` returns an empty list (`200`), not an error |
 | `limit` | No | `1000` | Max alerts to return (capped at `MAX_QUERY_LIMIT`, 100,000 by default - see `GET /api/limits`) |
 | `severity` | No | none | Filter by severity level |
 | `q` | No | none | Full-text search query. Multiple `q` params AND together. |
@@ -491,7 +514,9 @@ no engine-wide fallback - a summary for the wrong rule would be misleading.
 
 Uploads a file for analysis. Accepts multipart form data.
 
-**Request:** Multipart form with a file field. Accepts any file type. PCAPs (`.pcap`, `.pcapng`, `.cap`, `.trace`) get full Suricata network analysis; log files (`.evtx`, `.json`, `.jsonl`, `.csv`, `.xml`, `.log`) get Zircolite Sigma detection; everything else gets YARA scanning.
+**Request:** Multipart form with a file field. Accepts any file type, detected by content rather than name: PCAPs (by magic bytes, whatever the extension - e.g. `.pcap`, `.pcapng`, `.cap`, `.trace`, or none at all) get full Suricata network analysis; log files (recognized by content, or by a `.evtx`, `.json`, `.jsonl`, `.csv`, `.xml` or `.log` extension) get Zircolite Sigma detection; everything else gets YARA scanning. The same detection applies to each member of an uploaded ZIP.
+
+**Size limit:** 1000 MB by default (`DEFAULT_UPLOAD_SIZE`). An `X-Max-Upload-Size` header (in bytes) can raise it, up to 5000 MB (`MAX_UPLOAD_SIZE`). A body over the limit is rejected with `400` ("Invalid Content-Length"), and `507` means the server doesn't have the disk space for it. A ZIP with more than 100 members (`MAX_ZIP_MEMBERS`) is rejected with `400`; members whose names start with `.` or `__` (e.g. `__MACOSX/`) are ignored.
 
 **Response (new file):**
 ```json
@@ -544,6 +569,8 @@ Downloads a file from a URL and analyzes it.
 ```json
 {"url": "https://example.com/capture.pcap"}
 ```
+
+An optional `maxUploadSize` field (in bytes) raises the download size limit the same way `/api/upload`'s `X-Max-Upload-Size` header does.
 
 **Response:** Same as `/api/upload` - `{"status": "processing", "md5": "...", "phase": "..."}` or `{"status": "ready", "md5": "..."}`.
 
@@ -758,7 +785,7 @@ non-empty array of integers (not booleans), capped at `MAX_QUERY_LIMIT`
 
 Deletes all historical analyses (every MD5-shaped directory under the data root). Non-analysis directories and files are left untouched.
 
-**Request Body:** `{}` (empty JSON object)
+**Request Body:** `{}` - the content is ignored, but it must be sent as a JSON object with `Content-Type: application/json` (`415` otherwise), like every other JSON POST.
 
 **Response:**
 ```json
@@ -769,13 +796,24 @@ Deletes all historical analyses (every MD5-shaped directory under the data root)
 
 ---
 
+### `POST /api/csp-report`
+
+Sink for Content-Security-Policy violation reports - every response's CSP names it as its `report-uri`, so browsers POST here when they block something. Accepts any `Content-Type` (browsers send `application/csp-report`), reads at most 64 KB, and logs each distinct violation (by directive, blocked URI, source file and line) once to the server's console.
+
+**Response:** always `204`, no body - even for a malformed report.
+
+---
+
 ## Error Codes
 
 | Code | Meaning |
 |---|---|
-| `400` | Invalid input (bad IP, port, MD5, URL, path traversal) |
+| `400` | Invalid input (bad IP, port, MD5, URL, path traversal), or an upload over the size limit |
+| `403` | Untrusted `Host` header, or a cross-site POST - see [Request Requirements](#request-requirements) |
 | `404` | Resource not found (no file, no analysis, no packets) |
+| `405` | `HEAD` request |
 | `409` | Conflict - analysis already in progress for this MD5 |
-| `413` | File too large |
-| `500` | Internal server error (generic message, no details leaked) |
+| `413` | Too large to return in full (a carved stream, stream payload or extracted file) or to download (`/api/load-url`) |
+| `415` | A JSON POST without `Content-Type: application/json` |
+| `500` | Internal server error (no stack traces or server paths leaked) |
 | `507` | Not enough disk space available on the server for this upload |

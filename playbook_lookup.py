@@ -3,7 +3,7 @@
 
 Playbooks are short, plain-English investigation guidance ("questions to
 ask") per detection rule, baked into the Docker image the same way
-Suricata/YARA/Sigma rules are (see Dockerfile's playbooks-builder stage).
+Suricata/YARA/Sigma rules are (see Dockerfile's resources-builder stage).
 Unlike those, this is static reference content with no runtime refresh -
 see AGENTS.md's "Detection Rule Freshness" section for why that's a
 deliberate choice, not an oversight.
@@ -21,7 +21,7 @@ import os
 # server point at a real playbooks dataset (e.g. one built by hand from
 # the upstream repo, for testing without a Docker build) without editing
 # source. Production/Docker never sets this, so it defaults to the same
-# path the Dockerfile's playbooks-builder stage bakes into.
+# path the Dockerfile's resources-builder stage bakes into.
 BAKED_IN_PLAYBOOKS_DIR = os.environ.get('PLAYBOOKS_DIR', '/usr/share/playbooks')
 
 _playbook_index_cache = {}  # (base_dir, detection_type) -> index dict

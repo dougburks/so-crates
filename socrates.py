@@ -30,7 +30,7 @@ from db import (
     query_sigma_alerts_sqlite, get_sigma_stats_sqlite,
     get_sigma_alert_count_sqlite, get_event_date_range_sqlite,
     get_sankey_data_sqlite, get_aggregation_data_sqlite, get_aggregation_totals_sqlite,
-    AGGREGATION_TOP_N, AGGREGATION_JSON_PATHS, REAL_AGGREGATION_COLUMNS,
+    AGGREGATION_TOP_N, AGGREGATION_PAGE_SIZE_OPTIONS, AGGREGATION_JSON_PATHS, REAL_AGGREGATION_COLUMNS,
     set_row_note, has_row_notes,
     set_acknowledged, set_acknowledged_bulk,
 )
@@ -1269,7 +1269,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             page_size = int(params.get('page_size', [''])[0])
         except (ValueError, TypeError):
             page_size = AGGREGATION_TOP_N
-        if page_size not in (10, 25, 50, 100):
+        if page_size not in AGGREGATION_PAGE_SIZE_OPTIONS:
             page_size = AGGREGATION_TOP_N
         offset = (page - 1) * page_size
 
@@ -2478,7 +2478,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 md5_hash, prefix = _hash_file_with_prefix(src_path)
                 dir_path = os.path.join(DATA_DIR, md5_hash)
-                dest_filename = safe_filename if safe_filename else 'uploaded'
+                dest_filename = safe_filename  # sanitize_filename() raises rather than return ''
                 dest_path = os.path.join(dir_path, dest_filename)
                 name_path = os.path.join(dir_path, 'name.txt')
 

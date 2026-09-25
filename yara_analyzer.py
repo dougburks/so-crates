@@ -89,7 +89,7 @@ def setup_yara_rules(data_dir=None, on_progress=print, network_allowed=True, for
 
     force: when True, checks for an update even if the cached copy isn't
     stale yet - used by the on-demand "check for rule updates" action,
-    where staying silent just because the 24h cache window hasn't expired
+    where staying silent just because the config.RULES_MAX_AGE_HOURS cache window hasn't expired
     would defeat the point of the user explicitly asking for a check right
     now. Has no effect if there's no cached copy to begin with (that path
     always checks/downloads already). When network_allowed is False, force
