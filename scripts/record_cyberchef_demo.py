@@ -49,9 +49,6 @@ from record_demo import (  # noqa: E402
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MP4_OUTPUT = os.path.join(REPO_ROOT, 'docs', 'videos', 'cyberchef.mp4')
 POSTER_OUTPUT = os.path.join(REPO_ROOT, 'docs', 'videos', 'cyberchef-poster.jpg')
-# Seconds into the finished video for the poster frame - lands on the first
-# scene's decoded message in CyberChef. Re-tune if the scenes' timing shifts.
-POSTER_TIMESTAMP_SECONDS = 38
 UPLOAD_NAME = 'cyberchef-demo.pcap'
 
 
@@ -96,11 +93,13 @@ async def _open_row(page, tab_label, cell_text):
     return row.locator('xpath=following-sibling::tr[1]')
 
 
-async def _show_in_cyberchef(context, page, trigger, captions, cyberchef_windows, start):
+async def _show_in_cyberchef(context, page, trigger, captions, cyberchef_windows, start, poster_png=None):
     """Click trigger (a Send to CyberChef control), then narrate the new
     CyberChef tab: captions[0] while Magic's suggestions are showing,
     captions[1] once its top suggestion is loaded. Records when the tab was
-    on screen, for _stitch."""
+    on screen, for _stitch. With poster_png, also screenshots the tab once
+    the recipe is loaded - input, recipe and decoded output all in view,
+    before the output is maximised - for the video's poster."""
     async with context.expect_page() as new_page:
         await trigger.click()
     cc = await new_page.value
@@ -113,6 +112,9 @@ async def _show_in_cyberchef(context, page, trigger, captions, cyberchef_windows
     await cc.wait_for_timeout(6000)
     await top.click()
     await cc.wait_for_timeout(1200)
+    if poster_png:
+        await cc.evaluate(CAPTION_REMOVE_JS)
+        await cc.screenshot(path=poster_png)
     # CyberChef's own "Maximise output pane" - the decoded message gets the
     # whole window instead of a corner of it.
     await cc.locator('#maximise-output').click()
@@ -191,7 +193,8 @@ async def main(base_url):
         await _show_in_cyberchef(context, page, send_selection, (
             "CyberChef opens with the selection - Magic has already worked out\n"
             "it's base64, then hex, then a hexdump",
-            "One click loads that recipe - the stolen goods, decoded"), cyberchef_windows, start)
+            "One click loads that recipe - the stolen goods, decoded"), cyberchef_windows, start,
+            poster_png=os.path.join(tmp_video_dir, 'poster.png'))
         await page.evaluate('getSelection().removeAllRanges()')
 
         # Scene 2 - one direction of a stream. Each scene sets its caption
@@ -232,13 +235,14 @@ async def main(base_url):
         main_video = await video.path()
         await browser.close()
 
-    _stitch(main_video, total, cyberchef_windows, tmp_video_dir)
+    _stitch(main_video, total, cyberchef_windows, tmp_video_dir, os.path.join(tmp_video_dir, 'poster.png'))
     shutil.rmtree(tmp_video_dir, ignore_errors=True)
 
 
-def _stitch(main_video, total, cyberchef_windows, tmp_dir):
+def _stitch(main_video, total, cyberchef_windows, tmp_dir, poster_png):
     """Splice each CyberChef tab's recording into the main tab's where that
-    tab was on screen, then encode MP4 + poster like record_demo.py does.
+    tab was on screen, then encode MP4 like record_demo.py does, and the
+    first scene's CyberChef screenshot as the poster JPEG.
     Each CyberChef recording starts when its tab was created, so it's used
     whole; the main tab's recording keeps running (on a view nobody sees)
     while a CyberChef tab is open, so that span is cut out of it."""
@@ -268,8 +272,8 @@ def _stitch(main_video, total, cyberchef_windows, tmp_dir):
     subprocess.run([ffmpeg, '-y', '-f', 'concat', '-safe', '0', '-i', concat_list, '-c', 'copy',
                     '-movflags', '+faststart', MP4_OUTPUT], check=True, capture_output=True)
     print('MP4_SAVED_AT:', MP4_OUTPUT)
-    subprocess.run([ffmpeg, '-y', '-ss', str(POSTER_TIMESTAMP_SECONDS), '-i', MP4_OUTPUT,
-                    '-frames:v', '1', '-q:v', '3', POSTER_OUTPUT], check=True, capture_output=True)
+    subprocess.run([ffmpeg, '-y', '-i', poster_png, '-q:v', '3', POSTER_OUTPUT],
+                   check=True, capture_output=True)
     print('POSTER_SAVED_AT:', POSTER_OUTPUT)
 
 
