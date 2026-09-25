@@ -1,0 +1,14 @@
+{#-
+  Material's partials/source.html, plus data-md-downloads - the container
+  image's total download count from hooks/ghcr_downloads.py, which
+  docs/javascripts/source-downloads.js adds next to the stars and forks.
+-#}
+<a href="{{ config.repo_url }}" title="{{ lang.t('source') }}" class="md-source" data-md-component="source"{% if config.extra.container_downloads %} data-md-downloads="{{ config.extra.container_downloads }}"{% endif %}>
+  <div class="md-source__icon md-icon">
+    {% set icon = config.theme.icon.repo or "fontawesome/brands/git-alt" %}
+    {% include ".icons/" ~ icon ~ ".svg" %}
+  </div>
+  <div class="md-source__repository">
+    {{ config.repo_name }}
+  </div>
+</a>

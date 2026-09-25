@@ -147,6 +147,8 @@ There's also **`checkForMissingRules()`** (`static/socrates.js`) - unconditional
 
 User-facing documentation lives on the MkDocs Material site built from `docs/*.md` (config in `mkdocs.yml`, deployed by `.github/workflows/docs.yml`). When adding, removing, or renaming a docs page, update `mkdocs.yml`'s `nav:` list to match - pages not listed there still build but won't appear in the site navigation. `README.md` itself stays a short landing page (tagline, screenshots, links out to the docs site) and should not grow a Table of Contents again; new content belongs in `docs/`, not README.
 
+The header's repository widget shows the container image's total downloads next to Material's own tag and stars (its fork count is hidden by `docs/stylesheets/source-facts.css`). GitHub has no public API for that count, so `hooks/ghcr_downloads.py` (an MkDocs hook) reads it from the public package page at build time, and `overrides/partials/source.html` plus `docs/javascripts/source-downloads.js` add it to the widget. A failed fetch (offline, or GitHub changing that page's markup) just leaves the count off - it never fails the build - so if the count disappears from the live site, check the hook's regex against the current package page. The docs workflow also runs daily on a schedule so the count stays current between docs changes.
+
 Preview changes locally before pushing: `pip install -r requirements-docs.txt && mkdocs serve` (use `mkdocs serve -a 127.0.0.1:8001` if SO-CRATES' own server is already running on its default port 8000). Run `mkdocs build --strict` to catch broken internal links - this fails the build the same way the deploy workflow does.
 
 ## Release Checklist
