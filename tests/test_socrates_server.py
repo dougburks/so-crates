@@ -7251,6 +7251,34 @@ class TestIngressDefenses(unittest.TestCase):
                               body=b'{}')
         self.assertEqual(status, 403)
 
+    def test_delete_all_requires_json_content_type(self):
+        """REGRESSION: delete-all never read its body, so it skipped the
+        application/json requirement that blocks cross-site "simple"
+        POSTs - on the most destructive endpoint."""
+        victim = os.path.join(self.tmpdir, 'e' * 32)
+        os.makedirs(victim, exist_ok=True)
+        status, _ = self._raw('POST', '/api/delete-all-analyses',
+                              headers={'Content-Type': 'text/plain'}, body=b'x')
+        self.assertEqual(status, 415)
+        self.assertTrue(os.path.isdir(victim))
+        status, _ = self._raw('POST', '/api/delete-all-analyses', body=b'')
+        self.assertEqual(status, 415)
+        self.assertTrue(os.path.isdir(victim))
+        shutil.rmtree(victim)
+
+    def test_delete_all_error_has_no_server_paths(self):
+        victim = os.path.join(self.tmpdir, 'f' * 32)
+        os.makedirs(victim, exist_ok=True)
+        def fail(path, *a, **k):
+            raise PermissionError(13, 'Permission denied', path)
+        with unittest.mock.patch.object(server.shutil, 'rmtree', side_effect=fail):
+            status, body = self._raw('POST', '/api/delete-all-analyses',
+                                     headers={'Content-Type': 'application/json'}, body=b'{}')
+        self.assertEqual(status, 500)
+        self.assertNotIn(self.tmpdir, body)
+        self.assertIn('f' * 32, body)
+        shutil.rmtree(victim)
+
     def test_wildcard_allowed_hosts_matches_subdomains(self):
         """REGRESSION: proxied environments (Killercoda, Codespaces) serve
         the app via per-session hostnames that can't be known in advance -
@@ -7549,6 +7577,19 @@ with socrates.ThreadedTCPServer(('127.0.0.1', 0), socrates.Handler) as httpd:
         rc, elapsed = self._stop_and_time(proc)
         self.assertEqual(rc, 0)
         self.assertLess(elapsed, 3)
+
+
+class TestRuleUpdateErrorSanitized(unittest.TestCase):
+    def test_update_error_has_no_server_paths(self):
+        """/api/rule-update-status serves this text to the browser."""
+        path = os.path.join(server.DATA_DIR, 'yara', 'rules.yar')
+        with unittest.mock.patch.object(server, 'setup_yara_rules',
+                                        side_effect=OSError(28, 'No space left on device', path)):
+            server._run_ruleset_update('yara')
+        state = server._rule_update_state['yara']
+        self.assertIn('No space left on device', state['error'])
+        self.assertNotIn(server.DATA_DIR, state['error'])
+        self.assertFalse(any(server.DATA_DIR in line for line in state['lines']))
 
 
 class TestCyberChefCSP(unittest.TestCase):

@@ -246,9 +246,10 @@ def _run_ruleset_update(name, sources=None, show_protocol_decode_alerts=None):
         elif name == 'sigma':
             setup_sigma_rules(DATA_DIR, on_progress=on_progress, force=True)
     except Exception as e:
-        on_progress(f'Error updating {_RULESET_LABELS[name]} rules: {e}')
+        # Served back by /api/rule-update-status - no absolute paths.
+        on_progress(_sanitize_error_text(f'Error updating {_RULESET_LABELS[name]} rules: {e}'))
         with _rule_update_lock:
-            _rule_update_state[name]['error'] = f'{e}'
+            _rule_update_state[name]['error'] = _sanitize_error_text(f'{e}')
     finally:
         with _rule_update_lock:
             _rule_update_state[name]['done'] = True
@@ -1944,6 +1945,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def handle_post_delete_all_analyses(self):
+        # The body itself is unused, but reading it through _read_json_body
+        # enforces the same application/json requirement every other JSON
+        # POST has - the CSRF guard a cross-site "simple request" can't meet.
+        # This is the most destructive endpoint, so it needs it most.
+        if self._read_json_body(config.MAX_REQUEST_BODY_SIZE) is None:
+            return
         deleted = 0
         errors = []
         if os.path.exists(DATA_DIR):
@@ -1960,7 +1967,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     shutil.rmtree(dir_path)
                     deleted += 1
                 except Exception as e:
-                    errors.append(f'{md5_dir}: {e}')
+                    # The exception text embeds the absolute DATA_DIR path.
+                    errors.append(_sanitize_error_text(f'{md5_dir}: {e}'))
         if errors and deleted == 0:
             self._send_error(500, f'Could not delete analyses: {errors[0]}')
             return

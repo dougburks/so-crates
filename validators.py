@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import ipaddress
+import re
 import socket
 import threading
 import time
@@ -21,6 +22,9 @@ BLOCKED_NETWORKS = [
     ipaddress.ip_network('fd00::/8'),
     ipaddress.ip_network('::/96'),  # IPv4-compatible (::127.0.0.1)
     ipaddress.ip_network('0.0.0.0/8'),  # "this network"; connect() to 0.0.0.0 reaches localhost
+    # Carrier-grade NAT. Not is_private on any Python version, so it needs
+    # listing here: it's where Tailscale tailnets and ISP-internal hosts live.
+    ipaddress.ip_network('100.64.0.0/10'),
 ]
 
 
@@ -28,10 +32,15 @@ def _ip_is_blocked(ip):
     """True when a resolved address must not be fetched from.
 
     Property-based checks catch whole special-address classes the explicit
-    network list could miss (0.0.0.0 -> localhost on Linux, fe80::/10, CGNAT
-    on newer Pythons, multicast, reserved); the BLOCKED_NETWORKS loop is kept
-    as an explicit, version-independent floor.
+    network list could miss (0.0.0.0 -> localhost on Linux, fe80::/10,
+    multicast, reserved); the BLOCKED_NETWORKS loop is kept as an explicit,
+    version-independent floor, and is the only thing that catches CGNAT.
+    An IPv4-mapped IPv6 address (::ffff:a.b.c.d) is judged as the IPv4
+    address it maps to, so it can't route around that list.
     """
+    mapped = getattr(ip, 'ipv4_mapped', None)
+    if mapped is not None:
+        return _ip_is_blocked(mapped)
     if (ip.is_unspecified or ip.is_loopback or ip.is_link_local
             or ip.is_reserved or ip.is_multicast or ip.is_private):
         return True
@@ -39,19 +48,28 @@ def _ip_is_blocked(ip):
 
 
 def validate_ip(ip_str):
+    """A plain IPv4/IPv6 address. Rejects an IPv6 scope suffix
+    (fe80::1%eth0): ipaddress accepts any text after the '%', and these
+    values are interpolated into tcpdump/tshark filter expressions."""
     try:
-        ipaddress.ip_address(ip_str)
-        return True
+        ip = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
+    return not getattr(ip, 'scope_id', None)
+
+
+_PORT_RE = re.compile(r'[0-9]{1,5}')
 
 
 def validate_port(port_str):
-    try:
-        port = int(port_str)
-        return 0 <= port <= 65535
-    except (ValueError, TypeError):
+    """0-65535 as plain decimal digits only - int() alone also accepts
+    '8_0', ' 80\\n' and '+80', and the value is interpolated as-is into
+    tcpdump/tshark filter expressions."""
+    # fullmatch, not match with '^...$': '$' also matches before a
+    # trailing newline, which let '80\n' through.
+    if not _PORT_RE.fullmatch(str(port_str)):
         return False
+    return int(port_str) <= 65535
 
 
 RESERVED_FILENAMES = {
