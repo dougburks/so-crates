@@ -1,5 +1,77 @@
 # Release Notes
 
+## 4.3.0
+
+### CyberChef, built in
+
+SO-CRATES now ships its own copy of [CyberChef](https://github.com/gchq/CyberChef),
+so the pivot menu's CyberChef lookup works with no internet access - and
+it can now be handed whole payloads, not just a single value:
+
+- **Send to CyberChef** from a stream's Payload panel opens the stream's
+  exact bytes - **Both** directions, or just what the **Source** or
+  **Dest** side sent - with nothing replaced or trimmed, so XOR keys,
+  compressed data and shellcode arrive intact
+- Files Suricata extracted from the traffic have their own **Send to
+  CyberChef** button in File Info
+- Select any text in an ASCII transcript - a base64 blob, a header - and
+  a **Send selection to CyberChef** button appears next to it
+- Small payloads open with CyberChef's **Magic** operation already
+  applied, to suggest decodings
+- CyberChef switches between its light and dark themes to match yours,
+  unless you've picked a CyberChef theme yourself
+
+Payloads never pass through the address bar, so they stay out of your
+browser history. CyberChef adds about 48 MB to the container image.
+Its text-recognition (OCR) operation still needs internet access.
+
+### Fixes
+
+- **Download PCAP and Hexdump came back empty for VLAN-tagged traffic**
+  (common on SPAN/trunk ports) - they now work on tagged and untagged
+  captures alike
+- **The ASCII transcript was always empty for IPv6 flows** - it works now
+- The ASCII transcript no longer breaks a long line wherever a TCP
+  segment happened to end, and leaves out retransmitted segments
+- Dragging to select text in an ASCII transcript no longer makes the
+  rest of the table flash selected and unselected - the selection stays
+  inside the transcript, like a text box
+- Suricata's own protocol-decode alerts are labelled "Suricata
+  (built-in)" instead of "Emerging Threats Open", and The Hunter's Ledger
+  alerts are labelled as such instead of "Other / Unrecognized"
+- A pcap with no file extension inside an uploaded ZIP (such as a
+  Security Onion `so-pcap.<timestamp>` export) now gets full network
+  analysis, not just a file scan
+- Reanalyzing a log file recognized by its content no longer scans it as
+  a binary, and reanalyzing a pcap no longer piles up duplicate Suricata
+  log output
+- Sigma alert storage no longer balloons for rules with many matches,
+  and searching Sigma alerts no longer matches alerts about other events
+  of the same rule
+- A note saved on a row now shows on that row, not a copy of it in
+  another tab; hexdump packets are colored by the right direction when
+  one IP is a prefix of the other (10.0.0.1 vs 10.0.0.10)
+- Jumping to a page number past the end of a table goes to the last
+  page instead of showing an empty one
+- If you picked the C64 theme in 3.0/3.1, you now get its successor,
+  Breadbin Blue, instead of an unstyled page
+- Stopping the container (`docker stop`/`podman stop`) is now immediate
+  instead of waiting 10 seconds to force-kill it
+
+### Security hardening
+
+- Load from URL can no longer reach carrier-grade NAT addresses
+  (100.64.0.0/10), where Tailscale networks live
+- Delete All now requires the same JSON request format as every other
+  action, closing a cross-site request forgery gap on the most
+  destructive button
+- IP and port values are strictly validated before reaching packet tools,
+  error messages no longer include server file paths, and HEAD requests
+  are refused
+- Extracted files are served only by their exact hash from that
+  analysis's own storage, as downloads a browser never renders - see the
+  [Security](security.md) page
+
 ## 4.2.0
 
 ### DNS Heuristics fixes
