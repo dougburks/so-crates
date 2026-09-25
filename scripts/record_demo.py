@@ -304,7 +304,7 @@ def _prewarm_sample_analysis(base_url):
     Suricata parsing the sample and loading the full ruleset, not the
     small pcap's own download time). The download itself still happens
     twice - this request downloads the sample as a real prerequisite, and
-    the recorded click downloads it again, since _fetch_url_safely has no
+    the recorded click downloads it again, since url_fetch.fetch_url_safely has no
     cache - but a several-hundred-KB pcap download is fast; it's the
     Suricata/YARA/Sigma run this actually saves.
 

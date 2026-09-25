@@ -27,9 +27,12 @@ A stdlib-only Python HTTP server (`http.server.SimpleHTTPRequestHandler`). Handl
 
 | File | Responsibility |
 |---|---|
-| `socrates.py` | HTTP request dispatch, stream carving, ZIP extraction, upload/load-url orchestration |
+| `socrates.py` | HTTP request dispatch, stream carving, upload/load-url orchestration |
 | `db.py` | SQLite schema, bulk loading, FTS5 full-text search, query functions |
 | `models.py` | Suricata event field extraction helpers (IP, port, protocol) |
+| `url_fetch.py` | Downloads a "Load from URL" file through only the IPs `validators.py` validated, re-checking every redirect hop |
+| `storage.py` | Files on disk: the upload scratch directory, ZIP extraction, hashing, and an analysis directory's `.meta`, pcap and artifact lists |
+| `analysis_cache.py` | In-memory caches of unfiltered Sankey/aggregation results per analysis, and their eviction |
 | `validators.py` | Input validation: IP, port, filename, path safety, URL safety (SSRF/DNS-rebinding), zip-slip and zip-bomb limits, PCAP magic bytes |
 | `suricata_analyzer.py` | Suricata orchestration: executable checks, rules download/config, background spawn |
 | `suricata_sid_ranges.py` | Maps Suricata SIDs to their source ruleset, shared by `db.py` and the API |

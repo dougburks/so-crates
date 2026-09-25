@@ -19,7 +19,7 @@
     windows.json           # Pre-compiled Sigma rules for Windows logs
     linux.json             # Pre-compiled Sigma rules for Linux logs
   yara-rules/              # Downloaded/baked-in YARA rules
-  upload-tmp/              # Streaming-upload scratch space; swept on startup (see _cleanup_upload_tmp_dir)
+  upload-tmp/              # Streaming-upload scratch space; swept on startup (see storage.cleanup_upload_tmp_dir)
   <md5>/
     <filename>             # Original uploaded file
     .meta                  # Analysis metadata (file type, extracted name, version)

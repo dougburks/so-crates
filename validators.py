@@ -208,7 +208,7 @@ def validate_zip_extraction(zip_ref, extract_path, max_size=None):
 
     max_size defaults to config.MAX_UPLOAD_SIZE, but callers should pass the
     caller's actual resolved per-request ceiling (see
-    socrates.py's _resolve_upload_size_limit) so a user who hasn't opted
+    storage.py's resolve_upload_size_limit) so a user who hasn't opted
     into a higher personal upload limit doesn't get the full server hard
     ceiling as their zip-bomb decompression budget.
 

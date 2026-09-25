@@ -7,7 +7,7 @@ across the codebase.
 
 # Size limits
 # MAX_UPLOAD_SIZE is the hard ceiling enforced server-side (see
-# socrates.py's _resolve_upload_size_limit) - any client-requested override,
+# storage.py's resolve_upload_size_limit) - any client-requested override,
 # including the user-configurable frontend setting, is always clamped to
 # this value. DEFAULT_UPLOAD_SIZE is what's used when no override is sent
 # (preserves the old fixed ceiling for any caller that doesn't opt in).

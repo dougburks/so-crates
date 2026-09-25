@@ -107,7 +107,7 @@ New databases build the composite and expression indexes above at ingest. Pre-ex
 
 `get_sankey_data_sqlite` and `get_aggregation_data_sqlite` (`db.py`) run their independent `GROUP BY` queries concurrently via `ThreadPoolExecutor` - one SQLite connection per worker (connections aren't thread-safe to share), safe under WAL mode's multiple-simultaneous-readers guarantee.
 
-Unfiltered (no search query) results from both functions are cached in-memory in `socrates.py` (`_SANKEY_CACHE`, keyed by `(md5, event_type)`; `_AGGREGATION_CACHE`, keyed by `(md5, event_type, column, page, page_size)`; plus `_AGGREGATION_TOTALS_CACHE` for the per-column distinct-value counts - all guarded by a lock), since the underlying data never changes once an analysis finishes ingesting. All three caches are evicted per-analysis (`_evict_analysis_cache`) on `/api/delete-analysis`/`/api/reanalyze` and cleared entirely on `/api/delete-all-analyses`. Search-filtered requests are never cached.
+Unfiltered (no search query) results from both functions are cached in-memory in `analysis_cache.py` (`SANKEY_CACHE`, keyed by `(md5, event_type)`; `AGGREGATION_CACHE`, keyed by `(md5, event_type, column, page, page_size)`; plus `AGGREGATION_TOTALS_CACHE` for the per-column distinct-value counts - all guarded by a lock), since the underlying data never changes once an analysis finishes ingesting. All three caches are evicted per-analysis (`evict_analysis_cache`) on `/api/delete-analysis`/`/api/reanalyze` and cleared entirely on `/api/delete-all-analyses`. Search-filtered requests are never cached.
 
 ### Known Limitations / Future Work
 

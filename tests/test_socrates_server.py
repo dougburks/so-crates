@@ -22,6 +22,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import config
 import db
 import socrates as server
+import analysis_cache
+import storage
+import url_fetch
+import validators
 import suricata_analyzer
 from validators import is_pcap_file
 
@@ -35,6 +39,7 @@ from validators import is_pcap_file
 _REAL_URLOPEN = urllib.request.urlopen
 
 SERVER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'socrates.py')
+STORAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'storage.py')
 SURICATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'suricata_analyzer.py')
 
 
@@ -176,7 +181,7 @@ class TestZipSlipPrevention(unittest.TestCase):
             with zipfile.ZipFile(zip_path, 'w') as zf:
                 zf.writestr('normal.txt', 'content')
             with zipfile.ZipFile(zip_path, 'r') as zf:
-                server.validate_zip_extraction(zf, tmpdir)
+                validators.validate_zip_extraction(zf, tmpdir)
 
     def test_slip_attempt(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -185,7 +190,7 @@ class TestZipSlipPrevention(unittest.TestCase):
                 zf.writestr('../../../escape.txt', 'malicious')
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 with self.assertRaises(ValueError) as ctx:
-                    server.validate_zip_extraction(zf, tmpdir)
+                    validators.validate_zip_extraction(zf, tmpdir)
                 self.assertIn('Zip slip', str(ctx.exception))
 
     def test_absolute_path_in_zip(self):
@@ -195,7 +200,7 @@ class TestZipSlipPrevention(unittest.TestCase):
                 zf.writestr('/etc/passwd', 'malicious')
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 with self.assertRaises(ValueError):
-                    server.validate_zip_extraction(zf, tmpdir)
+                    validators.validate_zip_extraction(zf, tmpdir)
 
 
 class TestURLValidation(unittest.TestCase):
@@ -206,54 +211,54 @@ class TestURLValidation(unittest.TestCase):
     @unittest.mock.patch('socket.getaddrinfo')
     def test_valid_public_url(self, mock_dns):
         mock_dns.return_value = self._addrinfo('93.184.216.34')
-        server.validate_url_safety('https://example.com/file.pcap')
+        validators.validate_url_safety('https://example.com/file.pcap')
 
     def test_blocks_localhost(self):
         with self.assertRaises(ValueError) as ctx:
-            server.validate_url_safety('http://localhost:8080/secret')
+            validators.validate_url_safety('http://localhost:8080/secret')
         self.assertIn('localhost', str(ctx.exception).lower())
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_127_0_0_1(self, mock_dns):
         mock_dns.return_value = self._addrinfo('127.0.0.1')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://127.0.0.1:8080/secret')
+            validators.validate_url_safety('http://127.0.0.1:8080/secret')
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_private_10x(self, mock_dns):
         mock_dns.return_value = self._addrinfo('10.0.0.1')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://internal.corp/file')
+            validators.validate_url_safety('http://internal.corp/file')
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_private_192x(self, mock_dns):
         mock_dns.return_value = self._addrinfo('192.168.1.1')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://router.local/file')
+            validators.validate_url_safety('http://router.local/file')
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_link_local(self, mock_dns):
         mock_dns.return_value = self._addrinfo('169.254.169.254')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://169.254.169.254/latest/meta-data/')
+            validators.validate_url_safety('http://169.254.169.254/latest/meta-data/')
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_metadata_service(self, mock_dns):
         mock_dns.return_value = self._addrinfo('169.254.169.254')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://169.254.169.254/latest/meta-data/')
+            validators.validate_url_safety('http://169.254.169.254/latest/meta-data/')
 
     def test_blocks_file_scheme(self):
         with self.assertRaises(ValueError):
-            server.validate_url_safety('file:///etc/passwd')
+            validators.validate_url_safety('file:///etc/passwd')
 
     def test_blocks_ftp_scheme(self):
         with self.assertRaises(ValueError):
-            server.validate_url_safety('ftp://evil.com/malware')
+            validators.validate_url_safety('ftp://evil.com/malware')
 
     def test_blocks_empty_hostname(self):
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http:///path')
+            validators.validate_url_safety('http:///path')
 
 
 class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
@@ -266,7 +271,7 @@ class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
     def test_http_connection_dials_pinned_ip_not_hostname(self):
         with unittest.mock.patch('socket.create_connection') as mock_conn:
             mock_conn.return_value = unittest.mock.MagicMock()
-            conn = server._PinnedHTTPConnection('example.com', ['203.0.113.5'], 80, 5)
+            conn = url_fetch.PinnedHTTPConnection('example.com', ['203.0.113.5'], 80, 5)
             conn.connect()
             mock_conn.assert_called_once_with(('203.0.113.5', 80), 5)
 
@@ -274,7 +279,7 @@ class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
         with unittest.mock.patch('socket.create_connection') as mock_conn:
             fake_sock = unittest.mock.MagicMock()
             mock_conn.return_value = fake_sock
-            conn = server._PinnedHTTPSConnection('example.com', ['203.0.113.5'], 443, 5)
+            conn = url_fetch.PinnedHTTPSConnection('example.com', ['203.0.113.5'], 443, 5)
             conn._context = unittest.mock.MagicMock()
             conn._context.wrap_socket.return_value = unittest.mock.MagicMock()
             conn.connect()
@@ -291,7 +296,7 @@ class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
         route in the deployment environment)."""
         with unittest.mock.patch('socket.create_connection') as mock_conn:
             mock_conn.side_effect = [OSError('Network is unreachable'), unittest.mock.MagicMock()]
-            conn = server._PinnedHTTPConnection('example.com', ['2a00:1828::1', '203.0.113.5'], 80, 5)
+            conn = url_fetch.PinnedHTTPConnection('example.com', ['2a00:1828::1', '203.0.113.5'], 80, 5)
             conn.connect()
             self.assertEqual(mock_conn.call_count, 2)
             mock_conn.assert_any_call(('2a00:1828::1', 80), 5)
@@ -300,13 +305,13 @@ class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
     def test_raises_if_all_pinned_ips_unreachable(self):
         with unittest.mock.patch('socket.create_connection') as mock_conn:
             mock_conn.side_effect = OSError('Network is unreachable')
-            conn = server._PinnedHTTPConnection('example.com', ['2a00:1828::1', '203.0.113.5'], 80, 5)
+            conn = url_fetch.PinnedHTTPConnection('example.com', ['2a00:1828::1', '203.0.113.5'], 80, 5)
             with self.assertRaises(OSError):
                 conn.connect()
 
 
 class TestFetchUrlSafely(unittest.TestCase):
-    """Tests for _fetch_url_safely's SSRF protections: every hop (including
+    """Tests for url_fetch.fetch_url_safely's SSRF protections: every hop (including
     redirect targets) must be re-validated, not just the initial URL."""
 
     @classmethod
@@ -350,8 +355,8 @@ class TestFetchUrlSafely(unittest.TestCase):
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
         cls.thread.start()
 
-        # _fetch_url_safely now streams to disk under server._upload_tmp_dir()
-        # (derived from server.DATA_DIR) instead of returning bytes -- sandbox
+        # fetch_url_safely streams to disk under storage.upload_tmp_dir(),
+        # passed server.DATA_DIR, instead of returning bytes -- sandbox
         # DATA_DIR so these tests don't write into the real data directory.
         cls.tmpdir = tempfile.mkdtemp()
         cls.original_base = server.DATA_DIR
@@ -377,10 +382,10 @@ class TestFetchUrlSafely(unittest.TestCase):
         def spy_validate(url):
             validated_urls.append(url)
 
-        with unittest.mock.patch('socrates.validate_url_safety', side_effect=spy_validate), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
-            path = server._fetch_url_safely(
-                f'http://localhost:{self.port}/redirect', timeout=5, max_size=10_000_000
+        with unittest.mock.patch('url_fetch.validate_url_safety', side_effect=spy_validate), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
+            path = url_fetch.fetch_url_safely(
+                f'http://localhost:{self.port}/redirect', timeout=5, max_size=10_000_000, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
             )
         with open(path, 'rb') as f:
             self.assertEqual(f.read(), b'final-payload')
@@ -396,19 +401,19 @@ class TestFetchUrlSafely(unittest.TestCase):
             if '/final' in url:
                 raise ValueError('Access to private/internal addresses is not allowed')
 
-        with unittest.mock.patch('socrates.validate_url_safety', side_effect=spy_validate), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
+        with unittest.mock.patch('url_fetch.validate_url_safety', side_effect=spy_validate), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
             with self.assertRaises(ValueError):
-                server._fetch_url_safely(
-                    f'http://localhost:{self.port}/redirect', timeout=5, max_size=10_000_000
+                url_fetch.fetch_url_safely(
+                    f'http://localhost:{self.port}/redirect', timeout=5, max_size=10_000_000, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
                 )
 
     def test_enforces_size_limit(self):
-        with unittest.mock.patch('socrates.validate_url_safety', return_value=None), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
-            with self.assertRaises(server._FileTooLargeError):
-                server._fetch_url_safely(
-                    f'http://localhost:{self.port}/big', timeout=5, max_size=100
+        with unittest.mock.patch('url_fetch.validate_url_safety', return_value=None), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
+            with self.assertRaises(url_fetch.FileTooLargeError):
+                url_fetch.fetch_url_safely(
+                    f'http://localhost:{self.port}/big', timeout=5, max_size=100, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
                 )
         self.assertEqual(self._upload_tmp_contents(), [], 'partial download must be cleaned up on size-limit failure')
 
@@ -419,18 +424,18 @@ class TestFetchUrlSafely(unittest.TestCase):
         server could pair a redirect with an arbitrarily large (or slow-
         trickling) body and exhaust memory before Location was ever read.
         The discard must be bounded the same way."""
-        with unittest.mock.patch('socrates.validate_url_safety', return_value=None), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
-            with self.assertRaises(server._FileTooLargeError):
-                server._fetch_url_safely(
-                    f'http://localhost:{self.port}/redirect-big-body', timeout=5, max_size=100
+        with unittest.mock.patch('url_fetch.validate_url_safety', return_value=None), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
+            with self.assertRaises(url_fetch.FileTooLargeError):
+                url_fetch.fetch_url_safely(
+                    f'http://localhost:{self.port}/redirect-big-body', timeout=5, max_size=100, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
                 )
 
     def test_plain_fetch_returns_body(self):
-        with unittest.mock.patch('socrates.validate_url_safety', return_value=None), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
-            path = server._fetch_url_safely(
-                f'http://localhost:{self.port}/final', timeout=5, max_size=10_000_000
+        with unittest.mock.patch('url_fetch.validate_url_safety', return_value=None), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
+            path = url_fetch.fetch_url_safely(
+                f'http://localhost:{self.port}/final', timeout=5, max_size=10_000_000, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
             )
         with open(path, 'rb') as f:
             self.assertEqual(f.read(), b'final-payload')
@@ -438,7 +443,7 @@ class TestFetchUrlSafely(unittest.TestCase):
 
 
 class TestCleanupUploadTmpDir(unittest.TestCase):
-    """_cleanup_upload_tmp_dir() sweeps orphaned files/dirs left behind in
+    """storage.cleanup_upload_tmp_dir() sweeps orphaned files/dirs left behind in
     upload-tmp/ by a process that died mid-upload (crash, OOM-kill, kill -9)
     before its own request-scoped cleanup could run. It's meant to run once
     at startup, before the server accepts requests - at that point anything
@@ -454,17 +459,17 @@ class TestCleanupUploadTmpDir(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_removes_leftover_files_and_directories(self):
-        upload_tmp = server._upload_tmp_dir()
-        # A leftover file (e.g. from _parse_multipart_stream/_fetch_url_safely)
+        upload_tmp = storage.upload_tmp_dir(server.DATA_DIR)
+        # A leftover file (e.g. from _parse_multipart_stream/fetch_url_safely)
         with open(os.path.join(upload_tmp, 'orphaned-upload.download'), 'wb') as f:
             f.write(b'partial data')
-        # A leftover directory (e.g. from _extract_zip_contents' tmp_dir)
+        # A leftover directory (e.g. from extract_zip_contents' tmp_dir)
         orphaned_dir = os.path.join(upload_tmp, 'orphaned-extract-dir')
         os.makedirs(orphaned_dir)
         with open(os.path.join(orphaned_dir, 'extracted.pcap'), 'wb') as f:
             f.write(b'pcap data')
 
-        server._cleanup_upload_tmp_dir()
+        storage.cleanup_upload_tmp_dir(server.DATA_DIR)
 
         self.assertEqual(os.listdir(upload_tmp), [],
                           'all leftover files and directories must be removed')
@@ -472,18 +477,19 @@ class TestCleanupUploadTmpDir(unittest.TestCase):
     def test_noop_on_empty_dir(self):
         """Must not error when upload-tmp/ is already empty (the common case
         on a clean shutdown/restart)."""
-        server._cleanup_upload_tmp_dir()
-        self.assertEqual(os.listdir(server._upload_tmp_dir()), [])
+        storage.cleanup_upload_tmp_dir(server.DATA_DIR)
+        self.assertEqual(os.listdir(storage.upload_tmp_dir(server.DATA_DIR)), [])
 
     def test_main_calls_cleanup_before_accepting_requests(self):
         """REGRESSION GUARD: the cleanup must actually be wired into main(),
         not just exist as a callable dead function."""
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
-        cleanup_call_idx = content.index('_cleanup_upload_tmp_dir()')
-        serve_forever_idx = content.index('serve_forever()')
+        main_section = content.split('\ndef main():')[1]
+        cleanup_call_idx = main_section.index('cleanup_upload_tmp_dir(DATA_DIR)')
+        serve_forever_idx = main_section.index('serve_forever()')
         self.assertLess(cleanup_call_idx, serve_forever_idx,
-                         '_cleanup_upload_tmp_dir() must run before the server starts accepting requests')
+                         'cleanup_upload_tmp_dir() must run before the server starts accepting requests')
 
 
 class TestPcapContentValidation(unittest.TestCase):
@@ -1155,7 +1161,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(body3, body1, 'unfiltered sankey-data must be served from cache, not recomputed')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_sankey_data_with_q_is_never_cached(self):
@@ -1183,7 +1189,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertNotEqual(body1, body2, 'search-filtered sankey-data must never be cached')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_aggregation_data_unfiltered_is_cached(self):
@@ -1209,7 +1215,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(body1, body2, 'unfiltered aggregation-data must be served from cache, not recomputed')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_delete_analysis_evicts_sankey_and_aggregation_cache(self):
@@ -1240,7 +1246,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertNotEqual(body1, body2, 'delete-analysis must evict the cache, not leave stale data for a re-created md5')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_delete_all_analyses_clears_caches(self):
@@ -1256,23 +1262,23 @@ class TestAPIEndpoints(unittest.TestCase):
 
             status, body = self._get(f'/api/sankey-data?md5={md5}')
             self.assertEqual(status, 200)
-            self.assertTrue(any(k[0] == md5 for k in server._SANKEY_CACHE),
+            self.assertTrue(any(k[0] == md5 for k in analysis_cache.SANKEY_CACHE),
                              'sankey cache must be populated before delete-all')
             status, body = self._get(f'/api/aggregation-totals?md5={md5}&type=alert')
             self.assertEqual(status, 200)
-            self.assertTrue(any(k[0] == md5 for k in server._AGGREGATION_TOTALS_CACHE),
+            self.assertTrue(any(k[0] == md5 for k in analysis_cache.AGGREGATION_TOTALS_CACHE),
                              'totals cache must be populated before delete-all')
 
             status, body = self._post('/api/delete-all-analyses', {})
             self.assertEqual(status, 200)
-            self.assertFalse(any(k[0] == md5 for k in server._SANKEY_CACHE),
+            self.assertFalse(any(k[0] == md5 for k in analysis_cache.SANKEY_CACHE),
                               'delete-all-analyses must clear the sankey cache')
-            self.assertEqual(len(server._AGGREGATION_CACHE), 0,
+            self.assertEqual(len(analysis_cache.AGGREGATION_CACHE), 0,
                               'delete-all-analyses must clear the aggregation cache')
-            self.assertEqual(len(server._AGGREGATION_TOTALS_CACHE), 0,
+            self.assertEqual(len(analysis_cache.AGGREGATION_TOTALS_CACHE), 0,
                               'delete-all-analyses must clear the aggregation totals cache')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_events_invalid_limit(self):
@@ -1873,7 +1879,7 @@ bright_magenta = "#D9B9D9"
             entry = next(a for a in json.loads(body) if a['md5'] == md5)
             self.assertEqual(entry['date_range'], {'min': '2026-01-01T00:00:00', 'max': '2026-01-01T00:05:00'})
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_analyses_date_range_null_before_events_db_exists(self):
@@ -3757,14 +3763,14 @@ bright_magenta = "#D9B9D9"
             zf_obj.writestr('bad.bin', b'unreadable')
         zip_data = zip_buffer.getvalue()
 
-        real_hash_with_prefix = server._hash_file_with_prefix
+        real_hash_with_prefix = storage.hash_file_with_prefix
 
         def flaky_hash_with_prefix(path, *args, **kwargs):
             if os.path.basename(path) == 'bad.bin':
                 raise OSError('simulated failure')
             return real_hash_with_prefix(path, *args, **kwargs)
 
-        with unittest.mock.patch('socrates._hash_file_with_prefix', side_effect=flaky_hash_with_prefix):
+        with unittest.mock.patch('socrates.hash_file_with_prefix', side_effect=flaky_hash_with_prefix):
             status, body = self._post_multipart('/api/upload', 'flaky.zip', zip_data)
         self.assertEqual(status, 200)
         data = json.loads(body)
@@ -3776,19 +3782,21 @@ bright_magenta = "#D9B9D9"
         """Upload handler code must attempt common passwords before rejecting protected ZIPs."""
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
+        with open(STORAGE_FILE, 'r') as f:
+            storage_content = f.read()
         # Verify shared extraction helper exists
-        self.assertIn("def _attempt_zip_extract(zip_ref, extract_dir, passwords, max_size=None):", content,
-                      'Must define _attempt_zip_extract helper')
-        helper_section = content.split("def _attempt_zip_extract(zip_ref, extract_dir, passwords, max_size=None):")[1].split("def extract_pcap_from_zip(")[0]
+        self.assertIn("def attempt_zip_extract(zip_ref, extract_dir, passwords, max_size=None):", storage_content,
+                      'Must define attempt_zip_extract helper')
+        helper_section = storage_content.split("def attempt_zip_extract(zip_ref, extract_dir, passwords, max_size=None):")[1].split("\ndef ")[0]
         # Should try no password first
         self.assertIn("zip_ref.extractall(extract_dir)", helper_section,
                       'Must attempt extraction without password')
         # Should try provided passwords
         self.assertIn("for pwd in passwords:", helper_section,
                       'Must loop over candidate passwords')
-        # Verify _extract_zip_contents uses the shared helper
-        self.assertIn("_attempt_zip_extract(zip_ref, extract_dir, passwords, max_size)", content,
-                      '_extract_zip_contents must delegate to _attempt_zip_extract')
+        # Verify extract_zip_contents uses the shared helper
+        self.assertIn("attempt_zip_extract(zip_ref, extract_dir, passwords, max_size)", storage_content,
+                      'extract_zip_contents must delegate to attempt_zip_extract')
         # Upload handler should derive passwords from filename
         upload_section = content.split("def handle_post_upload(self):")[1].split("def handle_post_load_url(self):")[0]
         self.assertIn("passwords = [b'infected']", upload_section,
@@ -3797,10 +3805,10 @@ bright_magenta = "#D9B9D9"
                       'Must derive date-based password from filename')
         self.assertIn("'infected_{year}{month}{day}'.encode()", upload_section,
                       'Must construct MTA-style date password')
-        # _process_uploaded_file must call _extract_zip_contents
+        # _process_uploaded_file must call extract_zip_contents
         process_section = content.split("def _process_uploaded_file(self,")[1].split("def handle_post_upload(self):")[0]
-        self.assertIn("_extract_zip_contents(src_path, tmp_dir, passwords or [], effective_max)", process_section,
-                      'Must call _extract_zip_contents helper')
+        self.assertIn("extract_zip_contents(src_path, tmp_dir, passwords or [], effective_max)", process_section,
+                      'Must call extract_zip_contents helper')
 
     def test_load_url_tries_password_protected_zips(self):
         """load-url handler must always try the plain 'infected' password (cheap, harmless
@@ -5312,7 +5320,7 @@ class TestFindPcapFile(unittest.TestCase):
     """REGRESSION: some real pcaps have no recognized extension at all (e.g.
     Security Onion's so-pcap.<timestamp> downloads) -- they were still
     correctly detected and ingested as pcaps at upload time via magic-byte
-    sniffing (is_pcap_file), so _find_pcap_file must use the same detection
+    sniffing (is_pcap_file), so storage.find_pcap_file must use the same detection
     method as a fallback rather than relying on the filename extension
     alone. Previously, extension-only lookups caused 'No pcap file found'
     on the ASCII Transcript/Hexdump/Download-stream views, a wrong filename
@@ -5330,14 +5338,14 @@ class TestFindPcapFile(unittest.TestCase):
     def test_finds_file_with_recognized_extension(self):
         with open(os.path.join(self.tmpdir, 'capture.pcap'), 'wb') as f:
             f.write(self.PCAP_MAGIC)
-        self.assertEqual(server._find_pcap_file(self.tmpdir), 'capture.pcap')
+        self.assertEqual(storage.find_pcap_file(self.tmpdir), 'capture.pcap')
 
     def test_falls_back_to_magic_bytes_when_extension_missing(self):
         """The exact real-world case: a pcap named like a Security Onion
         download, with no recognized extension."""
         with open(os.path.join(self.tmpdir, 'so-pcap.1784903949'), 'wb') as f:
             f.write(self.PCAP_MAGIC)
-        self.assertEqual(server._find_pcap_file(self.tmpdir), 'so-pcap.1784903949')
+        self.assertEqual(storage.find_pcap_file(self.tmpdir), 'so-pcap.1784903949')
 
     def test_extension_match_preferred_over_magic_byte_scan(self):
         """When both exist, the fast extension-based match wins without
@@ -5346,7 +5354,7 @@ class TestFindPcapFile(unittest.TestCase):
             f.write(self.PCAP_MAGIC)
         with open(os.path.join(self.tmpdir, 'other-file'), 'wb') as f:
             f.write(self.PCAP_MAGIC)
-        self.assertEqual(server._find_pcap_file(self.tmpdir), 'capture.pcap')
+        self.assertEqual(storage.find_pcap_file(self.tmpdir), 'capture.pcap')
 
     def test_ignores_artifacts_and_hidden_files_during_fallback_scan(self):
         with open(os.path.join(self.tmpdir, 'eve.json'), 'w') as f:
@@ -5355,15 +5363,15 @@ class TestFindPcapFile(unittest.TestCase):
             f.write(self.PCAP_MAGIC)
         with open(os.path.join(self.tmpdir, 'name.txt'), 'w') as f:
             f.write('so-pcap.1784903949')
-        self.assertIsNone(server._find_pcap_file(self.tmpdir))
+        self.assertIsNone(storage.find_pcap_file(self.tmpdir))
 
     def test_returns_none_when_no_pcap_present(self):
         with open(os.path.join(self.tmpdir, 'not-a-pcap.txt'), 'w') as f:
             f.write('just some text')
-        self.assertIsNone(server._find_pcap_file(self.tmpdir))
+        self.assertIsNone(storage.find_pcap_file(self.tmpdir))
 
     def test_returns_none_for_missing_directory(self):
-        self.assertIsNone(server._find_pcap_file(os.path.join(self.tmpdir, 'does-not-exist')))
+        self.assertIsNone(storage.find_pcap_file(os.path.join(self.tmpdir, 'does-not-exist')))
 
     def test_skips_subdirectories_during_fallback_scan(self):
         """The filestore/ directory (extracted YARA-scanned files) must not
@@ -5371,7 +5379,7 @@ class TestFindPcapFile(unittest.TestCase):
         os.makedirs(os.path.join(self.tmpdir, 'filestore'))
         with open(os.path.join(self.tmpdir, 'so-pcap.123'), 'wb') as f:
             f.write(self.PCAP_MAGIC)
-        self.assertEqual(server._find_pcap_file(self.tmpdir), 'so-pcap.123')
+        self.assertEqual(storage.find_pcap_file(self.tmpdir), 'so-pcap.123')
 
 
 class TestReanalyzeEndpoint(unittest.TestCase):
@@ -5386,8 +5394,10 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         """Verify reanalyze removes eve.json, events.db, .phase, .error, yara_matches.json, sigma_matches.json, .meta, and file_metadata.json."""
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
-        # Artifact lists are centralized in module-level constants
-        self.assertIn("PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json', 'fast.log', 'stats.log', 'suricata.log')", content,
+        with open(STORAGE_FILE, 'r') as f:
+            storage_content = f.read()
+        # Artifact lists are centralized in storage.py's module-level constants
+        self.assertIn("PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json', 'fast.log', 'stats.log', 'suricata.log')", storage_content,
                       'PCAP artifact list must be centralized in PCAP_ANALYSIS_ARTIFACTS')
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
         # The actual per-artifact loop lives in the shared _remove_artifacts
@@ -5409,9 +5419,9 @@ class TestReanalyzeEndpoint(unittest.TestCase):
             content = f.read()
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
         # Must evict before the artifact-deletion call, not after.
-        evict_pos = reanalyze_section.find('_evict_analysis_cache(md5)')
+        evict_pos = reanalyze_section.find('evict_analysis_cache(md5)')
         removal_pos = reanalyze_section.find('self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)')
-        self.assertNotEqual(evict_pos, -1, 'reanalyze must call _evict_analysis_cache(md5)')
+        self.assertNotEqual(evict_pos, -1, 'reanalyze must call evict_analysis_cache(md5)')
         self.assertLess(evict_pos, removal_pos,
                          'cache eviction must happen before events.db is deleted/rebuilt')
 
@@ -5423,8 +5433,10 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         # is ever called with from handle_post_reanalyze, and reanalyze must
         # never rmtree the whole analysis directory (only the filestore
         # subdirectory is allowed to be rmtree'd).
-        pcap_artifacts_line = content.split('PCAP_ANALYSIS_ARTIFACTS = ')[1].split('\n')[0]
-        file_artifacts_line = content.split('FILE_ANALYSIS_ARTIFACTS = ')[1].split('\n')[0]
+        with open(STORAGE_FILE, 'r') as f:
+            storage_content = f.read()
+        pcap_artifacts_line = storage_content.split('PCAP_ANALYSIS_ARTIFACTS = ')[1].split('\n')[0]
+        file_artifacts_line = storage_content.split('FILE_ANALYSIS_ARTIFACTS = ')[1].split('\n')[0]
         self.assertNotIn('name.txt', pcap_artifacts_line,
                          'PCAP_ANALYSIS_ARTIFACTS must not include name.txt')
         self.assertNotIn('name.txt', file_artifacts_line,
@@ -5455,9 +5467,11 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
         self.assertIn("self._non_artifact_files(dir_path, pcap_file=pcap_file)", reanalyze_section,
                       'reanalyze must use the shared _non_artifact_files() helper for file selection')
-        self.assertIn("'zircolite.log'", content,
+        with open(STORAGE_FILE, 'r') as f:
+            storage_content = f.read()
+        self.assertIn("'zircolite.log'", storage_content,
                       'zircolite.log must be excluded (via FILE_ANALYSIS_ARTIFACTS, checked by _non_artifact_files)')
-        self.assertIn("'.zircolite_events.db'", content,
+        self.assertIn("'.zircolite_events.db'", storage_content,
                       '.zircolite_events.db must be excluded (via FILE_ANALYSIS_ARTIFACTS, checked by _non_artifact_files)')
 
     def test_reanalyze_returns_409_if_already_processing(self):
@@ -6398,33 +6412,33 @@ class TestZipBombPrevention(unittest.TestCase):
 
 
 class TestResolveUploadSizeLimit(unittest.TestCase):
-    """Tests for _resolve_upload_size_limit, which mirrors _parse_pagination's
+    """Tests for storage.resolve_upload_size_limit, which mirrors _parse_pagination's
     clamping semantics for the user-configurable upload-size setting."""
 
     def test_valid_value_under_ceiling(self):
-        self.assertEqual(server._resolve_upload_size_limit(2000 * 1024 * 1024), 2000 * 1024 * 1024)
+        self.assertEqual(storage.resolve_upload_size_limit(2000 * 1024 * 1024), 2000 * 1024 * 1024)
 
     def test_missing_falls_back_to_default(self):
-        self.assertEqual(server._resolve_upload_size_limit(None), config.DEFAULT_UPLOAD_SIZE)
+        self.assertEqual(storage.resolve_upload_size_limit(None), config.DEFAULT_UPLOAD_SIZE)
 
     def test_malformed_falls_back_to_default(self):
-        self.assertEqual(server._resolve_upload_size_limit('not-a-number'), config.DEFAULT_UPLOAD_SIZE)
+        self.assertEqual(storage.resolve_upload_size_limit('not-a-number'), config.DEFAULT_UPLOAD_SIZE)
 
     def test_negative_falls_back_to_default(self):
-        self.assertEqual(server._resolve_upload_size_limit(-5), config.DEFAULT_UPLOAD_SIZE)
+        self.assertEqual(storage.resolve_upload_size_limit(-5), config.DEFAULT_UPLOAD_SIZE)
 
     def test_zero_falls_back_to_default(self):
-        self.assertEqual(server._resolve_upload_size_limit(0), config.DEFAULT_UPLOAD_SIZE)
+        self.assertEqual(storage.resolve_upload_size_limit(0), config.DEFAULT_UPLOAD_SIZE)
 
     def test_over_ceiling_clamped(self):
         self.assertEqual(
-            server._resolve_upload_size_limit(config.MAX_UPLOAD_SIZE + 1000),
+            storage.resolve_upload_size_limit(config.MAX_UPLOAD_SIZE + 1000),
             config.MAX_UPLOAD_SIZE,
         )
 
     def test_string_of_valid_number_accepted(self):
         """Header values arrive as strings -- must parse cleanly."""
-        self.assertEqual(server._resolve_upload_size_limit('2000000000'), 2000000000)
+        self.assertEqual(storage.resolve_upload_size_limit('2000000000'), 2000000000)
 
 
 class TestCheckDiskSpace(unittest.TestCase):
@@ -7257,7 +7271,7 @@ class TestNonArtifactFiles(unittest.TestCase):
 
     def test_pcap_file_param_excluded_by_exact_name(self):
         """An extension-less pcap (detected via magic bytes by
-        _find_pcap_file(), not this function's own PCAP_EXTENSIONS check)
+        find_pcap_file(), not this function's own PCAP_EXTENSIONS check)
         must still be excludable by passing its name explicitly."""
         open(os.path.join(self.tmpdir, 'so-pcap.1234567890'), 'w').close()
         open(os.path.join(self.tmpdir, 'real-upload.bin'), 'w').close()

@@ -10496,7 +10496,7 @@ class TestRenameAnalysis(unittest.TestCase):
         but loadAnalysis() then unconditionally overwrote currentFileName
         with analysisStatus.meta.extracted (the ORIGINAL upload-time
         filename, never touched by a rename) whenever that field was
-        present - which per socrates.py's _write_meta() call sites, it
+        present - which per socrates.py's write_meta() call sites, it
         always is for a normal upload. That override must be gone; the
         already-correct, rename-aware file_name from /api/load-analysis
         must be what's actually used."""
