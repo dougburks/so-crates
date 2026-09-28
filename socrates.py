@@ -1553,7 +1553,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         this reads the raw body instead of going through _read_json_body's
         application/json requirement. The enforced policy's report-uri
         points here, so any future inline-script regression is blocked by
-        the browser AND logged (deduplicated) server-side. Always 204.
+        the browser AND logged (deduplicated) server-side - except the one
+        violation the bundled CyberChef always causes (see
+        cyberchef.is_expected_csp_violation). Always 204.
         """
         body = self._read_post_body(65536)
         if body is None:
@@ -1562,7 +1564,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             report = json.loads(body).get('csp-report', {})
         except (json.JSONDecodeError, AttributeError):
             report = {}
-        if report:
+        if report and not cyberchef.is_expected_csp_violation(report):
             key = (report.get('violated-directive'),
                    report.get('blocked-uri'),
                    report.get('source-file'),

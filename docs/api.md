@@ -798,7 +798,7 @@ Deletes all historical analyses (every MD5-shaped directory under the data root)
 
 ### `POST /api/csp-report`
 
-Sink for Content-Security-Policy violation reports - every response's CSP names it as its `report-uri`, so browsers POST here when they block something. Accepts any `Content-Type` (browsers send `application/csp-report`), reads at most 64 KB, and logs each distinct violation (by directive, blocked URI, source file and line) once to the server's console.
+Sink for Content-Security-Policy violation reports - every response's CSP names it as its `report-uri`, so browsers POST here when they block something. Accepts any `Content-Type` (browsers send `application/csp-report`), reads at most 64 KB, and logs each distinct violation (by directive, blocked URI, source file and line) once to the server's console. The one violation the bundled CyberChef causes on every load - `frame-src`, from its loading animation - is expected and not logged.
 
 **Response:** always `204`, no body - even for a malformed report.
 

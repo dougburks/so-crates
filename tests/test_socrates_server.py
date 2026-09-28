@@ -7744,6 +7744,58 @@ class TestCyberChefCSP(unittest.TestCase):
         self.assertNotIn("'sha256-", csp)
 
 
+class TestCyberChefExpectedCSPViolation(unittest.TestCase):
+    """The Bombe loading animation's frame-src report is expected on every
+    /cyberchef/ load and must not be logged; everything else still is."""
+
+    # Captured from Chromium opening /cyberchef/ (original-policy trimmed).
+    BOMBE = {
+        'document-uri': 'http://127.0.0.1:8000/cyberchef/', 'referrer': '',
+        'violated-directive': 'frame-src', 'effective-directive': 'frame-src',
+        'original-policy': "default-src 'self'; report-uri /api/csp-report;",
+        'disposition': 'enforce', 'blocked-uri': '', 'line-number': 2,
+        'column-number': 240984, 'source-file': 'http://127.0.0.1:8000/cyberchef/assets/main.js',
+        'status-code': 200, 'script-sample': '',
+    }
+
+    def test_bombe_report_is_expected(self):
+        import cyberchef
+        self.assertTrue(cyberchef.is_expected_csp_violation(self.BOMBE))
+
+    def test_bombe_report_without_source_or_with_data_scheme_is_expected(self):
+        import cyberchef
+        report = dict(self.BOMBE, **{'blocked-uri': 'data'})
+        del report['source-file'], report['line-number'], report['effective-directive']
+        self.assertTrue(cyberchef.is_expected_csp_violation(report))
+
+    def test_other_reports_are_not_expected(self):
+        import cyberchef
+        for change in (
+            {'document-uri': 'http://127.0.0.1:8000/socrates.html'},
+            {'violated-directive': 'script-src', 'effective-directive': 'script-src'},
+            {'blocked-uri': 'https://evil.example/frame'},
+            {'document-uri': ''},
+        ):
+            with self.subTest(change=change):
+                self.assertFalse(cyberchef.is_expected_csp_violation(dict(self.BOMBE, **change)))
+        self.assertFalse(cyberchef.is_expected_csp_violation({}))
+
+    def test_handler_skips_only_the_expected_report(self):
+        import contextlib
+        import io as _io
+        handler = server.Handler.__new__(server.Handler)
+        handler.send_response = lambda code: None
+        handler.end_headers = lambda: None
+        server.Handler._CSP_REPORTS_SEEN.clear()
+        for report, logged in ((self.BOMBE, False),
+                               (dict(self.BOMBE, **{'document-uri': 'http://x/socrates.html'}), True)):
+            handler._read_post_body = lambda limit, r=report: json.dumps({'csp-report': r}).encode()
+            out = _io.StringIO()
+            with contextlib.redirect_stdout(out):
+                handler.handle_post_csp_report()
+            self.assertEqual('CSP report:' in out.getvalue(), logged, report['document-uri'])
+
+
 class TestCyberChefServing(unittest.TestCase):
     """/cyberchef/ serves the bundled copy from CYBERCHEF_DIR with its own
     CSP, and nothing else about the app's serving changes."""

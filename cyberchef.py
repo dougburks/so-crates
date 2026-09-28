@@ -12,6 +12,7 @@ import base64
 import hashlib
 import os
 import re
+from urllib.parse import urlparse
 
 # Overridable the same way PLAYBOOKS_DIR/AI_SUMMARIES_DIR are - a local dev
 # server can point it at a copy fetched by hand with
@@ -93,3 +94,19 @@ def get_csp(base_dir=None):
             index_html = ''
         _csp_cache[base_dir] = build_csp(index_html)
     return _csp_cache[base_dir]
+
+
+def is_expected_csp_violation(report):
+    """True for the one violation the bundled CyberChef always causes: the
+    "Bombe" loading animation's <object>, refused by frame-src (see
+    _CSP_TEMPLATE). Every browser that opens /cyberchef/ reports it, so
+    logging it would only make a working install look broken. Chrome sends
+    it with an empty blocked-uri; 'data' covers browsers that name the
+    scheme. Anything else - including a frame-src report from SO-CRATES's
+    own pages - is still unexpected and gets logged."""
+    directive = report.get('effective-directive') or report.get('violated-directive') or ''
+    if directive.split(' ')[0] != 'frame-src':
+        return False
+    if report.get('blocked-uri') not in ('', 'data'):
+        return False
+    return urlparse(report.get('document-uri') or '').path.startswith('/cyberchef/')
