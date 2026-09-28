@@ -187,12 +187,14 @@
             updateFunThemeClass();
             updateAllAmbientThemes();
             updateFavicon();
+            syncCyberChefTheme();
             // If the themes modal is open, treat this as the new baseline so
             // a later close/revert does not undo the change, and keep the
             // preview iframe in sync - otherwise changing the theme some
-            // other way while the modal is open (the 't' hotkey, a cheat
-            // code) would leave the preview showing a stale theme while the
-            // real page and the grid's checkmark have already moved on.
+            // other way while the modal is open (the '<'/'>' hotkeys, the
+            // command palette) would leave the preview showing a stale theme
+            // while the real page and the grid's active tile have already
+            // moved on.
             const themesModal = document.getElementById('themesModal');
             if (themesModal && themesModal.classList.contains('active')) {
                 menuBaseTheme = themeName;
@@ -219,6 +221,50 @@
             updateFunThemeClass();
             updateAllAmbientThemes();
             updateFavicon();
+            syncCyberChefTheme();
+        }
+
+        // Keeps the bundled CyberChef (/cyberchef/) light or dark to match
+        // SO-CRATES. CyberChef shares this page's origin, so it also shares
+        // localStorage, and reads its theme from the 'options' key there -
+        // both in its inline boot script (before first paint, so no flash)
+        // and at setup. Writing it here covers every way CyberChef opens:
+        // the pivot-menu lookup, Send to CyberChef, or typing the URL.
+        //
+        // Light/dark is decided from the theme's actual page background,
+        // not THEMES' group: the 'fun' group mixes both (Hacker is dark,
+        // Luna Blue isn't), and an OhMyDebn palette has no THEMES entry.
+        //
+        // A theme picked by hand in CyberChef's own Options wins: the theme
+        // this last wrote is remembered, and if CyberChef's saved theme is
+        // ever something else, the user chose it there - leave it alone.
+        const CYBERCHEF_THEME_SYNC_KEY = 'socrates-cyberchef-theme';
+
+        function cyberChefThemeForBackground(cssColor) {
+            const m = String(cssColor || '').match(/\d+(\.\d+)?/g);
+            if (!m || m.length < 3) return null;
+            const [r, g, b] = m.slice(0, 3).map(Number);
+            // Perceived brightness (ITU-R BT.601 weights), 0-1.
+            return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5 ? 'dark' : 'classic';
+        }
+
+        function syncCyberChefTheme() {
+            if (!document.body) return;
+            const desired = cyberChefThemeForBackground(getComputedStyle(document.body).backgroundColor);
+            if (!desired) return;
+            let options;
+            try {
+                options = JSON.parse(safeStorageGet(localStorage, 'options') || '{}');
+            } catch (e) {
+                return;  // not CyberChef's JSON - don't overwrite what we can't read
+            }
+            if (!options || typeof options !== 'object' || Array.isArray(options)) return;
+            const lastSynced = safeStorageGet(localStorage, CYBERCHEF_THEME_SYNC_KEY);
+            if (options.theme && options.theme !== lastSynced) return;
+            if (options.theme === desired) return;
+            options.theme = desired;
+            safeStorageSet(localStorage, 'options', JSON.stringify(options));
+            safeStorageSet(localStorage, CYBERCHEF_THEME_SYNC_KEY, desired);
         }
 
         // Real app markup/classes (.app-header, .stats-grid, .stat-card)
@@ -278,7 +324,7 @@
 
         // Only ever touches the isolated preview iframe's own document,
         // never the real page's document.documentElement. Hovering across a
-        // packed grid of ~26 tiles with no debounce would otherwise mean a
+        // packed grid of ~35 tiles with no debounce would otherwise mean a
         // full-page, high-contrast recolor on every mouseenter - exactly
         // the large-area rapid-flash pattern WCAG 2.3.1 (Three Flashes or
         // Below Threshold) exists to prevent. Scoping the change to this
@@ -425,9 +471,11 @@
         }
 
         function updateThemeMenu() {
-            // Mark the menu item for the currently applied theme. Tracks
-            // hover previews too (setTheme/previewTheme both call this), so
-            // the checkmark always matches what is on screen.
+            // Mark the tile for the currently applied theme (the
+            // theme-active class: an accent border and bold label). Hover
+            // previews don't call this - previewTheme() only touches the
+            // isolated preview iframe - so it always shows the theme that's
+            // really applied.
             const current = getCurrentTheme();
             const items = document.querySelectorAll('[data-theme-option]');
             items.forEach(function(item) {
@@ -2308,7 +2356,7 @@
                             <td style="text-align: center; padding: 8px 10px; color: var(--badge-success-text);">${CHECKMARK_ICON_SVG}</td>
                         </tr>
                         <tr>
-                            <td style="padding: 8px 10px; color: var(--text-primary); font-size: 0.85rem;">Open ID Connect (OIDC)</td>
+                            <td style="padding: 8px 10px; color: var(--text-primary); font-size: 0.85rem;">OpenID Connect (OIDC)</td>
                             <td style="text-align: center; padding: 8px 10px; color: var(--bg-hover-light);">-</td>
                             <td style="text-align: center; padding: 8px 10px; color: var(--bg-hover-light);">-</td>
                             <td style="text-align: center; padding: 8px 10px; color: var(--badge-success-text);">${CHECKMARK_ICON_SVG}</td>
@@ -2354,11 +2402,11 @@
                 <div style="margin-top: 15px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; font-size: 0.85rem;">
                     <a href="https://securityonion.net/software" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion</a>
                     <span style="color: var(--bg-hover);">|</span>
-                    <a href="http://securityonion.net/docs/about" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Documentation</a>
+                    <a href="https://securityonion.net/docs/about" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Documentation</a>
                     <span style="color: var(--bg-hover);">|</span>
                     <a href="https://securityonion.com/pro" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Pro</a>
                     <span style="color: var(--bg-hover);">|</span>
-                    <a href="http://securityonion.net/docs/security-onion-pro" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Pro Documentation</a>
+                    <a href="https://securityonion.net/docs/security-onion-pro" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none;">Security Onion Pro Documentation</a>
                 </div>
         `;
         let lastSampleUrl = DEFAULT_SAMPLE_URL;
@@ -2611,8 +2659,8 @@
         // the detail-row below), or this cell has no pivot data (the
         // excluded Time column, or an empty value - see
         // pivotDataAttrsHtml). The note-icon <td> never reaches here at
-        // all: its own onclick already calls stopPropagation (see
-        // rowNoteIconHtml). Passes tr through to showPivotMenu so its
+        // all: its own data-action="row-note-cell" shadows the row's action
+        // (see rowNoteIconHtml). Passes tr through to showPivotMenu so its
         // "Expand Row" entry (see there) has a way back to the
         // expand/collapse behavior this click just bypassed.
         function handleRowCellClick(tr, event) {
@@ -2682,7 +2730,8 @@
         // hadSomethingOpen would otherwise be computed too late to matter.
 
         // The columns list a detail-panel field's label is checked against
-        // (see handleDetailValueClick) to decide whether it gets the full
+        // (see the document-level [data-detail-pivot] click listener) to
+        // decide whether it gets the full
         // Include/Exclude/Only/Hunt menu or the trimmed Hunt-only one -
         // mirrors pivotDataAttrsHtml's own per-eventType column source, but
         // as a standalone lookup (a detail value has no ready-made columns
@@ -2755,6 +2804,19 @@
             const [label, value, isDynamicField] = pair;
             const detailRow = pivotEl.closest('tr.detail-row');
             const collapsedRow = detailRow ? detailRow.previousElementSibling : null;
+            // Part of the value selected (a drag, or a double-clicked word,
+            // inside it - finishing either fires this click): the menu is
+            // for the selected text, not the whole value, and like a
+            // transcript selection it gets no Include/Exclude/Only - a
+            // fragment isn't the field's value.
+            const sel = window.getSelection();
+            const selected = sel && !sel.isCollapsed && sel.rangeCount === 1
+                && pivotEl.contains(sel.getRangeAt(0).commonAncestorContainer) ? sel.toString() : '';
+            if (selected.trim() && selected !== String(value)) {
+                event.stopPropagation();
+                showPivotMenu(event, null, `${label} (selection)`, selected, true, null, collapsedRow ? collapsedRow.dataset.communityId : null);
+                return;
+            }
             const eventType = collapsedRow ? collapsedRow.dataset.eventType : null;
             const columns = detailColumnsForEventType(eventType);
             // A label already matching a real column (e.g. 'Source IP')
@@ -2897,7 +2959,8 @@
 
         // trimmed: true omits Include/Exclude/Only - for a value that has
         // no real filterable column behind it (most detail-panel fields,
-        // see handleDetailValueClick), Include/Exclude/Only would have
+        // see the [data-detail-pivot] click listener), Include/Exclude/Only
+        // would have
         // nothing valid to filter on. Hunt/Copy/the lookup sites need no
         // column at all (just the raw value), so they're offered either way.
         // expandRowEl: the <tr> the click originated from (see
@@ -3047,12 +3110,14 @@
                 const site = allLookupSites[Number(btn.dataset.pivotLookupIndex)];
                 btn.addEventListener('click', function() {
                     closePivotMenu();
-                    // PIVOT_LOOKUP_SITES' own entries carry a function
-                    // (CyberChef's own base64 encoding, for one, can't be
-                    // expressed as a plain string template); custom sites
-                    // from getCustomLookupSites() are plain {value}-template
-                    // strings instead (see applyCustomLookupUrlTemplate's
-                    // own comment for why).
+                    if (site.send) {
+                        site.send(value);
+                        return;
+                    }
+                    // PIVOT_LOOKUP_SITES' own entries carry a function;
+                    // custom sites from getCustomLookupSites() are plain
+                    // {value}-template strings instead (see
+                    // applyCustomLookupUrlTemplate's own comment for why).
                     const url = typeof site.urlTemplate === 'function'
                         ? site.urlTemplate(value)
                         : applyCustomLookupUrlTemplate(site.urlTemplate, value);
@@ -3214,48 +3279,74 @@
             const url = buildStreamUrl('ascii-stream', src, sport, dst, dport);
             try {
                 const resp = await fetch(url);
-                const text = await resp.text();
-                
-                // Try to parse as JSON (new format with direction)
+                let data = null;
                 try {
-                    const data = JSON.parse(text);
-                    if (data.lines && data.lines.length > 0) {
-                        let html = '';
-                        let groupHtml = '';
-                        let lastDirection = '';
-                        // Appends the just-finished direction's group (with
-                        // its colored left bar) to html and resets groupHtml
-                        // for the next one - called both mid-loop (on a
-                        // direction change) and once more after the loop for
-                        // the final trailing group.
-                        const flushGroup = () => {
-                            const bar = `<span style="display:inline-block;width:3px;background:${lastDirection === 'src' ? '#ff6b6b' : '#58a6ff'};margin-right:8px;flex-shrink:0;"></span>`;
-                            html += `<div style="display:flex;align-items:stretch;">${bar}<div style="flex:1;">${groupHtml}</div></div>`;
-                            groupHtml = '';
-                        };
-                        for (const line of data.lines) {
-                            const direction = line.direction;
-                            if (direction !== lastDirection && groupHtml) {
-                                flushGroup();
-                            }
-                            groupHtml += line.text.split('\n').map(t => `<div>${escapeHtml(t)}</div>`).join('');
-                            lastDirection = direction;
-                        }
-                        if (groupHtml) {
-                            flushGroup();
-                        }
-                        pre.innerHTML = html;
-                        if (data.truncated) {
-                            pre.innerHTML += '<div style="margin-top:10px;color:var(--text-muted);font-style:italic;">[Truncated - stream too large. Use Download PCAP to view full capture.]</div>';
-                        }
-                        return;
-                    }
-                } catch (jsonErr) {
-                    // Not JSON or parse failed, continue to plain text
+                    data = JSON.parse(await resp.text());
+                } catch (e) { /* not JSON - handled below */ }
+                // The server only ever answers with JSON: {lines, truncated,
+                // proto} or an {error}. Anything else is a failure, and an
+                // empty list is a flow with no payload - never show the raw
+                // response body (it used to fall through to a plain-text
+                // path and print the JSON itself).
+                if (!data || typeof data !== 'object') {
+                    pre.textContent = `Error loading transcript (HTTP ${resp.status})`;
+                    return;
                 }
-                
-                // Legacy plain text format (backward compatibility)
-                pre.textContent = text || 'No payload data';
+                if (data.error) {
+                    pre.textContent = 'Error loading transcript: ' + data.error;
+                    return;
+                }
+                if (!Array.isArray(data.lines) || data.lines.length === 0) {
+                    pre.textContent = 'No payload data';
+                    return;
+                }
+                let html = '';
+                let groupText = '';
+                let groupStarted = false;
+                let lastDirection = '';
+                // Each entry is one packet's payload. A TCP stream's
+                // segments are pieces of one byte stream, so
+                // consecutive same-direction segments are joined and
+                // only then split on the data's own newlines -
+                // splitting per packet broke a long line wherever a
+                // segment happened to end, which also put bogus
+                // newlines into a selection sent to CyberChef (a
+                // base64 blob spanning 4 segments came out as 4
+                // lines). A UDP datagram is its own message, so
+                // those keep a line break between packets.
+                const joinSegments = data.proto !== 'udp';
+                // Appends the just-finished direction's group (with
+                // its colored left bar) to html and resets it for the
+                // next one - called both mid-loop (on a direction
+                // change) and once more after the loop for the final
+                // trailing group.
+                const flushGroup = () => {
+                    const bar = `<span style="display:inline-block;width:3px;background:${lastDirection === 'src' ? '#ff6b6b' : '#58a6ff'};margin-right:8px;flex-shrink:0;"></span>`;
+                    const groupHtml = groupText.split('\n').map(t => `<div>${escapeHtml(t)}</div>`).join('');
+                    html += `<div style="display:flex;align-items:stretch;">${bar}<div style="flex:1;">${groupHtml}</div></div>`;
+                    groupText = '';
+                    groupStarted = false;
+                };
+                for (const line of data.lines) {
+                    const direction = line.direction;
+                    if (direction !== lastDirection && groupStarted) {
+                        flushGroup();
+                    }
+                    groupText += (groupStarted && !joinSegments ? '\n' : '') + line.text;
+                    groupStarted = true;
+                    lastDirection = direction;
+                }
+                if (groupStarted) {
+                    flushGroup();
+                }
+                pre.innerHTML = html;
+                if (data.truncated) {
+                    // Inside the transcript, so it shows and hides with it,
+                    // but unselectable (.ascii-transcript-note) and below the
+                    // text that a drag-selection clamps to - it's never part
+                    // of what gets sent to CyberChef.
+                    pre.insertAdjacentHTML('beforeend', '<div class="ascii-transcript-note">[Truncated - stream too large. Use Download PCAP to view full capture.]</div>');
+                }
             } catch(err) {
                 pre.textContent = 'Error loading transcript: ' + err.message;
             }
@@ -3283,6 +3374,30 @@
             }
         }
         
+        // Canonical text form of an IP for comparison: IPv6 expanded to
+        // eight lowercase 4-digit groups (tcpdump prints it compressed,
+        // Suricata logs it expanded), IPv4 unchanged.
+        function canonicalIp(ip) {
+            ip = String(ip).toLowerCase();
+            if (!ip.includes(':')) return ip;
+            const halves = ip.split('::');
+            const head = halves[0] ? halves[0].split(':') : [];
+            const tail = halves.length > 1 && halves[1] ? halves[1].split(':') : [];
+            const fill = halves.length > 1 ? Array(8 - head.length - tail.length).fill('0') : [];
+            return head.concat(fill, tail).map(g => g.padStart(4, '0')).join(':');
+        }
+
+        // Whether a tcpdump -nn header's sending side ("... IP 10.0.0.1.80",
+        // the text before " > ") is exactly src:sport. A substring check
+        // colored 10.0.0.10's packets as 10.0.0.1's, and couldn't tell the
+        // two sides of a same-IP (loopback) flow apart at all.
+        function hexdumpSenderIs(senderPart, src, sport) {
+            const token = senderPart.trim().split(/\s+/).pop() || '';
+            const dot = token.lastIndexOf('.');
+            if (dot <= 0) return false;
+            return token.slice(dot + 1) === String(sport) && canonicalIp(token.slice(0, dot)) === canonicalIp(src);
+        }
+
         async function loadHexdumpData(src, sport, dst, dport, container) {
             const url = buildStreamUrl('hexdump-stream', src, sport, dst, dport);
             
@@ -3301,7 +3416,9 @@
                     // per-packet state.
                     data.packets.forEach((pkt) => {
                         const dirParts = pkt.header.split(' > ');
-                        const isSrc = dirParts.length >= 2 ? dirParts[0].includes(src) : pkt.header.indexOf(src) < pkt.header.indexOf(dst);
+                        const isSrc = dirParts.length >= 2
+                            ? hexdumpSenderIs(dirParts[0], src, sport)
+                            : pkt.header.indexOf(src) < pkt.header.indexOf(dst);
                         const dirClass = isSrc ? 'src-dir' : 'dst-dir';
                         html += `
                             <div class="packet-block ${dirClass}">
@@ -3354,8 +3471,8 @@
             return `<span class="detail-label">${escapeHtml(label)}</span><span class="${valueCls}"${sty}>${innerHtml}</span>`;
         }
         
-        // Wraps a non-empty value in its own clickable span (see
-        // handleDetailValueClick) so the ~120 call sites that go through
+        // Wraps a non-empty value in its own clickable span (see the
+        // document-level [data-detail-pivot] click listener) so the ~120 call sites that go through
         // this one shared helper all get the detail-panel pivot menu for
         // free, without each needing its own change. data-detail-pivot
         // carries [label, value] as percent-encoded JSON rather than an
@@ -3427,6 +3544,20 @@
             return html;
         }
 
+        // Send to CyberChef, one button per direction - Source/Dest dots use
+        // the ASCII transcript's own red/blue direction colors (see
+        // loadAsciiTranscript's flushGroup) so the pairing is visible.
+        // .stream-btn, so they join the same Left/Right keyboard group as
+        // Download PCAP and, like it, only fire on Enter, never on arrival.
+        // Arguments are already HTML-escaped / integer-coerced.
+        function cyberChefStreamButtonsHtml(srcIpHtml, srcPort, dstIpHtml, dstPort) {
+            const btn = (direction, label, dotColor, title) => `<button class="stream-btn" data-action="send-stream-to-cyberchef" data-direction="${direction}" title="${title}" aria-label="${title}">${dotColor ? `<span class="cyberchef-direction-dot" style="background:${dotColor};"></span>` : ''}${label}</button>`;
+            return `<span class="cyberchef-send-label">Send to CyberChef:</span>`
+                + btn('both', 'Both', '', 'Send both directions to CyberChef')
+                + btn('src', 'Source', '#ff6b6b', `Send bytes sent by ${srcIpHtml}:${srcPort} to CyberChef`)
+                + btn('dst', 'Dest', '#58a6ff', `Send bytes sent by ${dstIpHtml}:${dstPort} to CyberChef`);
+        }
+
         function _formatEventPayload(e) {
             if (!e.src_ip || !e.src_port || !e.dest_ip || !e.dest_port) return '';
             const srcIpHtml = escapeHtml(e.src_ip);
@@ -3440,7 +3571,7 @@
             // endpoints - the 'switch-stream-view'/'download-stream-pcap'
             // STATIC_ACTIONS entries read them back via closest(), so the
             // buttons themselves only carry the view name.
-            return `<div class="stream-payload" data-src-ip="${srcIpHtml}" data-src-port="${srcPort}" data-dst-ip="${dstIpHtml}" data-dst-port="${dstPort}" style="margin-top: 15px;"><div style="color: var(--text-muted); font-size: 0.85rem; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-bottom: 5px;">Payload</div><div style="display: flex; justify-content: flex-start; align-items: center; margin-bottom: 10px;"><div class="view-tabs"><button class="view-tab active" data-action="switch-stream-view" data-view="ascii">ASCII Transcript</button><button class="view-tab" data-action="switch-stream-view" data-view="hexdump">Hexdump</button></div><button class="stream-btn" data-action="download-stream-pcap" style="margin-left: 12px;">Download PCAP</button></div><div class="stream-view-container" style="background: var(--bg-primary); padding: 15px; border-radius: 8px; font-size: 0.8rem; margin: 0;"><div class="ascii-transcript" style="white-space: pre-wrap; overflow-wrap: break-word;"></div><div class="hexdump-content" style="display: none;"></div></div></div>`;
+            return `<div class="stream-payload" data-src-ip="${srcIpHtml}" data-src-port="${srcPort}" data-dst-ip="${dstIpHtml}" data-dst-port="${dstPort}" style="margin-top: 15px;"><div style="color: var(--text-muted); font-size: 0.85rem; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-bottom: 5px;">Payload</div><div style="display: flex; flex-wrap: wrap; row-gap: 6px; justify-content: flex-start; align-items: center; margin-bottom: 10px;"><div class="view-tabs"><button class="view-tab active" data-action="switch-stream-view" data-view="ascii">ASCII Transcript</button><button class="view-tab" data-action="switch-stream-view" data-view="hexdump">Hexdump</button></div><button class="stream-btn" data-action="download-stream-pcap" style="margin-left: 12px;">Download PCAP</button>${cyberChefStreamButtonsHtml(srcIpHtml, srcPort, dstIpHtml, dstPort)}</div><div class="stream-view-container" style="background: var(--bg-primary); padding: 15px; border-radius: 8px; font-size: 0.8rem; margin: 0;"><div class="ascii-transcript" style="white-space: pre-wrap; overflow-wrap: break-word;"></div><div class="hexdump-content" style="display: none;"></div></div></div>`;
         }
 
         // Hidden anchor for an AI Summary field - see
@@ -3546,7 +3677,8 @@
         function renderFlowDetails(e) {
             let html = htmlSection('Flow Details', COLORS.EVENT.flow);
             html += htmlRowText('State', e.flow?.state);
-            html += htmlRowText('Age', `${e.flow?.age || ''} seconds`);
+            // An age of 0 is real (not missing) - only a missing one is blank.
+            html += htmlRowText('Age', e.flow?.age == null ? '' : `${e.flow.age} seconds`);
             html += htmlRowText('Pkts to Server', (e.flow?.pkts_toserver || 0).toLocaleString());
             html += htmlRowText('Pkts to Client', (e.flow?.pkts_toclient || 0).toLocaleString());
             html += htmlRowText('Bytes to Server', (e.flow?.bytes_toserver || 0).toLocaleString());
@@ -3714,6 +3846,12 @@
             html += htmlRowText('SHA1', e.fileinfo?.sha1, 'mono');
             html += htmlRowText('SHA256', e.fileinfo?.sha256, 'mono');
             html += htmlRowText('Size', `${(e.fileinfo?.size || 0).toLocaleString()} bytes`);
+            // Only files Suricata actually stored exist in the filestore -
+            // it logs a fileinfo event for every transfer it sees.
+            if (e.fileinfo?.stored && e.fileinfo?.sha256 && currentMd5) {
+                const name = String(e.fileinfo.filename || '').split('/').pop();
+                html += htmlRow('CyberChef', `<button class="cyberchef-file-btn" data-action="send-file-to-cyberchef" data-sha256="${escapeHtml(e.fileinfo.sha256)}" data-filename="${escapeHtml(name)}">Send to CyberChef</button>`);
+            }
 
             const meta = e.fileinfo?.metadata || {};
             if (meta.file_type || meta.mime_type || meta.entropy !== undefined || (meta.strings && meta.strings.length)) {
@@ -4393,7 +4531,7 @@
         // before that (they simply don't exist yet, contributing nothing), and
         // the offsetParent filter below (not this selector) is what keeps them
         // out of the list while the ASCII Transcript view is showing instead.
-        const EXPANDED_ROW_ITEM_SELECTOR = '[data-detail-pivot], .row-note-edit-link, .view-tab, .stream-btn, .packet-control-btn, .packet-header';
+        const EXPANDED_ROW_ITEM_SELECTOR = '[data-detail-pivot], .row-note-edit-link, .view-tab, .stream-btn, .cyberchef-file-btn, .packet-control-btn, .packet-header';
 
         // Scoped to the currently visible primary section (excludes
         // .agg-section, mirroring buildStats()'s own "visible section"
@@ -4500,8 +4638,9 @@
         // directly) catches every way a bar can be hidden - #sankeyPanel's
         // own inline display:none when cleared, and the CSS rule that
         // force-hides it in binary/file-analysis mode - without needing to
-        // know which one applies. Each bar already has an onclick handler
-        // (toggleDiagram()/toggleAggregations()), so no change is needed in
+        // know which one applies. Each bar already has a click action
+        // (toggleDiagram()/toggleAggregations() via data-action), so no
+        // change is needed in
         // activateKeyboardSelection(): its existing generic
         // verticalNavSelection.click() fallback (used for data rows too)
         // already fires it.
@@ -4815,10 +4954,11 @@
             return column;
         }
 
-        // True for the 3 controls that behave as one horizontal group within
+        // True for the controls that behave as one horizontal group within
         // an expanded row's Payload section (see navigateStreamControls/
         // navigateStreamControlsVertical below) - ASCII Transcript, Hexdump
-        // (both .view-tab) and Download PCAP (.stream-btn). Excludes
+        // (both .view-tab), Download PCAP and the three Send to CyberChef
+        // buttons (.stream-btn). Excludes
         // .packet-control-btn (Expand All/Collapse All) deliberately - that
         // pair is its own separate group one level below this one, not part
         // of the row/tab strip.
@@ -4846,13 +4986,14 @@
 
         // Left/Right's other section-local behavior once
         // leftRightSwitchesStatTabs is false (see its own comment) - cycles
-        // through all 3 stream controls (ASCII Transcript, Hexdump, Download
-        // PCAP - .stream-payload's own DOM order) as one horizontal group.
+        // through all the stream controls (ASCII Transcript, Hexdump,
+        // Download PCAP, Send to CyberChef Both/Source/Dest - .stream-payload's
+        // own DOM order) as one horizontal group.
         // Only the two view-tabs activate on arrival (tabs[nextIndex].click(),
         // same as navigateStatTabs() does for data-type tabs - a real
-        // tab-strip, not preview-then-Enter) - Download PCAP deliberately
-        // does NOT, since unlike switching a view it's a real side effect
-        // (triggers an actual file download), and arrowing past a button
+        // tab-strip, not preview-then-Enter) - the .stream-btn buttons
+        // deliberately do NOT, since unlike switching a view each is a real
+        // side effect (a file download, a new CyberChef tab), and arrowing past a button
         // must never fire its action on its own (same reasoning as every
         // other Enter-to-activate item in this app - see verticalNavSelection's
         // own comment). keyboard-selected moves along regardless - .active
@@ -4874,7 +5015,7 @@
             return true;
         }
 
-        // Up/Down's other section-local behavior for the same 3-item group
+        // Up/Down's other section-local behavior for the same group
         // navigateStreamControls() cycles with Left/Right - treats the whole
         // group as a single row in a small 2D layout (Add Note above, the
         // Expand All/Collapse All section below), so Up/Down jump straight
@@ -4925,9 +5066,9 @@
         // Up/Down's other section-local behavior for the Expand All/Collapse
         // All pair - mirrors navigateStreamControlsVertical()'s own jump
         // logic, one level down: Up from either button jumps to Download
-        // PCAP (its nearest DOM neighbor in the group above, same "jump to
-        // the boundary neighbor" pattern navigateStreamControlsVertical()
-        // uses for Add Note), Down jumps to the first packet regardless of
+        // PCAP (the group above's first .stream-btn, same "jump to a fixed
+        // neighbor" pattern navigateStreamControlsVertical() uses for Add
+        // Note), Down jumps to the first packet regardless of
         // which of the two is currently selected. Both search from the
         // shared .stream-payload ancestor (not just .packet-controls, which
         // only wraps the two buttons themselves) since that's the closest
@@ -5081,8 +5222,8 @@
         // (Up/Down, via themeTileGridColumnCount()) - close enough to true
         // 2D movement in practice, since group boundaries rarely land
         // exactly on a row boundary anyway. Each move calls previewTheme()
-        // on the newly-selected tile, exactly mirroring onmouseenter's
-        // live-preview behavior, so keyboard navigation feels like
+        // on the newly-selected tile, exactly mirroring hovering it with
+        // the mouse, so keyboard navigation feels like
         // hovering with the keyboard rather than a separate mechanism.
         function navigateThemeTiles(direction, vertical) {
             const themesModal = document.getElementById('themesModal');
@@ -5288,7 +5429,7 @@
             // click.
             { code: 'documentation', label: 'Documentation', action: () => { closeAutocompleteModal(); window.open('https://so-crates.org', '_blank', 'noopener,noreferrer'); } },
             { code: 'security onion', label: 'Security Onion', action: () => { closeAutocompleteModal(); window.open('https://securityonion.net', '_blank', 'noopener,noreferrer'); } },
-            { code: 'github repo', label: 'Github repo', action: () => { closeAutocompleteModal(); window.open('https://github.com/dougburks/so-crates', '_blank', 'noopener,noreferrer'); } },
+            { code: 'github repo', label: 'GitHub repo', action: () => { closeAutocompleteModal(); window.open('https://github.com/dougburks/so-crates', '_blank', 'noopener,noreferrer'); } },
             { code: 'pcap samples', label: 'PCAP samples', action: () => { closeAutocompleteModal(); window.open('https://malware-traffic-analysis.net', '_blank', 'noopener,noreferrer'); } },
             { code: 'log samples', label: 'Log samples', action: () => { closeAutocompleteModal(); window.open('https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES', '_blank', 'noopener,noreferrer'); } },
             { code: 'binary samples', label: 'Binary samples', action: () => { closeAutocompleteModal(); window.open('https://www.eicar.org/', '_blank', 'noopener,noreferrer'); } },
@@ -5389,7 +5530,7 @@
         // Naturally contributes nothing on the welcome screen, where
         // #statsGrid has no .stat-card children yet - no separate
         // analysisOnly flag needed the way the other analysis-only
-        // commands have. Reuses the card's own real onclick (card.click(),
+        // commands have. Reuses the card's own real click action (card.click(),
         // same as navigateStatTabs() does) rather than duplicating
         // showTab()'s section-id logic here.
         function getDataTypeAutocompleteCommands() {
@@ -6904,8 +7045,13 @@
                     const host = e.http?.hostname || '';
                     const url = e.http?.url || '';
                     const status = e.http?.status || '';
-                    const ua = (e.http?.http_user_agent || '').slice(0, CONFIG.TLS_ISSUER_MAX_LENGTH);
-                    const statusColor = status && parseInt(status) < 400 ? 'var(--badge-success-text)' : status && parseInt(status) < 500 ? 'var(--badge-warning-text)' : 'var(--badge-danger-text)';
+                    // USER_AGENT_MAX_LENGTH, the same cut extractValue()
+                    // (filters, chips, aggregations) uses - not the TLS
+                    // issuer's shorter one.
+                    const ua = (e.http?.http_user_agent || '').slice(0, CONFIG.USER_AGENT_MAX_LENGTH);
+                    // No status (no response seen) gets the neutral dot,
+                    // not the red one for a 5xx.
+                    const statusColor = !status ? '' : parseInt(status) < 400 ? 'var(--badge-success-text)' : parseInt(status) < 500 ? 'var(--badge-warning-text)' : 'var(--badge-danger-text)';
                     colSpan = 11;
                     row = rowPrefixCells(e) + `<td>${valueDotSpan(DOT_COLORS.HTTP_METHOD[method.toUpperCase()])}${escapeHtml(method)}</td><td class="mono">${escapeHtml(host)}</td><td class="mono">${escapeHtml(url)}</td><td>${escapeHtml(ua)}</td><td>${valueDotSpan(statusColor)}${escapeHtml(String(status))}</td></tr>`;
                     break;
@@ -9547,8 +9693,8 @@
         // can't inherit stale row scope.
         var currentRowNoteScope = null;
         // NOTE: these must stay `var` (not let/const) so they attach to the
-        // global object — the JSDOM test harness and inline handlers assign
-        // them via separate script evaluations.
+        // global object — the JSDOM test harness assigns them from a
+        // separate script evaluation.
         var currentFilters = {};
         let currentSearch = [];
         var advancedMode = false;
@@ -9946,13 +10092,22 @@
             </div>`;
         }
 
+        function clampPageNumber(page, maxPage) {
+            return Math.max(1, isNaN(maxPage) ? page : Math.min(page, maxPage));
+        }
+
         async function jumpToPage() {
             if (!activeTableRender) return;
             const input = document.getElementById('paginationPageInput');
             if (!input) return;
             const page = parseInt(input.value, 10);
             if (!isNaN(page)) {
-                currentPage = page; // renderPaginatedTable clamps to the valid [1, totalPages] range
+                // Clamp BEFORE fetching: in scalable (server-paged) mode the
+                // page is fetched first and renderPaginatedTable only clamps
+                // afterwards, so page 99 of 5 fetched an empty page and showed
+                // it as "Showing 401-400 of 500". The input's max is the
+                // table's real page count.
+                currentPage = clampPageNumber(page, parseInt(input.max, 10));
                 await activeTableRender.rerender();
             } else {
                 input.value = currentPage;
@@ -10345,20 +10500,261 @@
             }
         }
 
-        // CyberChef takes its input pre-filled via a base64 blob in the URL
-        // fragment (#input=...), not a plain query string like the other
-        // lookup sites - unescape(encodeURIComponent(...)) is the standard
-        // idiom for UTF-8-safe btoa() (btoa() alone only accepts Latin1 and
-        // throws on e.g. multi-byte characters in a log field's value).
-        // Falls back to a bare (empty-input) CyberChef link on any encoding
-        // failure rather than the whole menu action silently doing nothing.
-        function cyberChefUrl(value) {
+        // Send to CyberChef (stream Payload panel, File Info, the pivot
+        // menu's CyberChef entry): the bundled CyberChef - same origin as
+        // this page - is opened in a new tab and the data handed straight
+        // to it, rather than packed into its #input= URL, which whole
+        // payloads are far too big for (and which leaves the data in the
+        // tab's URL and history). Bytes go as a File, text as input. That goes
+        // through CyberChef's internal window.app object, not a published
+        // API (scripts/fetch-cyberchef.sh fails the build if an upgrade
+        // renames any of the pieces used here). A File, not a string,
+        // so binary survives intact: verified byte-exact on all 256 values.
+        //
+        // Magic (auto-detect encodings) is applied only up to this size.
+        // Measured on decodable input in the bundled v11.5.0: 1.3s at 16KB,
+        // 16s at 64KB, 38s at 100KB, still running after 2 minutes at 1MB -
+        // larger payloads open with an empty recipe instead.
+        const CYBERCHEF_MAGIC_MAX_BYTES = 16 * 1024;
+        const CYBERCHEF_READY_TIMEOUT_MS = 15000;
+
+        // Opened synchronously, before any await - browsers block a
+        // window.open() that follows an async step as a pop-up. And without
+        // noopener, unlike the lookup links: the handle to the new window is
+        // how the data gets in. Returns null (after telling the user) if the
+        // pop-up was blocked.
+        function openCyberChefTab() {
+            const win = window.open('/cyberchef/', '_blank');
+            if (!win) showToast('Could not open CyberChef - allow pop-ups for this page');
+            return win;
+        }
+
+        // Polls until CyberChef in win has finished loading, then hands its
+        // app object to deliver(app, win). Applies Magic first when the
+        // payload is small enough (see CYBERCHEF_MAGIC_MAX_BYTES).
+        function whenCyberChefReady(win, payloadBytes, deliver) {
+            const deadline = Date.now() + CYBERCHEF_READY_TIMEOUT_MS;
+            const tryLoad = () => {
+                if (win.closed) return;
+                let app = null;
+                try {
+                    if (win.document.body && win.document.body.classList.contains('loaded')) app = win.app;
+                } catch (e) { /* still navigating - try again */ }
+                if (app && app.manager && app.manager.input) {
+                    // CyberChef's "update the URL" option rewrites the tab's
+                    // URL with the recipe and, for smaller inputs, the input
+                    // itself (history.replaceState) - which would put the
+                    // payload into browser history, and into synced history
+                    // with it. Off for this tab only: app.options is
+                    // in-memory here, not the saved preferences.
+                    if (app.options) app.options.updateUrl = false;
+                    if (payloadBytes <= CYBERCHEF_MAGIC_MAX_BYTES) {
+                        app.setRecipeConfig([{ op: 'Magic', args: [3, false, false, ''] }]);
+                    }
+                    deliver(app, win);
+                    return;
+                }
+                if (Date.now() > deadline) {
+                    showToast('CyberChef did not finish loading - the data was not sent');
+                    return;
+                }
+                setTimeout(tryLoad, 200);
+            };
+            tryLoad();
+        }
+
+        async function sendToCyberChef(fetchUrl, filename) {
+            const win = openCyberChefTab();
+            if (!win) return;
+            let blob;
             try {
-                const b64 = btoa(unescape(encodeURIComponent(String(value))));
-                return `https://gchq.github.io/CyberChef/#input=${encodeURIComponent(b64)}`;
+                const resp = await fetch(fetchUrl);
+                if (!resp.ok) {
+                    let message = `Could not load data for CyberChef (HTTP ${resp.status})`;
+                    try {
+                        const data = await resp.json();
+                        if (data.error) message = data.error;
+                    } catch (e) { /* not JSON - keep the status message */ }
+                    win.close();
+                    showToast(message);
+                    return;
+                }
+                blob = await resp.blob();
             } catch (e) {
-                return 'https://gchq.github.io/CyberChef/';
+                win.close();
+                showToast('Could not load data for CyberChef');
+                return;
             }
+            whenCyberChefReady(win, blob.size, (app, cyberChefWin) => {
+                // cyberChefWin.File, not this page's File: CyberChef's own
+                // instanceof checks run in its window's realm.
+                app.manager.input.loadUIFiles([new cyberChefWin.File([blob], filename, { type: 'application/octet-stream' })]);
+            });
+        }
+
+        // Text, not a File: it lands in CyberChef's editable input box,
+        // where a snippet belongs, instead of a "File details" panel.
+        function sendTextToCyberChef(text) {
+            const win = openCyberChefTab();
+            if (!win) return;
+            whenCyberChefReady(win, new Blob([text]).size, (app) => app.setInput(text));
+        }
+
+        // Selecting text in an ASCII transcript opens the standard pivot
+        // menu (Hunt, Correlate, Copy, the lookup sites, CyberChef) for the
+        // selected text, once the selection is finished - on the mouseup
+        // that ends a drag, a double-click or a Shift+click, not while a
+        // drag is still going (a menu appearing mid-drag would sit where the
+        // drag is heading). It works on the text as displayed - the
+        // transcript already shows non-printable bytes as '.', so this is
+        // for text (a base64 blob, a header, a URL); whole binary payloads
+        // go through the Both/Source/Dest buttons instead. Include/Exclude/
+        // Only are left out: a fragment of a transcript isn't a column
+        // value. Hexdump selections are deliberately not offered - they'd
+        // drag the offset and ASCII columns along with the bytes.
+
+        // The transcript a selection lies entirely within, or null.
+        function transcriptForSelection(sel) {
+            if (!sel || sel.rangeCount !== 1 || sel.isCollapsed) return null;
+            const node = sel.getRangeAt(0).commonAncestorContainer;
+            const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+            return el ? el.closest('.ascii-transcript') : null;
+        }
+
+        // Where a pivot menu for this range opens: just below where the
+        // selection ends. null when that end isn't on screen - its row
+        // collapsed (a zero-size rect) or it scrolled out of view - rather
+        // than pinning the menu to an edge, away from what it belongs to.
+        function selectionMenuPoint(range) {
+            const rects = range.getClientRects();
+            const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
+            if ((!last.width && !last.height) || last.bottom < 0 || last.top > window.innerHeight) return null;
+            return { clientX: last.right, clientY: last.bottom + 4 };
+        }
+
+        function openTranscriptSelectionMenu() {
+            if (transcriptDrag) return false;
+            const sel = window.getSelection();
+            const transcript = transcriptForSelection(sel);
+            const text = transcript ? sel.toString() : '';
+            if (!text.trim()) return false;
+            const point = selectionMenuPoint(sel.getRangeAt(0));
+            if (!point) return false;
+            const detailRow = transcript.closest('tr.detail-row');
+            const row = detailRow ? detailRow.previousElementSibling : null;
+            showPivotMenu(point, null, 'Selection', text, true, null, row ? row.dataset.communityId : null);
+            return true;
+        }
+
+        document.addEventListener('mouseup', e => {
+            if (e.button !== 0) return;
+            // Choosing an item from the menu itself leaves the selection
+            // in place - don't reopen it.
+            if (e.target.closest && e.target.closest('.pivot-menu')) return;
+            // After this mouseup's own click event: the pivot menu's
+            // outside-click listener would otherwise close it at once.
+            setTimeout(openTranscriptSelectionMenu, 0);
+        });
+
+        // Click-and-drag selection inside an ASCII transcript, done by hand.
+        // Left to the browser, dragging past a transcript line's end or the
+        // transcript's edge put the pointer over the surrounding padding,
+        // which Chrome resolves to the end of the whole results table - so
+        // every row below lit up and went dark again as the pointer moved
+        // (measured: the selection was outside the transcript in 30-50% of
+        // animation frames during such drags). Neither user-select: none
+        // around it (snaps to odd positions) nor correcting the browser's
+        // selection afterwards (the two fight, flipping every frame) fixed
+        // it. So a plain drag that starts in a transcript sets the selection
+        // itself on each move, from the caret under the pointer - clamped
+        // into the transcript's text column when the pointer is outside,
+        // like dragging out of a text box: past a line's end stops at its
+        // end, below the transcript stops on the last line. Double/triple
+        // click and Shift+click are left to the browser.
+        let transcriptDrag = null;  // { transcript, anchor, x, y, scrollTimer }
+
+        function caretAtPoint(x, y) {
+            if (document.caretPositionFromPoint) {
+                const p = document.caretPositionFromPoint(x, y);
+                return p ? { node: p.offsetNode, offset: p.offset } : null;
+            }
+            const r = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
+            return r ? { node: r.startContainer, offset: r.startOffset } : null;
+        }
+
+        // The caret nearest (x, y) that lies inside transcript, or null.
+        function transcriptCaretAt(transcript, x, y) {
+            const box = transcript.getBoundingClientRect();
+            // The text column, not the whole transcript: its left edge
+            // holds the red/blue direction bars, whose caret position is
+            // the start of the whole direction group, not the line.
+            const column = transcript.querySelector(':scope > div > div');
+            const left = column ? column.getBoundingClientRect().left : box.left;
+            // Bottom of the last line of text, not of the whole transcript,
+            // which may end with the (unselectable) truncation note.
+            const groups = transcript.querySelectorAll(':scope > div:not(.ascii-transcript-note)');
+            const bottom = groups.length ? groups[groups.length - 1].getBoundingClientRect().bottom : box.bottom;
+            const cx = Math.min(Math.max(x, left + 1), box.right - 1);
+            const cy = Math.min(Math.max(y, box.top + 1), bottom - 1);
+            const caret = caretAtPoint(cx, cy);
+            if (!caret) return null;
+            const el = caret.node.nodeType === Node.ELEMENT_NODE ? caret.node : caret.node.parentElement;
+            return el && transcript.contains(el) ? caret : null;
+        }
+
+        function extendTranscriptDrag() {
+            const d = transcriptDrag;
+            if (!d) return;
+            const caret = transcriptCaretAt(d.transcript, d.x, d.y);
+            if (caret) window.getSelection().setBaseAndExtent(d.anchor.node, d.anchor.offset, caret.node, caret.offset);
+        }
+
+        function endTranscriptDrag() {
+            if (!transcriptDrag) return;
+            clearInterval(transcriptDrag.scrollTimer);
+            transcriptDrag = null;
+        }
+
+        document.addEventListener('mousedown', e => {
+            endTranscriptDrag();
+            if (e.button !== 0 || e.detail !== 1 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+            const transcript = e.target.closest && e.target.closest('.ascii-transcript');
+            if (!transcript) return;
+            const anchor = transcriptCaretAt(transcript, e.clientX, e.clientY);
+            if (!anchor) return;
+            e.preventDefault();  // no native drag-selection (or text drag-and-drop)
+            window.getSelection().collapse(anchor.node, anchor.offset);
+            transcriptDrag = { transcript, anchor, x: e.clientX, y: e.clientY, scrollTimer: 0 };
+            // The browser's own autoscroll went with its drag-selection:
+            // keep scrolling while the pointer sits near the top/bottom edge.
+            transcriptDrag.scrollTimer = setInterval(() => {
+                const d = transcriptDrag;
+                if (!d) return;
+                const edge = 30;
+                const dy = d.y < edge ? -20 : d.y > window.innerHeight - edge ? 20 : 0;
+                if (dy) { window.scrollBy(0, dy); extendTranscriptDrag(); }
+            }, 50);
+        });
+
+        document.addEventListener('mousemove', e => {
+            if (!transcriptDrag) return;
+            if (!(e.buttons & 1)) { endTranscriptDrag(); return; }
+            transcriptDrag.x = e.clientX;
+            transcriptDrag.y = e.clientY;
+            extendTranscriptDrag();
+        });
+
+        document.addEventListener('mouseup', endTranscriptDrag);
+        window.addEventListener('blur', endTranscriptDrag);
+
+        function sendStreamToCyberChef(src, sport, dst, dport, direction) {
+            const url = buildStreamUrl('raw-stream', src, sport, dst, dport) + `&direction=${encodeURIComponent(direction)}`;
+            sendToCyberChef(url, `stream_${src}_${sport}_to_${dst}_${dport}_${direction}.bin`.replace(/:/g, '-'));
+        }
+
+        function sendExtractedFileToCyberChef(sha256, filename) {
+            const url = `/api/extracted-file?md5=${encodeURIComponent(currentMd5)}&sha256=${encodeURIComponent(sha256)}`;
+            sendToCyberChef(url, filename || `${sha256}.bin`);
         }
 
         // OSINT/threat-intel lookup sites offered from the pivot menu -
@@ -10376,7 +10772,9 @@
             { label: 'Shodan', urlTemplate: v => `https://www.shodan.io/search?query=${encodeURIComponent(v)}` },
             { label: 'AbuseIPDB', urlTemplate: v => `https://www.abuseipdb.com/check/${encodeURIComponent(v)}` },
             { label: 'urlscan.io', urlTemplate: v => `https://urlscan.io/search/#${encodeURIComponent(v)}` },
-            { label: 'CyberChef', urlTemplate: cyberChefUrl },
+            // Handed straight to the bundled CyberChef instead of opened
+            // as a URL - see sendTextToCyberChef.
+            { label: 'CyberChef', send: v => sendTextToCyberChef(String(v)) },
         ];
 
         // User-added lookup sites (Settings modal's "Custom Lookup Sites"
@@ -10956,8 +11354,25 @@
                     });
                     const result = await resp.json();
                     if (resp.ok && result.success) {
-                        const rowEl = document.querySelector('tr[data-id="' + rowScope.rowId + '"]');
-                        if (rowEl) {
+                        // Every rendered row for this record, not just the
+                        // first tr[data-id] in the document: tabs you've
+                        // left keep their rows (so the same alert can be
+                        // rendered twice, and the first match was often the
+                        // hidden one), and events.id and sigma_alerts.id
+                        // can share a number in log mode - so match the
+                        // note's table as well as the id.
+                        const rowEls = Array.from(document.querySelectorAll('tr[data-id="' + rowScope.rowId + '"]'))
+                            .filter(tr => {
+                                // The row's own icon carries the table only
+                                // when it already has a note; its detail
+                                // panel's Add Note/Edit link always does.
+                                const detail = tr.nextElementSibling;
+                                const tagged = tr.querySelector('[data-action="open-row-note-editor"][data-table]')
+                                    || (detail && detail.classList.contains('detail-row')
+                                        ? detail.querySelector('.row-note-edit-link[data-table]') : null);
+                                return !!tagged && tagged.dataset.table === rowScope.table;
+                            });
+                        for (const rowEl of rowEls) {
                             const cell = rowEl.querySelector('.row-note-cell');
                             if (cell) cell.outerHTML = rowNoteIconHtml(rowScope.table, rowScope.rowId, result.note);
                             // The detail panel is rendered once and only
@@ -11557,13 +11972,7 @@
             document.getElementById('deleteConfirmModal').classList.remove('active');
             restoreModalFocus();
         }
-        
-        function handleDeleteBackdropClick(event) {
-            if (event.target.id === 'deleteConfirmModal') {
-                closeDeleteModal();
-            }
-        }
-        
+                
         function showError(message) {
             document.getElementById('errorMessage').textContent = message;
             document.getElementById('errorModal').classList.add('active');
@@ -11626,13 +12035,7 @@
             document.getElementById('deleteAllConfirmModal').classList.remove('active');
             restoreModalFocus();
         }
-        
-        function handleDeleteAllBackdropClick(event) {
-            if (event.target.id === 'deleteAllConfirmModal') {
-                closeDeleteAllModal();
-            }
-        }
-        
+                
         async function confirmDeleteAll() {
             if (!pendingDeleteAllCount) return;
             closeDeleteAllModal();
@@ -11692,13 +12095,7 @@
             document.getElementById('reanalyzeConfirmModal').classList.remove('active');
             restoreModalFocus();
         }
-        
-        function handleReanalyzeBackdropClick(event) {
-            if (event.target.id === 'reanalyzeConfirmModal') {
-                closeReanalyzeModal();
-            }
-        }
-        
+                
         async function confirmReanalyze() {
             if (!pendingReanalyze) return;
             const { md5, name, phase } = pendingReanalyze;
@@ -11869,6 +12266,11 @@
                 const p = el.closest('.stream-payload');
                 if (p) downloadPcap(p.dataset.srcIp, p.dataset.srcPort, p.dataset.dstIp, p.dataset.dstPort);
             },
+            'send-stream-to-cyberchef': (el) => {
+                const p = el.closest('.stream-payload');
+                if (p) sendStreamToCyberChef(p.dataset.srcIp, p.dataset.srcPort, p.dataset.dstIp, p.dataset.dstPort, el.dataset.direction);
+            },
+            'send-file-to-cyberchef': (el) => sendExtractedFileToCyberChef(el.dataset.sha256, el.dataset.filename),
             // The note-icon <td>: clicks that miss the icon must do
             // nothing (not toggle the row) - shadowing handles that; the
             // preventDefault/stopPropagation mirror the old inline pair.
@@ -12042,11 +12444,21 @@
 
         async function init() {
             try {
+                // A stored theme key this version doesn't know (a theme
+                // since removed or renamed without a migration in
+                // theme-boot.js) would leave the page on the unstyled
+                // default palette with no active tile and a 404 favicon -
+                // fall back to the default theme instead.
+                const bootTheme = getCurrentTheme();
+                if (!Object.prototype.hasOwnProperty.call(THEMES, bootTheme) && bootTheme !== OHMYDEBN_CUSTOM_THEME) {
+                    setTheme('dark');
+                }
                 // Initialize theme state, ambient theme backgrounds, and favicon.
                 updateThemeMenu();
                 updateFunThemeClass();
                 updateAllAmbientThemes();
                 updateFavicon();
+                syncCyberChefTheme();
                 startThemeSync();
 
                 // Fetch and display version from server

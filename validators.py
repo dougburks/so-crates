@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
+import gzip
 import os
 import ipaddress
+import re
+import shutil
 import socket
 import threading
 import time
+import zlib
 from urllib.parse import urlparse
 import config
 
@@ -21,6 +25,9 @@ BLOCKED_NETWORKS = [
     ipaddress.ip_network('fd00::/8'),
     ipaddress.ip_network('::/96'),  # IPv4-compatible (::127.0.0.1)
     ipaddress.ip_network('0.0.0.0/8'),  # "this network"; connect() to 0.0.0.0 reaches localhost
+    # Carrier-grade NAT. Not is_private on any Python version, so it needs
+    # listing here: it's where Tailscale tailnets and ISP-internal hosts live.
+    ipaddress.ip_network('100.64.0.0/10'),
 ]
 
 
@@ -28,10 +35,15 @@ def _ip_is_blocked(ip):
     """True when a resolved address must not be fetched from.
 
     Property-based checks catch whole special-address classes the explicit
-    network list could miss (0.0.0.0 -> localhost on Linux, fe80::/10, CGNAT
-    on newer Pythons, multicast, reserved); the BLOCKED_NETWORKS loop is kept
-    as an explicit, version-independent floor.
+    network list could miss (0.0.0.0 -> localhost on Linux, fe80::/10,
+    multicast, reserved); the BLOCKED_NETWORKS loop is kept as an explicit,
+    version-independent floor, and is the only thing that catches CGNAT.
+    An IPv4-mapped IPv6 address (::ffff:a.b.c.d) is judged as the IPv4
+    address it maps to, so it can't route around that list.
     """
+    mapped = getattr(ip, 'ipv4_mapped', None)
+    if mapped is not None:
+        return _ip_is_blocked(mapped)
     if (ip.is_unspecified or ip.is_loopback or ip.is_link_local
             or ip.is_reserved or ip.is_multicast or ip.is_private):
         return True
@@ -39,19 +51,28 @@ def _ip_is_blocked(ip):
 
 
 def validate_ip(ip_str):
+    """A plain IPv4/IPv6 address. Rejects an IPv6 scope suffix
+    (fe80::1%eth0): ipaddress accepts any text after the '%', and these
+    values are interpolated into tcpdump/tshark filter expressions."""
     try:
-        ipaddress.ip_address(ip_str)
-        return True
+        ip = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
+    return not getattr(ip, 'scope_id', None)
+
+
+_PORT_RE = re.compile(r'[0-9]{1,5}')
 
 
 def validate_port(port_str):
-    try:
-        port = int(port_str)
-        return 0 <= port <= 65535
-    except (ValueError, TypeError):
+    """0-65535 as plain decimal digits only - int() alone also accepts
+    '8_0', ' 80\\n' and '+80', and the value is interpolated as-is into
+    tcpdump/tshark filter expressions."""
+    # fullmatch, not match with '^...$': '$' also matches before a
+    # trailing newline, which let '80\n' through.
+    if not _PORT_RE.fullmatch(str(port_str)):
         return False
+    return int(port_str) <= 65535
 
 
 RESERVED_FILENAMES = {
@@ -62,6 +83,10 @@ RESERVED_FILENAMES = {
     # FILE_ANALYSIS_ARTIFACTS in socrates.py.
     'yara_matches.json', 'sigma_matches.json', 'zircolite.log',
     '.zircolite_events.db', 'file_metadata.json',
+    # Suricata's own outputs - an upload named stats.log would be appended
+    # to by Suricata while Suricata is reading it; 'filestore' is the
+    # directory it extracts files into.
+    'fast.log', 'stats.log', 'suricata.log', 'filestore',
 }
 
 
@@ -183,7 +208,7 @@ def validate_zip_extraction(zip_ref, extract_path, max_size=None):
 
     max_size defaults to config.MAX_UPLOAD_SIZE, but callers should pass the
     caller's actual resolved per-request ceiling (see
-    socrates.py's _resolve_upload_size_limit) so a user who hasn't opted
+    storage.py's resolve_upload_size_limit) so a user who hasn't opted
     into a higher personal upload limit doesn't get the full server hard
     ceiling as their zip-bomb decompression budget.
 
@@ -262,6 +287,44 @@ def is_epoch_stale(epoch, max_age_hours):
     return (time.time() - epoch) > max_age_hours * 3600
 
 
+def gunzip_atomically(src, dest):
+    """Decompress src (.gz) to dest, carrying src's mtime over.
+
+    Writes a temp file and renames it into place, so dest either doesn't
+    exist or is complete: the baked-in rule copies that use this treat an
+    existing dest as a valid cached ruleset forever, and decompressing
+    straight into dest left a truncated one behind on any failure partway
+    (disk full, a corrupt archive) - which YARA then failed to compile on
+    every scan. A corrupt or truncated archive is raised as OSError, like
+    every other failure here, since EOFError/zlib.error aren't OSErrors and
+    used to escape the callers' OSError handling.
+
+    mtime: decompressing writes a brand-new file, which would otherwise be
+    "now" (container start) rather than when the ruleset was baked into the
+    image - so the Rules modal's "updated" date reflects reality, not
+    container uptime.
+    """
+    tmp = dest + '.tmp'
+    try:
+        with gzip.open(src, 'rb') as f_in, open(tmp, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        shutil.copystat(src, tmp)
+        os.replace(tmp, dest)
+    except (EOFError, zlib.error, gzip.BadGzipFile) as e:
+        _remove_quietly(tmp)
+        raise OSError(f'corrupt archive {os.path.basename(src)}: {e}') from e
+    except OSError:
+        _remove_quietly(tmp)
+        raise
+
+
+def _remove_quietly(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def is_file_stale(path, max_age_hours):
     """Check if a file's mtime is older than max_age_hours.
 
@@ -303,7 +366,8 @@ def _is_mostly_text(data):
 
 
 def is_log_file(data):
-    """Detect if file data is a log file by magic bytes or extension.
+    """Detect if file data is a log file by its content (magic bytes and
+    structure) - see is_log_file_by_extension for the extension check.
 
     Returns True if the data appears to be a supported log format.
     """

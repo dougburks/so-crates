@@ -136,21 +136,10 @@ When calling `buildAggregationsSection(eventType, events)` in aggregation mode, 
 - `test_loadTabData_filters_agg_tables_in_advanced_mode_fresh`
 
 ### 3. Aggregation toggle must filter before building agg tables
-When the user toggles Aggregation ON, the handler must call `getFilteredEvents()` before `buildAggregationsSection()`. See the `advancedToggle` change listener.
+When the user toggles Aggregation Tables on, `toggleAggregations()` goes through `rebuildVisibleAggregations()`, which builds the tables from the filtered events (`matchesCurrentFilters()`), never the raw batch.
 
-### 4. onclick quoting
-Never use `JSON.stringify()` inside `onclick` attributes - it produces double-quoted strings that break inside double-quoted HTML attributes. Use single-quoted template expressions with escaped internal single quotes. Tests enforce this:
-- `test_no_json_stringify_in_clear_filter_onclick`
-- `test_clear_filter_uses_single_quoted_args`
-- `test_agg_row_onclick_has_escaped_quotes`
-- `test_no_bare_json_stringify_in_onclick_templates`
-
-Note: the pivot menu (Include/Exclude/Only/Hunt, and the row-cell/
-aggregation-row click handlers that open it) doesn't build `onclick`
-attribute strings at all - it's wired via `addEventListener` closures over
-the real column/value instead, specifically to sidestep this whole class of
-escaping bug for values that can be arbitrary attacker-influenced content
-(a log field, an HTTP header, etc). See `showPivotMenu()`'s own comment.
+### 4. No inline handlers - values travel in data attributes
+Nothing is wired through `onclick` attribute strings any more: the Content-Security-Policy is a strict `script-src 'self'` with no inline carve-out. Filter chips carry their column/value in `escapeHtml`'d `data-*` attributes, read back via `dataset` by the delegated `clear-filter`/`clear-filter-value` actions, and the pivot menu is wired with `addEventListener` closures over the real column/value - so a value that's arbitrary attacker-influenced content (a log field, an HTTP header) never passes through a JavaScript string at all. Tests enforce this in `TestFilterChipDataAttrs`.
 
 ## Running Tests
 
@@ -160,6 +149,6 @@ python3 -m unittest discover tests -v
 
 All tests must pass. The filtering-related tests are in:
 
-- `TestFilterOnclickQuoting` (4 tests)
+- `TestFilterChipDataAttrs` (4 tests)
 - `TestAdvancedModeFilterBar` (32 tests)
 - `TestSearchUI` (30 tests)

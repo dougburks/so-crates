@@ -19,7 +19,7 @@
     windows.json           # Pre-compiled Sigma rules for Windows logs
     linux.json             # Pre-compiled Sigma rules for Linux logs
   yara-rules/              # Downloaded/baked-in YARA rules
-  upload-tmp/              # Streaming-upload scratch space; swept on startup (see _cleanup_upload_tmp_dir)
+  upload-tmp/              # Streaming-upload scratch space; swept on startup (see storage.cleanup_upload_tmp_dir)
   <md5>/
     <filename>             # Original uploaded file
     .meta                  # Analysis metadata (file type, extracted name, version)
@@ -30,7 +30,7 @@
     filestore/             # Extracted files from Suricata file-store (PCAP only)
     yara_matches.json      # YARA scan results (auto-created after analysis, PCAP only)
     sigma_matches.json     # Sigma detection results (log files only)
-    file_metadata.json     # Hashes/entropy/strings/EXIF, keyed by SHA256 (standalone binary uploads and extracted PCAP filestore files)
+    file_metadata.json     # Type/MIME/entropy/strings/EXIF per extracted filestore file with no YARA match, keyed by SHA256 (PCAP only - standalone uploads keep theirs in events.db)
     fast.log               # Suricata's plaintext alert log (PCAP only)
     stats.log               # Suricata's periodic stats log (PCAP only)
     suricata.log            # Suricata's own process log (PCAP only)

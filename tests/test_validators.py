@@ -579,3 +579,84 @@ class TestZipMemberCap(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class TestSecurityValidatorsHardening(unittest.TestCase):
+    """Release-review findings: CGNAT reachable through Load from URL, and
+    IP/port values that aren't plain addresses/numbers passing validation
+    on their way into tcpdump/tshark filter expressions."""
+
+    def _blocked(self, addr):
+        import ipaddress
+        return validators._ip_is_blocked(ipaddress.ip_address(addr))
+
+    def test_cgnat_blocked(self):
+        for addr in ('100.64.0.1', '100.100.100.100', '100.127.255.254'):
+            self.assertTrue(self._blocked(addr), addr)
+        self.assertFalse(self._blocked('100.128.0.1'))
+        self.assertFalse(self._blocked('100.63.255.255'))
+
+    def test_ipv4_mapped_judged_as_ipv4(self):
+        self.assertTrue(self._blocked('::ffff:100.64.0.1'))
+        self.assertTrue(self._blocked('::ffff:127.0.0.1'))
+        self.assertFalse(self._blocked('::ffff:8.8.8.8'))
+
+    def test_validate_ip_rejects_scope_suffix(self):
+        self.assertTrue(validators.validate_ip('fe80::1'))
+        self.assertFalse(validators.validate_ip('fe80::1%eth0'))
+        self.assertFalse(validators.validate_ip('fe80::1%x or host 10.0.0.1'))
+
+    def test_validate_port_plain_digits_only(self):
+        for good in ('0', '80', '65535', 443):
+            self.assertTrue(validators.validate_port(good), repr(good))
+        for bad in ('65536', '8_0', ' 80', '80\n', '+80', '-1', '', None, '1e3', '٨٠'):
+            self.assertFalse(validators.validate_port(bad), repr(bad))
+
+
+class TestGunzipAtomically(unittest.TestCase):
+    """REGRESSION: baked-in rule archives were decompressed straight into
+    the destination, so a failure partway (disk full, a truncated archive)
+    left a partial file every later run trusted as a valid cached ruleset,
+    and a truncated archive's EOFError escaped the callers' OSError
+    handling entirely."""
+
+    def setUp(self):
+        import gzip
+        self.tmp = tempfile.mkdtemp()
+        self.src = os.path.join(self.tmp, 'rules.yar.gz')
+        self.payload = b'rule r { condition: true }\n' * 2000
+        with gzip.open(self.src, 'wb') as f:
+            f.write(self.payload)
+        os.utime(self.src, (1700000000, 1700000000))
+        self.dest = os.path.join(self.tmp, 'rules.yar')
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_success_writes_full_file_with_source_mtime(self):
+        validators.gunzip_atomically(self.src, self.dest)
+        with open(self.dest, 'rb') as f:
+            self.assertEqual(f.read(), self.payload)
+        self.assertEqual(int(os.path.getmtime(self.dest)), 1700000000)
+        self.assertFalse(os.path.exists(self.dest + '.tmp'))
+
+    def test_truncated_archive_leaves_nothing_behind(self):
+        with open(self.src, 'rb') as f:
+            data = f.read()
+        with open(self.src, 'wb') as f:
+            f.write(data[:len(data) // 2])
+        with self.assertRaises(OSError):
+            validators.gunzip_atomically(self.src, self.dest)
+        self.assertFalse(os.path.exists(self.dest))
+        self.assertFalse(os.path.exists(self.dest + '.tmp'))
+
+    def test_failure_partway_keeps_old_dest_intact(self):
+        with open(self.dest, 'wb') as f:
+            f.write(b'previous complete ruleset')
+        with unittest.mock.patch('shutil.copyfileobj', side_effect=OSError(28, 'No space left on device')):
+            with self.assertRaises(OSError):
+                validators.gunzip_atomically(self.src, self.dest)
+        with open(self.dest, 'rb') as f:
+            self.assertEqual(f.read(), b'previous complete ruleset')
+        self.assertFalse(os.path.exists(self.dest + '.tmp'))

@@ -30,7 +30,7 @@ legible against the app's own near-black UI (see CAPTION_JS's own comment).
 
 Playwright's own video muxing can only record to WebM, but that raw
 recording is treated as a discarded intermediate, not a published asset -
-it's immediately re-encoded to H.264/AAC MP4 via a system `ffmpeg` binary,
+it's immediately re-encoded to H.264 MP4 (video only - the recording has no audio) via a system `ffmpeg` binary,
 since MP4 is universally browser-supported (unlike WebM, whose Safari/iOS
 support is spotty) and is also the format required to upload the same clip
 directly to X/Instagram/LinkedIn/Facebook, none of which accept WebM. A
@@ -181,8 +181,9 @@ CAPTION_REMOVE_JS = ("() => { "
 # on the very first navigation - shows the caption from the first paint, over
 # the real page as it loads in behind it (matching what a real user actually
 # sees, rather than hiding the load behind an opaque cover - the app's own
-# inline FOUC-prevention script in <head> already applies the right theme
-# background before first paint, so there's nothing that needs covering).
+# FOUC-prevention script (static/theme-boot.js, parser-blocking in <head>)
+# already applies the right theme background before first paint, so there's
+# nothing that needs covering).
 # document.documentElement is null the instant this runs (before the HTML
 # parser creates <html>), so it retries via setTimeout rather than assuming
 # it already exists.
@@ -226,6 +227,20 @@ def find_chromium():
             return path
     return None
 
+
+
+async def _arrow_down_to(page, target, max_presses=5):
+    """Press Down until target is the keyboard selection. With nothing
+    selected yet, Down starts from the first navigable item - the filter
+    bar or the active stat card (see getVerticalNavItems in
+    static/socrates.js) - and whether something is already selected
+    depends on the steps before, so a fixed press count can stop short."""
+    for _ in range(max_presses):
+        await page.keyboard.press('ArrowDown')
+        await page.wait_for_timeout(500)
+        if await target.evaluate("el => el.classList.contains('keyboard-selected')"):
+            return
+    raise RuntimeError('Down never reached the expected toggle bar')
 
 async def caption(page, text, target=None):
     """Sets the caption text and, if target (a Playwright Locator) is
@@ -289,7 +304,7 @@ def _prewarm_sample_analysis(base_url):
     Suricata parsing the sample and loading the full ruleset, not the
     small pcap's own download time). The download itself still happens
     twice - this request downloads the sample as a real prerequisite, and
-    the recorded click downloads it again, since _fetch_url_safely has no
+    the recorded click downloads it again, since url_fetch.fetch_url_safely has no
     cache - but a several-hundred-KB pcap download is fast; it's the
     Suricata/YARA/Sigma run this actually saves.
 
@@ -529,8 +544,7 @@ async def main(base_url):
         selected = page.locator('.keyboard-selected')
         sankey_toggle = page.locator('.section-toggle-bar', has_text='Sankey Diagram').first
         if await sankey_toggle.count() > 0:
-            await page.keyboard.press('ArrowDown')
-            await page.wait_for_timeout(500)
+            await _arrow_down_to(page, sankey_toggle)
             await caption(page, "Arrow keys navigate the whole page too - Down selects the "
                                 "Sankey Diagram toggle, Enter collapses it to make room for "
                                 "the Data Table", selected)
@@ -540,8 +554,7 @@ async def main(base_url):
 
         # Expand Aggregation Tables the same way - Down moves to the next
         # toggle bar, Enter expands it.
-        await page.keyboard.press('ArrowDown')
-        await page.wait_for_timeout(500)
+        await _arrow_down_to(page, page.locator('.section-toggle-bar', has_text='Aggregation Tables').first)
         await caption(page, "Down again, Enter again - expanding Aggregation Tables", selected)
         await page.wait_for_timeout(2800)
         await page.keyboard.press('Enter')

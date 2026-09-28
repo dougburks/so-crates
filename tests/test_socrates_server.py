@@ -22,6 +22,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import config
 import db
 import socrates as server
+import analysis_cache
+import storage
+import url_fetch
+import validators
 import suricata_analyzer
 from validators import is_pcap_file
 
@@ -35,6 +39,7 @@ from validators import is_pcap_file
 _REAL_URLOPEN = urllib.request.urlopen
 
 SERVER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'socrates.py')
+STORAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'storage.py')
 SURICATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'suricata_analyzer.py')
 
 
@@ -176,7 +181,7 @@ class TestZipSlipPrevention(unittest.TestCase):
             with zipfile.ZipFile(zip_path, 'w') as zf:
                 zf.writestr('normal.txt', 'content')
             with zipfile.ZipFile(zip_path, 'r') as zf:
-                server.validate_zip_extraction(zf, tmpdir)
+                validators.validate_zip_extraction(zf, tmpdir)
 
     def test_slip_attempt(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -185,7 +190,7 @@ class TestZipSlipPrevention(unittest.TestCase):
                 zf.writestr('../../../escape.txt', 'malicious')
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 with self.assertRaises(ValueError) as ctx:
-                    server.validate_zip_extraction(zf, tmpdir)
+                    validators.validate_zip_extraction(zf, tmpdir)
                 self.assertIn('Zip slip', str(ctx.exception))
 
     def test_absolute_path_in_zip(self):
@@ -195,7 +200,7 @@ class TestZipSlipPrevention(unittest.TestCase):
                 zf.writestr('/etc/passwd', 'malicious')
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 with self.assertRaises(ValueError):
-                    server.validate_zip_extraction(zf, tmpdir)
+                    validators.validate_zip_extraction(zf, tmpdir)
 
 
 class TestURLValidation(unittest.TestCase):
@@ -206,54 +211,54 @@ class TestURLValidation(unittest.TestCase):
     @unittest.mock.patch('socket.getaddrinfo')
     def test_valid_public_url(self, mock_dns):
         mock_dns.return_value = self._addrinfo('93.184.216.34')
-        server.validate_url_safety('https://example.com/file.pcap')
+        validators.validate_url_safety('https://example.com/file.pcap')
 
     def test_blocks_localhost(self):
         with self.assertRaises(ValueError) as ctx:
-            server.validate_url_safety('http://localhost:8080/secret')
+            validators.validate_url_safety('http://localhost:8080/secret')
         self.assertIn('localhost', str(ctx.exception).lower())
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_127_0_0_1(self, mock_dns):
         mock_dns.return_value = self._addrinfo('127.0.0.1')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://127.0.0.1:8080/secret')
+            validators.validate_url_safety('http://127.0.0.1:8080/secret')
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_private_10x(self, mock_dns):
         mock_dns.return_value = self._addrinfo('10.0.0.1')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://internal.corp/file')
+            validators.validate_url_safety('http://internal.corp/file')
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_private_192x(self, mock_dns):
         mock_dns.return_value = self._addrinfo('192.168.1.1')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://router.local/file')
+            validators.validate_url_safety('http://router.local/file')
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_link_local(self, mock_dns):
         mock_dns.return_value = self._addrinfo('169.254.169.254')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://169.254.169.254/latest/meta-data/')
+            validators.validate_url_safety('http://169.254.169.254/latest/meta-data/')
 
     @unittest.mock.patch('socket.getaddrinfo')
     def test_blocks_metadata_service(self, mock_dns):
         mock_dns.return_value = self._addrinfo('169.254.169.254')
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http://169.254.169.254/latest/meta-data/')
+            validators.validate_url_safety('http://169.254.169.254/latest/meta-data/')
 
     def test_blocks_file_scheme(self):
         with self.assertRaises(ValueError):
-            server.validate_url_safety('file:///etc/passwd')
+            validators.validate_url_safety('file:///etc/passwd')
 
     def test_blocks_ftp_scheme(self):
         with self.assertRaises(ValueError):
-            server.validate_url_safety('ftp://evil.com/malware')
+            validators.validate_url_safety('ftp://evil.com/malware')
 
     def test_blocks_empty_hostname(self):
         with self.assertRaises(ValueError):
-            server.validate_url_safety('http:///path')
+            validators.validate_url_safety('http:///path')
 
 
 class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
@@ -266,7 +271,7 @@ class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
     def test_http_connection_dials_pinned_ip_not_hostname(self):
         with unittest.mock.patch('socket.create_connection') as mock_conn:
             mock_conn.return_value = unittest.mock.MagicMock()
-            conn = server._PinnedHTTPConnection('example.com', ['203.0.113.5'], 80, 5)
+            conn = url_fetch.PinnedHTTPConnection('example.com', ['203.0.113.5'], 80, 5)
             conn.connect()
             mock_conn.assert_called_once_with(('203.0.113.5', 80), 5)
 
@@ -274,7 +279,7 @@ class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
         with unittest.mock.patch('socket.create_connection') as mock_conn:
             fake_sock = unittest.mock.MagicMock()
             mock_conn.return_value = fake_sock
-            conn = server._PinnedHTTPSConnection('example.com', ['203.0.113.5'], 443, 5)
+            conn = url_fetch.PinnedHTTPSConnection('example.com', ['203.0.113.5'], 443, 5)
             conn._context = unittest.mock.MagicMock()
             conn._context.wrap_socket.return_value = unittest.mock.MagicMock()
             conn.connect()
@@ -291,7 +296,7 @@ class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
         route in the deployment environment)."""
         with unittest.mock.patch('socket.create_connection') as mock_conn:
             mock_conn.side_effect = [OSError('Network is unreachable'), unittest.mock.MagicMock()]
-            conn = server._PinnedHTTPConnection('example.com', ['2a00:1828::1', '203.0.113.5'], 80, 5)
+            conn = url_fetch.PinnedHTTPConnection('example.com', ['2a00:1828::1', '203.0.113.5'], 80, 5)
             conn.connect()
             self.assertEqual(mock_conn.call_count, 2)
             mock_conn.assert_any_call(('2a00:1828::1', 80), 5)
@@ -300,13 +305,13 @@ class TestPinnedConnectionUsesValidatedIp(unittest.TestCase):
     def test_raises_if_all_pinned_ips_unreachable(self):
         with unittest.mock.patch('socket.create_connection') as mock_conn:
             mock_conn.side_effect = OSError('Network is unreachable')
-            conn = server._PinnedHTTPConnection('example.com', ['2a00:1828::1', '203.0.113.5'], 80, 5)
+            conn = url_fetch.PinnedHTTPConnection('example.com', ['2a00:1828::1', '203.0.113.5'], 80, 5)
             with self.assertRaises(OSError):
                 conn.connect()
 
 
 class TestFetchUrlSafely(unittest.TestCase):
-    """Tests for _fetch_url_safely's SSRF protections: every hop (including
+    """Tests for url_fetch.fetch_url_safely's SSRF protections: every hop (including
     redirect targets) must be re-validated, not just the initial URL."""
 
     @classmethod
@@ -350,8 +355,8 @@ class TestFetchUrlSafely(unittest.TestCase):
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
         cls.thread.start()
 
-        # _fetch_url_safely now streams to disk under server._upload_tmp_dir()
-        # (derived from server.DATA_DIR) instead of returning bytes -- sandbox
+        # fetch_url_safely streams to disk under storage.upload_tmp_dir(),
+        # passed server.DATA_DIR, instead of returning bytes -- sandbox
         # DATA_DIR so these tests don't write into the real data directory.
         cls.tmpdir = tempfile.mkdtemp()
         cls.original_base = server.DATA_DIR
@@ -377,10 +382,10 @@ class TestFetchUrlSafely(unittest.TestCase):
         def spy_validate(url):
             validated_urls.append(url)
 
-        with unittest.mock.patch('socrates.validate_url_safety', side_effect=spy_validate), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
-            path = server._fetch_url_safely(
-                f'http://localhost:{self.port}/redirect', timeout=5, max_size=10_000_000
+        with unittest.mock.patch('url_fetch.validate_url_safety', side_effect=spy_validate), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
+            path = url_fetch.fetch_url_safely(
+                f'http://localhost:{self.port}/redirect', timeout=5, max_size=10_000_000, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
             )
         with open(path, 'rb') as f:
             self.assertEqual(f.read(), b'final-payload')
@@ -396,19 +401,19 @@ class TestFetchUrlSafely(unittest.TestCase):
             if '/final' in url:
                 raise ValueError('Access to private/internal addresses is not allowed')
 
-        with unittest.mock.patch('socrates.validate_url_safety', side_effect=spy_validate), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
+        with unittest.mock.patch('url_fetch.validate_url_safety', side_effect=spy_validate), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
             with self.assertRaises(ValueError):
-                server._fetch_url_safely(
-                    f'http://localhost:{self.port}/redirect', timeout=5, max_size=10_000_000
+                url_fetch.fetch_url_safely(
+                    f'http://localhost:{self.port}/redirect', timeout=5, max_size=10_000_000, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
                 )
 
     def test_enforces_size_limit(self):
-        with unittest.mock.patch('socrates.validate_url_safety', return_value=None), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
-            with self.assertRaises(server._FileTooLargeError):
-                server._fetch_url_safely(
-                    f'http://localhost:{self.port}/big', timeout=5, max_size=100
+        with unittest.mock.patch('url_fetch.validate_url_safety', return_value=None), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
+            with self.assertRaises(url_fetch.FileTooLargeError):
+                url_fetch.fetch_url_safely(
+                    f'http://localhost:{self.port}/big', timeout=5, max_size=100, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
                 )
         self.assertEqual(self._upload_tmp_contents(), [], 'partial download must be cleaned up on size-limit failure')
 
@@ -419,18 +424,18 @@ class TestFetchUrlSafely(unittest.TestCase):
         server could pair a redirect with an arbitrarily large (or slow-
         trickling) body and exhaust memory before Location was ever read.
         The discard must be bounded the same way."""
-        with unittest.mock.patch('socrates.validate_url_safety', return_value=None), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
-            with self.assertRaises(server._FileTooLargeError):
-                server._fetch_url_safely(
-                    f'http://localhost:{self.port}/redirect-big-body', timeout=5, max_size=100
+        with unittest.mock.patch('url_fetch.validate_url_safety', return_value=None), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
+            with self.assertRaises(url_fetch.FileTooLargeError):
+                url_fetch.fetch_url_safely(
+                    f'http://localhost:{self.port}/redirect-big-body', timeout=5, max_size=100, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
                 )
 
     def test_plain_fetch_returns_body(self):
-        with unittest.mock.patch('socrates.validate_url_safety', return_value=None), \
-             unittest.mock.patch('socrates.resolve_safe_ips', return_value=['127.0.0.1']):
-            path = server._fetch_url_safely(
-                f'http://localhost:{self.port}/final', timeout=5, max_size=10_000_000
+        with unittest.mock.patch('url_fetch.validate_url_safety', return_value=None), \
+             unittest.mock.patch('url_fetch.resolve_safe_ips', return_value=['127.0.0.1']):
+            path = url_fetch.fetch_url_safely(
+                f'http://localhost:{self.port}/final', timeout=5, max_size=10_000_000, tmp_dir=storage.upload_tmp_dir(server.DATA_DIR)
             )
         with open(path, 'rb') as f:
             self.assertEqual(f.read(), b'final-payload')
@@ -438,7 +443,7 @@ class TestFetchUrlSafely(unittest.TestCase):
 
 
 class TestCleanupUploadTmpDir(unittest.TestCase):
-    """_cleanup_upload_tmp_dir() sweeps orphaned files/dirs left behind in
+    """storage.cleanup_upload_tmp_dir() sweeps orphaned files/dirs left behind in
     upload-tmp/ by a process that died mid-upload (crash, OOM-kill, kill -9)
     before its own request-scoped cleanup could run. It's meant to run once
     at startup, before the server accepts requests - at that point anything
@@ -454,17 +459,17 @@ class TestCleanupUploadTmpDir(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_removes_leftover_files_and_directories(self):
-        upload_tmp = server._upload_tmp_dir()
-        # A leftover file (e.g. from _parse_multipart_stream/_fetch_url_safely)
+        upload_tmp = storage.upload_tmp_dir(server.DATA_DIR)
+        # A leftover file (e.g. from _parse_multipart_stream/fetch_url_safely)
         with open(os.path.join(upload_tmp, 'orphaned-upload.download'), 'wb') as f:
             f.write(b'partial data')
-        # A leftover directory (e.g. from _extract_zip_contents' tmp_dir)
+        # A leftover directory (e.g. from extract_zip_contents' tmp_dir)
         orphaned_dir = os.path.join(upload_tmp, 'orphaned-extract-dir')
         os.makedirs(orphaned_dir)
         with open(os.path.join(orphaned_dir, 'extracted.pcap'), 'wb') as f:
             f.write(b'pcap data')
 
-        server._cleanup_upload_tmp_dir()
+        storage.cleanup_upload_tmp_dir(server.DATA_DIR)
 
         self.assertEqual(os.listdir(upload_tmp), [],
                           'all leftover files and directories must be removed')
@@ -472,18 +477,19 @@ class TestCleanupUploadTmpDir(unittest.TestCase):
     def test_noop_on_empty_dir(self):
         """Must not error when upload-tmp/ is already empty (the common case
         on a clean shutdown/restart)."""
-        server._cleanup_upload_tmp_dir()
-        self.assertEqual(os.listdir(server._upload_tmp_dir()), [])
+        storage.cleanup_upload_tmp_dir(server.DATA_DIR)
+        self.assertEqual(os.listdir(storage.upload_tmp_dir(server.DATA_DIR)), [])
 
     def test_main_calls_cleanup_before_accepting_requests(self):
         """REGRESSION GUARD: the cleanup must actually be wired into main(),
         not just exist as a callable dead function."""
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
-        cleanup_call_idx = content.index('_cleanup_upload_tmp_dir()')
-        serve_forever_idx = content.index('serve_forever()')
+        main_section = content.split('\ndef main():')[1]
+        cleanup_call_idx = main_section.index('cleanup_upload_tmp_dir(DATA_DIR)')
+        serve_forever_idx = main_section.index('serve_forever()')
         self.assertLess(cleanup_call_idx, serve_forever_idx,
-                         '_cleanup_upload_tmp_dir() must run before the server starts accepting requests')
+                         'cleanup_upload_tmp_dir() must run before the server starts accepting requests')
 
 
 class TestPcapContentValidation(unittest.TestCase):
@@ -1155,7 +1161,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(body3, body1, 'unfiltered sankey-data must be served from cache, not recomputed')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_sankey_data_with_q_is_never_cached(self):
@@ -1183,7 +1189,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertNotEqual(body1, body2, 'search-filtered sankey-data must never be cached')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_aggregation_data_unfiltered_is_cached(self):
@@ -1209,7 +1215,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(body1, body2, 'unfiltered aggregation-data must be served from cache, not recomputed')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_delete_analysis_evicts_sankey_and_aggregation_cache(self):
@@ -1240,7 +1246,7 @@ class TestAPIEndpoints(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertNotEqual(body1, body2, 'delete-analysis must evict the cache, not leave stale data for a re-created md5')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_delete_all_analyses_clears_caches(self):
@@ -1256,23 +1262,23 @@ class TestAPIEndpoints(unittest.TestCase):
 
             status, body = self._get(f'/api/sankey-data?md5={md5}')
             self.assertEqual(status, 200)
-            self.assertTrue(any(k[0] == md5 for k in server._SANKEY_CACHE),
+            self.assertTrue(any(k[0] == md5 for k in analysis_cache.SANKEY_CACHE),
                              'sankey cache must be populated before delete-all')
             status, body = self._get(f'/api/aggregation-totals?md5={md5}&type=alert')
             self.assertEqual(status, 200)
-            self.assertTrue(any(k[0] == md5 for k in server._AGGREGATION_TOTALS_CACHE),
+            self.assertTrue(any(k[0] == md5 for k in analysis_cache.AGGREGATION_TOTALS_CACHE),
                              'totals cache must be populated before delete-all')
 
             status, body = self._post('/api/delete-all-analyses', {})
             self.assertEqual(status, 200)
-            self.assertFalse(any(k[0] == md5 for k in server._SANKEY_CACHE),
+            self.assertFalse(any(k[0] == md5 for k in analysis_cache.SANKEY_CACHE),
                               'delete-all-analyses must clear the sankey cache')
-            self.assertEqual(len(server._AGGREGATION_CACHE), 0,
+            self.assertEqual(len(analysis_cache.AGGREGATION_CACHE), 0,
                               'delete-all-analyses must clear the aggregation cache')
-            self.assertEqual(len(server._AGGREGATION_TOTALS_CACHE), 0,
+            self.assertEqual(len(analysis_cache.AGGREGATION_TOTALS_CACHE), 0,
                               'delete-all-analyses must clear the aggregation totals cache')
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_events_invalid_limit(self):
@@ -1873,7 +1879,7 @@ bright_magenta = "#D9B9D9"
             entry = next(a for a in json.loads(body) if a['md5'] == md5)
             self.assertEqual(entry['date_range'], {'min': '2026-01-01T00:00:00', 'max': '2026-01-01T00:05:00'})
         finally:
-            server._evict_analysis_cache(md5)
+            analysis_cache.evict_analysis_cache(md5)
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_analyses_date_range_null_before_events_db_exists(self):
@@ -2748,15 +2754,24 @@ bright_magenta = "#D9B9D9"
             shutil.rmtree(md5dir, ignore_errors=True)
 
     def test_stream_filter_uses_and_not_or(self):
-        """download-stream and hexdump-stream must use 'and port' not 'or port'
-        to avoid pulling in unrelated UDP flows sharing the same destination port."""
+        """download-stream, hexdump-stream and raw-stream must use 'and port'
+        not 'or port' to avoid pulling in unrelated UDP flows sharing the
+        same destination port - all three build it via _stream_bpf_filter."""
         import inspect
         import socrates
         source = inspect.getsource(socrates)
-        # Find the tcpdump filter lines for hexdump and download
-        self.assertIn("f'host {src} and host {dst} and port {sport} and port {dport}'", source)
-        self.assertIn("f\"host {src} and host {dst} and port {sport} and port {dport}\"", source)
-        self.assertNotIn("or port {dport}", source)
+        self.assertEqual(source.count('_stream_bpf_filter(src, sport, dst, dport)]'), 3)
+        flt = socrates._stream_bpf_filter('1.2.3.4', 1, '5.6.7.8', 2)
+        self.assertIn('host 1.2.3.4 and host 5.6.7.8 and port 1 and port 2', flt)
+        self.assertNotIn('or port', flt)
+
+    def test_stream_filter_matches_vlan_tagged_frames(self):
+        """REGRESSION: a flow inside 802.1Q-tagged frames carved to an empty
+        pcap - BPF host/port only match untagged offsets."""
+        import socrates
+        flow = 'host 1.2.3.4 and host 5.6.7.8 and port 1 and port 2'
+        self.assertEqual(socrates._stream_bpf_filter('1.2.3.4', 1, '5.6.7.8', 2),
+                         f'({flow}) or (vlan and ({flow}))')
 
     def test_upload_traversal_filename(self):
         # Use unique PCAP content to avoid collision with test_upload_same_pcap_in_different_zips
@@ -3023,6 +3038,25 @@ bright_magenta = "#D9B9D9"
         self.assertEqual(meta['detected_type'], 'pcap')
         self.assertEqual(meta['original'], 'capture.zip')
         self.assertEqual(meta['extracted'], 'inner.pcap')
+
+    def test_upload_zip_extensionless_pcap_detected_by_magic(self):
+        """REGRESSION: ZIP members were classified as pcaps by extension
+        only, so an extension-less pcap (Security Onion's so-pcap.<ts>)
+        inside a ZIP got just a YARA scan - a direct upload of the same
+        file is detected by magic bytes and gets network analysis."""
+        import io
+        import zipfile
+        import random
+        pcap_data = b'\xd4\xc3\xb2\xa1' + bytes([random.randint(0, 255) for _ in range(100)])
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w') as zf_obj:
+            zf_obj.writestr('so-pcap.1784942755', pcap_data)
+        status, body = self._post_multipart('/api/upload', 'capture.zip', zip_buffer.getvalue())
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data.get('phase'), 'network')
+        with open(os.path.join(server.DATA_DIR, data['md5'], '.meta')) as f:
+            self.assertEqual(json.load(f)['detected_type'], 'pcap')
 
     def test_upload_evtx_writes_meta_with_detected_type(self):
         """Direct EVTX upload must write .meta with detected_type 'log'."""
@@ -3328,6 +3362,57 @@ bright_magenta = "#D9B9D9"
         self.assertEqual(preserved_meta['detected_type'], original_meta['detected_type'])
         self.assertEqual(preserved_meta['original'], original_meta['original'])
         self.assertEqual(preserved_meta['extracted'], original_meta['extracted'])
+
+    def test_concurrent_reanalyze_starts_only_one(self):
+        """REGRESSION: the in-progress check and the launch weren't atomic,
+        so two concurrent reanalyze requests could both pass the check and
+        the second would delete the first's .phase lock and output."""
+        md5 = 'd' * 32
+        dir_path = os.path.join(server.DATA_DIR, md5)
+        os.makedirs(dir_path, exist_ok=True)
+        with open(os.path.join(dir_path, 'capture.pcap'), 'wb') as f:
+            f.write(b'\xd4\xc3\xb2\xa1' + b'\x00' * 20)
+        launches = []
+        def slow_spawn(d, *a, **k):
+            time.sleep(0.4)   # widen the window a racing request would hit
+            with open(os.path.join(d, '.phase'), 'w') as f:
+                f.write('network')
+            launches.append(d)
+            return True
+        results = []
+        with unittest.mock.patch.object(server, 'spawn_suricata', side_effect=slow_spawn):
+            threads = [threading.Thread(target=lambda: results.append(
+                self._post('/api/reanalyze', {'md5': md5})[0])) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(sorted(results), [200, 409])
+        self.assertEqual(len(launches), 1)
+        shutil.rmtree(dir_path)
+
+    def test_reanalyze_detects_log_by_content(self):
+        """REGRESSION: reanalyze chose log vs binary by extension only, so a
+        log upload recognized by its content (JSON with no log extension)
+        was Sigma-analyzed at upload, then YARA-scanned as a binary on
+        reanalyze."""
+        md5 = 'c' * 32
+        dir_path = os.path.join(server.DATA_DIR, md5)
+        os.makedirs(dir_path, exist_ok=True)
+        with open(os.path.join(dir_path, 'export'), 'wb') as f:
+            f.write(b'{"EventID": 1, "Channel": "Security"}\n')
+        with open(os.path.join(dir_path, 'events.db'), 'w') as f:
+            f.write('')
+        calls = []
+        with unittest.mock.patch.object(server.Handler, '_analyze_log_file',
+                                        lambda self, *a: calls.append('log')), \
+             unittest.mock.patch.object(server.Handler, '_analyze_standalone_file',
+                                        lambda self, *a: calls.append('binary')):
+            status, body = self._post('/api/reanalyze', {'md5': md5})
+        self.assertEqual(status, 200)
+        self.assertEqual(calls, ['log'])
+        self.assertEqual(json.loads(body)['phase'], 'logs')
+        shutil.rmtree(dir_path)
 
     def test_reanalyze_rewrites_meta(self):
         """Re-analyzing must rewrite .meta with the same detected_type after cleanup."""
@@ -3678,14 +3763,14 @@ bright_magenta = "#D9B9D9"
             zf_obj.writestr('bad.bin', b'unreadable')
         zip_data = zip_buffer.getvalue()
 
-        real_hash_with_prefix = server._hash_file_with_prefix
+        real_hash_with_prefix = storage.hash_file_with_prefix
 
         def flaky_hash_with_prefix(path, *args, **kwargs):
             if os.path.basename(path) == 'bad.bin':
                 raise OSError('simulated failure')
             return real_hash_with_prefix(path, *args, **kwargs)
 
-        with unittest.mock.patch('socrates._hash_file_with_prefix', side_effect=flaky_hash_with_prefix):
+        with unittest.mock.patch('socrates.hash_file_with_prefix', side_effect=flaky_hash_with_prefix):
             status, body = self._post_multipart('/api/upload', 'flaky.zip', zip_data)
         self.assertEqual(status, 200)
         data = json.loads(body)
@@ -3697,19 +3782,21 @@ bright_magenta = "#D9B9D9"
         """Upload handler code must attempt common passwords before rejecting protected ZIPs."""
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
+        with open(STORAGE_FILE, 'r') as f:
+            storage_content = f.read()
         # Verify shared extraction helper exists
-        self.assertIn("def _attempt_zip_extract(zip_ref, extract_dir, passwords, max_size=None):", content,
-                      'Must define _attempt_zip_extract helper')
-        helper_section = content.split("def _attempt_zip_extract(zip_ref, extract_dir, passwords, max_size=None):")[1].split("def extract_pcap_from_zip(")[0]
+        self.assertIn("def attempt_zip_extract(zip_ref, extract_dir, passwords, max_size=None):", storage_content,
+                      'Must define attempt_zip_extract helper')
+        helper_section = storage_content.split("def attempt_zip_extract(zip_ref, extract_dir, passwords, max_size=None):")[1].split("\ndef ")[0]
         # Should try no password first
         self.assertIn("zip_ref.extractall(extract_dir)", helper_section,
                       'Must attempt extraction without password')
         # Should try provided passwords
         self.assertIn("for pwd in passwords:", helper_section,
                       'Must loop over candidate passwords')
-        # Verify _extract_zip_contents uses the shared helper
-        self.assertIn("_attempt_zip_extract(zip_ref, extract_dir, passwords, max_size)", content,
-                      '_extract_zip_contents must delegate to _attempt_zip_extract')
+        # Verify extract_zip_contents uses the shared helper
+        self.assertIn("attempt_zip_extract(zip_ref, extract_dir, passwords, max_size)", storage_content,
+                      'extract_zip_contents must delegate to attempt_zip_extract')
         # Upload handler should derive passwords from filename
         upload_section = content.split("def handle_post_upload(self):")[1].split("def handle_post_load_url(self):")[0]
         self.assertIn("passwords = [b'infected']", upload_section,
@@ -3718,10 +3805,10 @@ bright_magenta = "#D9B9D9"
                       'Must derive date-based password from filename')
         self.assertIn("'infected_{year}{month}{day}'.encode()", upload_section,
                       'Must construct MTA-style date password')
-        # _process_uploaded_file must call _extract_zip_contents
+        # _process_uploaded_file must call extract_zip_contents
         process_section = content.split("def _process_uploaded_file(self,")[1].split("def handle_post_upload(self):")[0]
-        self.assertIn("_extract_zip_contents(src_path, tmp_dir, passwords or [], effective_max)", process_section,
-                      'Must call _extract_zip_contents helper')
+        self.assertIn("extract_zip_contents(src_path, tmp_dir, passwords or [], effective_max)", process_section,
+                      'Must call extract_zip_contents helper')
 
     def test_load_url_tries_password_protected_zips(self):
         """load-url handler must always try the plain 'infected' password (cheap, harmless
@@ -5233,7 +5320,7 @@ class TestFindPcapFile(unittest.TestCase):
     """REGRESSION: some real pcaps have no recognized extension at all (e.g.
     Security Onion's so-pcap.<timestamp> downloads) -- they were still
     correctly detected and ingested as pcaps at upload time via magic-byte
-    sniffing (is_pcap_file), so _find_pcap_file must use the same detection
+    sniffing (is_pcap_file), so storage.find_pcap_file must use the same detection
     method as a fallback rather than relying on the filename extension
     alone. Previously, extension-only lookups caused 'No pcap file found'
     on the ASCII Transcript/Hexdump/Download-stream views, a wrong filename
@@ -5251,14 +5338,14 @@ class TestFindPcapFile(unittest.TestCase):
     def test_finds_file_with_recognized_extension(self):
         with open(os.path.join(self.tmpdir, 'capture.pcap'), 'wb') as f:
             f.write(self.PCAP_MAGIC)
-        self.assertEqual(server._find_pcap_file(self.tmpdir), 'capture.pcap')
+        self.assertEqual(storage.find_pcap_file(self.tmpdir), 'capture.pcap')
 
     def test_falls_back_to_magic_bytes_when_extension_missing(self):
         """The exact real-world case: a pcap named like a Security Onion
         download, with no recognized extension."""
         with open(os.path.join(self.tmpdir, 'so-pcap.1784903949'), 'wb') as f:
             f.write(self.PCAP_MAGIC)
-        self.assertEqual(server._find_pcap_file(self.tmpdir), 'so-pcap.1784903949')
+        self.assertEqual(storage.find_pcap_file(self.tmpdir), 'so-pcap.1784903949')
 
     def test_extension_match_preferred_over_magic_byte_scan(self):
         """When both exist, the fast extension-based match wins without
@@ -5267,7 +5354,7 @@ class TestFindPcapFile(unittest.TestCase):
             f.write(self.PCAP_MAGIC)
         with open(os.path.join(self.tmpdir, 'other-file'), 'wb') as f:
             f.write(self.PCAP_MAGIC)
-        self.assertEqual(server._find_pcap_file(self.tmpdir), 'capture.pcap')
+        self.assertEqual(storage.find_pcap_file(self.tmpdir), 'capture.pcap')
 
     def test_ignores_artifacts_and_hidden_files_during_fallback_scan(self):
         with open(os.path.join(self.tmpdir, 'eve.json'), 'w') as f:
@@ -5276,15 +5363,15 @@ class TestFindPcapFile(unittest.TestCase):
             f.write(self.PCAP_MAGIC)
         with open(os.path.join(self.tmpdir, 'name.txt'), 'w') as f:
             f.write('so-pcap.1784903949')
-        self.assertIsNone(server._find_pcap_file(self.tmpdir))
+        self.assertIsNone(storage.find_pcap_file(self.tmpdir))
 
     def test_returns_none_when_no_pcap_present(self):
         with open(os.path.join(self.tmpdir, 'not-a-pcap.txt'), 'w') as f:
             f.write('just some text')
-        self.assertIsNone(server._find_pcap_file(self.tmpdir))
+        self.assertIsNone(storage.find_pcap_file(self.tmpdir))
 
     def test_returns_none_for_missing_directory(self):
-        self.assertIsNone(server._find_pcap_file(os.path.join(self.tmpdir, 'does-not-exist')))
+        self.assertIsNone(storage.find_pcap_file(os.path.join(self.tmpdir, 'does-not-exist')))
 
     def test_skips_subdirectories_during_fallback_scan(self):
         """The filestore/ directory (extracted YARA-scanned files) must not
@@ -5292,7 +5379,7 @@ class TestFindPcapFile(unittest.TestCase):
         os.makedirs(os.path.join(self.tmpdir, 'filestore'))
         with open(os.path.join(self.tmpdir, 'so-pcap.123'), 'wb') as f:
             f.write(self.PCAP_MAGIC)
-        self.assertEqual(server._find_pcap_file(self.tmpdir), 'so-pcap.123')
+        self.assertEqual(storage.find_pcap_file(self.tmpdir), 'so-pcap.123')
 
 
 class TestReanalyzeEndpoint(unittest.TestCase):
@@ -5307,8 +5394,10 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         """Verify reanalyze removes eve.json, events.db, .phase, .error, yara_matches.json, sigma_matches.json, .meta, and file_metadata.json."""
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
-        # Artifact lists are centralized in module-level constants
-        self.assertIn("PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json')", content,
+        with open(STORAGE_FILE, 'r') as f:
+            storage_content = f.read()
+        # Artifact lists are centralized in storage.py's module-level constants
+        self.assertIn("PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json', 'fast.log', 'stats.log', 'suricata.log')", storage_content,
                       'PCAP artifact list must be centralized in PCAP_ANALYSIS_ARTIFACTS')
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
         # The actual per-artifact loop lives in the shared _remove_artifacts
@@ -5330,9 +5419,9 @@ class TestReanalyzeEndpoint(unittest.TestCase):
             content = f.read()
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
         # Must evict before the artifact-deletion call, not after.
-        evict_pos = reanalyze_section.find('_evict_analysis_cache(md5)')
+        evict_pos = reanalyze_section.find('evict_analysis_cache(md5)')
         removal_pos = reanalyze_section.find('self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)')
-        self.assertNotEqual(evict_pos, -1, 'reanalyze must call _evict_analysis_cache(md5)')
+        self.assertNotEqual(evict_pos, -1, 'reanalyze must call evict_analysis_cache(md5)')
         self.assertLess(evict_pos, removal_pos,
                          'cache eviction must happen before events.db is deleted/rebuilt')
 
@@ -5344,8 +5433,10 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         # is ever called with from handle_post_reanalyze, and reanalyze must
         # never rmtree the whole analysis directory (only the filestore
         # subdirectory is allowed to be rmtree'd).
-        pcap_artifacts_line = content.split('PCAP_ANALYSIS_ARTIFACTS = ')[1].split('\n')[0]
-        file_artifacts_line = content.split('FILE_ANALYSIS_ARTIFACTS = ')[1].split('\n')[0]
+        with open(STORAGE_FILE, 'r') as f:
+            storage_content = f.read()
+        pcap_artifacts_line = storage_content.split('PCAP_ANALYSIS_ARTIFACTS = ')[1].split('\n')[0]
+        file_artifacts_line = storage_content.split('FILE_ANALYSIS_ARTIFACTS = ')[1].split('\n')[0]
         self.assertNotIn('name.txt', pcap_artifacts_line,
                          'PCAP_ANALYSIS_ARTIFACTS must not include name.txt')
         self.assertNotIn('name.txt', file_artifacts_line,
@@ -5376,9 +5467,11 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
         self.assertIn("self._non_artifact_files(dir_path, pcap_file=pcap_file)", reanalyze_section,
                       'reanalyze must use the shared _non_artifact_files() helper for file selection')
-        self.assertIn("'zircolite.log'", content,
+        with open(STORAGE_FILE, 'r') as f:
+            storage_content = f.read()
+        self.assertIn("'zircolite.log'", storage_content,
                       'zircolite.log must be excluded (via FILE_ANALYSIS_ARTIFACTS, checked by _non_artifact_files)')
-        self.assertIn("'.zircolite_events.db'", content,
+        self.assertIn("'.zircolite_events.db'", storage_content,
                       '.zircolite_events.db must be excluded (via FILE_ANALYSIS_ARTIFACTS, checked by _non_artifact_files)')
 
     def test_reanalyze_returns_409_if_already_processing(self):
@@ -6319,33 +6412,33 @@ class TestZipBombPrevention(unittest.TestCase):
 
 
 class TestResolveUploadSizeLimit(unittest.TestCase):
-    """Tests for _resolve_upload_size_limit, which mirrors _parse_pagination's
+    """Tests for storage.resolve_upload_size_limit, which mirrors _parse_pagination's
     clamping semantics for the user-configurable upload-size setting."""
 
     def test_valid_value_under_ceiling(self):
-        self.assertEqual(server._resolve_upload_size_limit(2000 * 1024 * 1024), 2000 * 1024 * 1024)
+        self.assertEqual(storage.resolve_upload_size_limit(2000 * 1024 * 1024), 2000 * 1024 * 1024)
 
     def test_missing_falls_back_to_default(self):
-        self.assertEqual(server._resolve_upload_size_limit(None), config.DEFAULT_UPLOAD_SIZE)
+        self.assertEqual(storage.resolve_upload_size_limit(None), config.DEFAULT_UPLOAD_SIZE)
 
     def test_malformed_falls_back_to_default(self):
-        self.assertEqual(server._resolve_upload_size_limit('not-a-number'), config.DEFAULT_UPLOAD_SIZE)
+        self.assertEqual(storage.resolve_upload_size_limit('not-a-number'), config.DEFAULT_UPLOAD_SIZE)
 
     def test_negative_falls_back_to_default(self):
-        self.assertEqual(server._resolve_upload_size_limit(-5), config.DEFAULT_UPLOAD_SIZE)
+        self.assertEqual(storage.resolve_upload_size_limit(-5), config.DEFAULT_UPLOAD_SIZE)
 
     def test_zero_falls_back_to_default(self):
-        self.assertEqual(server._resolve_upload_size_limit(0), config.DEFAULT_UPLOAD_SIZE)
+        self.assertEqual(storage.resolve_upload_size_limit(0), config.DEFAULT_UPLOAD_SIZE)
 
     def test_over_ceiling_clamped(self):
         self.assertEqual(
-            server._resolve_upload_size_limit(config.MAX_UPLOAD_SIZE + 1000),
+            storage.resolve_upload_size_limit(config.MAX_UPLOAD_SIZE + 1000),
             config.MAX_UPLOAD_SIZE,
         )
 
     def test_string_of_valid_number_accepted(self):
         """Header values arrive as strings -- must parse cleanly."""
-        self.assertEqual(server._resolve_upload_size_limit('2000000000'), 2000000000)
+        self.assertEqual(storage.resolve_upload_size_limit('2000000000'), 2000000000)
 
 
 class TestCheckDiskSpace(unittest.TestCase):
@@ -6751,6 +6844,54 @@ class TestDockerfile(unittest.TestCase):
         self.assertEqual(content.count('FROM debian:13-slim'), 3,
                           'Dockerfile must have exactly three build stages')
 
+    def test_zircolite_version_matches_config(self):
+        """The Dockerfile's pinned Zircolite tag and config.ZIRCOLITE_VERSION
+        (shown in the "install with" hint) are separate literals - keep
+        them from drifting apart."""
+        with open(DOCKERFILE, 'r') as f:
+            content = f.read()
+        m = re.search(r'--branch v([0-9][0-9.]*)\s', content)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), config.ZIRCOLITE_VERSION)
+
+    def test_every_app_module_copied_into_image(self):
+        """A top-level module missing from the final stage's COPY line only
+        fails at import time inside the built image - catch it here."""
+        import glob
+        with open(DOCKERFILE, 'r') as f:
+            content = f.read()
+        copy_line = [l for l in content.split('\n') if l.startswith('COPY config.py ')]
+        self.assertEqual(len(copy_line), 1)
+        root = os.path.dirname(DOCKERFILE)
+        for path in glob.glob(os.path.join(root, '*.py')):
+            self.assertIn(' ' + os.path.basename(path) + ' ', copy_line[0], path)
+
+    def test_pip_removed_from_zircolite_venv(self):
+        """pip is only needed to build the venv - it's uninstalled in the
+        builder stage, after the requirements install, so the final image
+        doesn't carry it."""
+        with open(DOCKERFILE, 'r') as f:
+            content = f.read()
+        install = content.index('/usr/local/lib/zircolite-venv/bin/pip install')
+        uninstall = content.index('/usr/local/lib/zircolite-venv/bin/pip uninstall -y pip')
+        self.assertLess(install, uninstall)
+
+    def test_cyberchef_baked_from_resources_builder(self):
+        """The bundled CyberChef is downloaded by the shared
+        resources-builder stage (not a stage of its own - see
+        test_dockerfile_uses_multistage_build) and copied to the path
+        cyberchef.CYBERCHEF_DIR defaults to; unzip stays build-only."""
+        import re
+        import cyberchef
+        with open(DOCKERFILE, 'r') as f:
+            content = f.read()
+        self.assertIn('RUN sh /tmp/fetch-cyberchef.sh /tmp/cyberchef-out', content)
+        final_stage = self._dockerfile_final_stage()
+        self.assertIn(f'COPY --from=resources-builder /tmp/cyberchef-out/ {cyberchef.CYBERCHEF_DIR}/',
+                      final_stage)
+        self.assertIsNone(re.search(r'^\s+unzip\s*\\?$', final_stage, re.MULTILINE),
+                          'unzip must not be installed in the final runtime stage')
+
     def test_build_toolchain_absent_from_final_stage(self):
         """REGRESSION: the Rust/build toolchain used to compile the
         Zircolite venv must not be installed in the final runtime stage."""
@@ -7130,7 +7271,7 @@ class TestNonArtifactFiles(unittest.TestCase):
 
     def test_pcap_file_param_excluded_by_exact_name(self):
         """An extension-less pcap (detected via magic bytes by
-        _find_pcap_file(), not this function's own PCAP_EXTENSIONS check)
+        find_pcap_file(), not this function's own PCAP_EXTENSIONS check)
         must still be excludable by passing its name explicitly."""
         open(os.path.join(self.tmpdir, 'so-pcap.1234567890'), 'w').close()
         open(os.path.join(self.tmpdir, 'real-upload.bin'), 'w').close()
@@ -7203,6 +7344,34 @@ class TestIngressDefenses(unittest.TestCase):
                                        'Content-Type': 'application/json'},
                               body=b'{}')
         self.assertEqual(status, 403)
+
+    def test_delete_all_requires_json_content_type(self):
+        """REGRESSION: delete-all never read its body, so it skipped the
+        application/json requirement that blocks cross-site "simple"
+        POSTs - on the most destructive endpoint."""
+        victim = os.path.join(self.tmpdir, 'e' * 32)
+        os.makedirs(victim, exist_ok=True)
+        status, _ = self._raw('POST', '/api/delete-all-analyses',
+                              headers={'Content-Type': 'text/plain'}, body=b'x')
+        self.assertEqual(status, 415)
+        self.assertTrue(os.path.isdir(victim))
+        status, _ = self._raw('POST', '/api/delete-all-analyses', body=b'')
+        self.assertEqual(status, 415)
+        self.assertTrue(os.path.isdir(victim))
+        shutil.rmtree(victim)
+
+    def test_delete_all_error_has_no_server_paths(self):
+        victim = os.path.join(self.tmpdir, 'f' * 32)
+        os.makedirs(victim, exist_ok=True)
+        def fail(path, *a, **k):
+            raise PermissionError(13, 'Permission denied', path)
+        with unittest.mock.patch.object(server.shutil, 'rmtree', side_effect=fail):
+            status, body = self._raw('POST', '/api/delete-all-analyses',
+                                     headers={'Content-Type': 'application/json'}, body=b'{}')
+        self.assertEqual(status, 500)
+        self.assertNotIn(self.tmpdir, body)
+        self.assertIn('f' * 32, body)
+        shutil.rmtree(victim)
 
     def test_wildcard_allowed_hosts_matches_subdomains(self):
         """REGRESSION: proxied environments (Killercoda, Codespaces) serve
@@ -7399,6 +7568,502 @@ class TestCSPEnforced(unittest.TestCase):
             headers={'Content-Type': 'application/csp-report'})
         with urllib.request.urlopen(req, timeout=5) as resp:
             self.assertEqual(resp.status, 204)
+
+
+class TestHeadRequests(unittest.TestCase):
+    """REGRESSION: the inherited SimpleHTTPRequestHandler.do_HEAD served
+    from the working directory with none of do_GET's checks - HEAD
+    /socrates.py answered 200. HEAD is now refused everywhere."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.original_base = server.DATA_DIR
+        server.DATA_DIR = cls.tmpdir
+        cls.port = 23000 + (os.getpid() % 1000)
+        cls.server = server.ThreadedTCPServer(('127.0.0.1', cls.port), server.Handler)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        server.DATA_DIR = cls.original_base
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _head(self, path):
+        import http.client
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        try:
+            conn.request('HEAD', path)
+            resp = conn.getresponse()
+            return resp.status, resp.headers, resp.read()
+        finally:
+            conn.close()
+
+    def test_head_refused_everywhere(self):
+        for path in ('/socrates.py', '/config.py', '/socrates.html', '/static/socrates.css',
+                     '/api/version', '/cyberchef/', '/'):
+            status, headers, body = self._head(path)
+            self.assertEqual(status, 405, path)
+            self.assertEqual(headers['Allow'], 'GET, POST', path)
+            self.assertEqual(body, b'', path)
+
+    def test_get_unaffected(self):
+        import urllib.request
+        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/socrates.html', timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+
+
+class TestSigtermShutdown(unittest.TestCase):
+    """In the container python3 is PID 1, which gets no default SIGTERM
+    action - 'podman stop' waited out its full 10s grace period and then
+    SIGKILLed. Run the real serving loop in a child process: with the
+    handler it exits 0 promptly; without it, SIGTERM would kill it (-15)."""
+
+    def _start(self, extra=''):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        code = f"""
+import os, sys, threading
+sys.path.insert(0, {root!r}); os.chdir({root!r})
+import socrates
+socrates.DATA_DIR = {tempfile.mkdtemp()!r}
+socrates._install_sigterm_handler()
+{extra}
+with socrates.ThreadedTCPServer(('127.0.0.1', 0), socrates.Handler) as httpd:
+    print(httpd.server_address[1], flush=True)
+    httpd.serve_forever()
+"""
+        proc = subprocess.Popen([sys.executable, '-c', code], stdout=subprocess.PIPE, text=True)
+        port = int(proc.stdout.readline())
+        return proc, port
+
+    def _stop_and_time(self, proc):
+        import signal
+        start = time.time()
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()  # don't leave a live server behind a failing test
+            proc.wait()
+            raise
+        return proc.returncode, time.time() - start
+
+    def test_sigterm_exits_cleanly_and_promptly(self):
+        import urllib.request
+        proc, port = self._start()
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/version', timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+        rc, elapsed = self._stop_and_time(proc)
+        self.assertEqual(rc, 0)
+        self.assertLess(elapsed, 3)
+
+    def test_pending_run_capped_timer_does_not_delay_exit(self):
+        """A stream request's _run_capped timeout timer still pending at
+        shutdown must not hold the process open until it fires."""
+        proc, port = self._start(extra=(
+            "threading.Thread(target=socrates._run_capped, args=(['sleep', '20'], 1024, 20), daemon=True).start()"))
+        time.sleep(0.5)
+        rc, elapsed = self._stop_and_time(proc)
+        self.assertEqual(rc, 0)
+        self.assertLess(elapsed, 3)
+
+
+class TestArtifactNamesReserved(unittest.TestCase):
+    """validators.RESERVED_FILENAMES says to keep it in sync with the
+    artifact lists - an upload sharing an artifact's name would be
+    overwritten mid-scan, or deleted by reanalyze's sweep. Nothing checked
+    that until Suricata's own logs turned out to be in neither."""
+
+    def test_every_artifact_is_a_reserved_upload_name(self):
+        from validators import RESERVED_FILENAMES
+        for name in server.PCAP_ANALYSIS_ARTIFACTS + server.FILE_ANALYSIS_ARTIFACTS:
+            self.assertIn(name, RESERVED_FILENAMES, name)
+
+    def test_suricata_logs_removed_on_reanalyze(self):
+        for name in ('fast.log', 'stats.log', 'suricata.log'):
+            self.assertIn(name, server.PCAP_ANALYSIS_ARTIFACTS)
+            from validators import RESERVED_FILENAMES
+            self.assertIn(name, RESERVED_FILENAMES)
+
+
+class TestRuleUpdateErrorSanitized(unittest.TestCase):
+    def test_update_error_has_no_server_paths(self):
+        """/api/rule-update-status serves this text to the browser."""
+        path = os.path.join(server.DATA_DIR, 'yara', 'rules.yar')
+        with unittest.mock.patch.object(server, 'setup_yara_rules',
+                                        side_effect=OSError(28, 'No space left on device', path)):
+            server._run_ruleset_update('yara')
+        state = server._rule_update_state['yara']
+        self.assertIn('No space left on device', state['error'])
+        self.assertNotIn(server.DATA_DIR, state['error'])
+        self.assertFalse(any(server.DATA_DIR in line for line in state['lines']))
+
+
+class TestCyberChefCSP(unittest.TestCase):
+    """cyberchef.build_csp() - pure function, no server needed."""
+
+    INDEX = ('<html><head><script type=application/javascript>var a=1;</script>'
+             '<script defer src=assets/main.js></script></head><body>'
+             '<script type="text/javascript">\n  var b=2;\n</script></body></html>')
+
+    def _sha(self, body):
+        import base64
+        return "'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'"
+
+    def test_hashes_each_inline_script_exactly(self):
+        import cyberchef
+        csp = cyberchef.build_csp(self.INDEX)
+        # Whitespace is part of what the browser hashes - no stripping.
+        self.assertIn(self._sha('var a=1;'), csp)
+        self.assertIn(self._sha('\n  var b=2;\n'), csp)
+
+    def test_src_script_not_hashed_and_not_merged_with_next(self):
+        """REGRESSION: an empty <script src=...></script> must not be
+        matched together with the following inline script's body."""
+        import cyberchef
+        script_src = [d for d in cyberchef.build_csp(self.INDEX).split(';')
+                      if d.strip().startswith('script-src')][0]
+        self.assertEqual(script_src.count("'sha256-"), 2)
+
+    def test_no_unsafe_inline_script(self):
+        import cyberchef
+        script_src = [d for d in cyberchef.build_csp(self.INDEX).split(';')
+                      if d.strip().startswith('script-src')][0]
+        self.assertNotIn('unsafe-inline', script_src)
+
+    def test_missing_copy_still_gets_valid_policy(self):
+        import cyberchef
+        missing = os.path.join(tempfile.mkdtemp(), 'nope')
+        csp = cyberchef.get_csp(missing)
+        self.assertIn("default-src 'self'", csp)
+        self.assertNotIn("'sha256-", csp)
+
+
+class TestCyberChefExpectedCSPViolation(unittest.TestCase):
+    """The Bombe loading animation's frame-src report is expected on every
+    /cyberchef/ load and must not be logged; everything else still is."""
+
+    # Captured from Chromium opening /cyberchef/ (original-policy trimmed).
+    BOMBE = {
+        'document-uri': 'http://127.0.0.1:8000/cyberchef/', 'referrer': '',
+        'violated-directive': 'frame-src', 'effective-directive': 'frame-src',
+        'original-policy': "default-src 'self'; report-uri /api/csp-report;",
+        'disposition': 'enforce', 'blocked-uri': '', 'line-number': 2,
+        'column-number': 240984, 'source-file': 'http://127.0.0.1:8000/cyberchef/assets/main.js',
+        'status-code': 200, 'script-sample': '',
+    }
+
+    def test_bombe_report_is_expected(self):
+        import cyberchef
+        self.assertTrue(cyberchef.is_expected_csp_violation(self.BOMBE))
+
+    def test_bombe_report_without_source_or_with_data_scheme_is_expected(self):
+        import cyberchef
+        report = dict(self.BOMBE, **{'blocked-uri': 'data'})
+        del report['source-file'], report['line-number'], report['effective-directive']
+        self.assertTrue(cyberchef.is_expected_csp_violation(report))
+
+    def test_other_reports_are_not_expected(self):
+        import cyberchef
+        for change in (
+            {'document-uri': 'http://127.0.0.1:8000/socrates.html'},
+            {'violated-directive': 'script-src', 'effective-directive': 'script-src'},
+            {'blocked-uri': 'https://evil.example/frame'},
+            {'document-uri': ''},
+        ):
+            with self.subTest(change=change):
+                self.assertFalse(cyberchef.is_expected_csp_violation(dict(self.BOMBE, **change)))
+        self.assertFalse(cyberchef.is_expected_csp_violation({}))
+
+    def test_handler_skips_only_the_expected_report(self):
+        import contextlib
+        import io as _io
+        handler = server.Handler.__new__(server.Handler)
+        handler.send_response = lambda code: None
+        handler.end_headers = lambda: None
+        server.Handler._CSP_REPORTS_SEEN.clear()
+        for report, logged in ((self.BOMBE, False),
+                               (dict(self.BOMBE, **{'document-uri': 'http://x/socrates.html'}), True)):
+            handler._read_post_body = lambda limit, r=report: json.dumps({'csp-report': r}).encode()
+            out = _io.StringIO()
+            with contextlib.redirect_stdout(out):
+                handler.handle_post_csp_report()
+            self.assertEqual('CSP report:' in out.getvalue(), logged, report['document-uri'])
+
+
+class TestCyberChefServing(unittest.TestCase):
+    """/cyberchef/ serves the bundled copy from CYBERCHEF_DIR with its own
+    CSP, and nothing else about the app's serving changes."""
+
+    INDEX = '<html><script>var x=1;</script><script defer src=assets/main.js></script></html>'
+
+    @classmethod
+    def setUpClass(cls):
+        import cyberchef
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.original_base = server.DATA_DIR
+        server.DATA_DIR = cls.tmpdir
+        cls.ccdir = os.path.join(cls.tmpdir, 'cyberchef')
+        os.makedirs(os.path.join(cls.ccdir, 'assets'))
+        with open(os.path.join(cls.ccdir, 'index.html'), 'w') as f:
+            f.write(cls.INDEX)
+        with open(os.path.join(cls.ccdir, 'assets', 'main.js'), 'w') as f:
+            f.write('window.app={};')
+        cls.original_ccdir = cyberchef.CYBERCHEF_DIR
+        cyberchef.CYBERCHEF_DIR = cls.ccdir
+        cls.port = 21000 + (os.getpid() % 1000)
+        cls.server = server.ThreadedTCPServer(('127.0.0.1', cls.port), server.Handler)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        import cyberchef
+        cls.server.shutdown()
+        cls.server.server_close()
+        cyberchef.CYBERCHEF_DIR = cls.original_ccdir
+        server.DATA_DIR = cls.original_base
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _raw(self, path):
+        import http.client
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        try:
+            conn.request('GET', path)
+            resp = conn.getresponse()
+            # resp.headers, not a dict: the stdlib handler sends 'Content-type'.
+            return resp.status, resp.headers, resp.read().decode()
+        finally:
+            conn.close()
+
+    def test_bare_path_redirects_to_directory(self):
+        status, headers, _ = self._raw('/cyberchef')
+        self.assertEqual(status, 301)
+        self.assertEqual(headers.get('Location'), '/cyberchef/')
+
+    def test_index_served_with_cyberchef_csp(self):
+        import cyberchef
+        status, headers, body = self._raw('/cyberchef/')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, self.INDEX)
+        self.assertEqual(headers.get('Content-Security-Policy'), cyberchef.build_csp(self.INDEX))
+        self.assertEqual(headers.get('X-Frame-Options'), 'DENY')
+        self.assertEqual(headers.get('Cache-Control'), 'no-cache')
+
+    def test_asset_served(self):
+        status, headers, body = self._raw('/cyberchef/assets/main.js')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, 'window.app={};')
+        self.assertIn('javascript', headers.get('Content-Type', ''))
+
+    def test_app_pages_keep_strict_csp(self):
+        for path in ('/socrates.html', '/static/socrates.css'):
+            status, headers, _ = self._raw(path)
+            self.assertEqual(status, 200, path)
+            script_src = [d.strip() for d in headers['Content-Security-Policy'].split(';')
+                          if d.strip().startswith('script-src')]
+            self.assertEqual(script_src, ["script-src 'self'"], path)
+
+    def test_traversal_rejected(self):
+        for path in ('/cyberchef/%2e%2e/socrates.py', '/cyberchef/../socrates.py',
+                     '/cyberchef/..%2fconfig.py', '/cyberchef/%2e%2e/%2e%2e/etc/passwd'):
+            status, _, body = self._raw(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn('import', body, path)
+
+    def test_does_not_serve_app_directory(self):
+        """CyberChef paths resolve inside CYBERCHEF_DIR, never the app's
+        own working directory."""
+        status, _, _ = self._raw('/cyberchef/socrates.py')
+        self.assertEqual(status, 404)
+
+    def test_no_directory_listings(self):
+        for path in ('/cyberchef/assets/', '/static/'):
+            status, _, body = self._raw(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn('Directory listing', body, path)
+
+
+class TestRawBytesEndpoints(unittest.TestCase):
+    """/api/raw-stream and /api/extracted-file return exact bytes, against
+    a real (hand-built) pcap and a filestore laid out the way Suricata's
+    file-store v2 writes one."""
+
+    MD5 = 'b' * 32
+    FILE_BYTES = b'MZ\x90\x00' + bytes(range(256)) + b'\xff\xfe'
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.pcap_fixtures import write_http_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.original_base = server.DATA_DIR
+        server.DATA_DIR = cls.tmpdir
+        cls.dir_path = os.path.join(cls.tmpdir, cls.MD5)
+        os.makedirs(cls.dir_path)
+        write_http_pcap(os.path.join(cls.dir_path, 'capture.pcap'))
+        cls.sha256 = hashlib.sha256(cls.FILE_BYTES).hexdigest()
+        store = os.path.join(cls.dir_path, 'filestore', cls.sha256[:2])
+        os.makedirs(store)
+        with open(os.path.join(store, cls.sha256), 'wb') as f:
+            f.write(cls.FILE_BYTES)
+        # A file outside the filestore, and a symlink inside it pointing there.
+        cls.outside = os.path.join(cls.tmpdir, 'secret.txt')
+        with open(cls.outside, 'wb') as f:
+            f.write(b'secret')
+        cls.link_sha = 'c' * 64
+        os.makedirs(os.path.join(cls.dir_path, 'filestore', 'cc'))
+        os.symlink(cls.outside, os.path.join(cls.dir_path, 'filestore', 'cc', cls.link_sha))
+        cls.port = 22000 + (os.getpid() % 1000)
+        cls.server = server.ThreadedTCPServer(('127.0.0.1', cls.port), server.Handler)
+        cls.server_thread = threading.Thread(target=cls.server.serve_forever)
+        cls.server_thread.daemon = True
+        cls.server_thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        server.DATA_DIR = cls.original_base
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _get(self, path):
+        import http.client
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=30)
+        try:
+            conn.request('GET', path)
+            resp = conn.getresponse()
+            return resp.status, resp.headers, resp.read()
+        finally:
+            conn.close()
+
+    def _stream(self, direction=None, src='10.0.0.1', sport=40000, dst='10.0.0.2', dport=80):
+        q = f'/api/raw-stream?md5={self.MD5}&src={src}&sport={sport}&dst={dst}&dport={dport}'
+        if direction:
+            q += f'&direction={direction}'
+        return self._get(q)
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_raw_stream_exact_bytes(self):
+        from tests.pcap_fixtures import HTTP_REQUEST, HTTP_RESPONSE
+        status, headers, body = self._stream('dst')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, HTTP_RESPONSE)
+        self.assertEqual(headers['Content-Type'], 'application/octet-stream')
+        self.assertIn('attachment', headers['Content-Disposition'])
+        self.assertEqual(self._stream('src')[2], HTTP_REQUEST)
+        self.assertEqual(self._stream()[2], HTTP_REQUEST + HTTP_RESPONSE)  # default: both
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_raw_stream_ipv6_filename_has_no_colons(self):
+        status, headers, _ = self._stream('src', '2001:db8::1', 40001, '2001:db8::2', 8080)
+        self.assertEqual(status, 200)
+        filename = headers['Content-Disposition'].split('filename=')[1]
+        self.assertNotIn(':', filename)
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_vlan_tagged_flow(self):
+        """REGRESSION: 802.1Q-tagged flows carved to an empty pcap, so
+        raw-stream 404'd and Download PCAP/Hexdump came back empty."""
+        from tests.pcap_fixtures import HTTP_RESPONSE
+        status, _, body = self._stream('dst', '10.0.0.3', 40002, '10.0.0.4', 443)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, HTTP_RESPONSE)
+        status, _, pcap = self._get(f'/api/download-stream?md5={self.MD5}&src=10.0.0.3&sport=40002&dst=10.0.0.4&dport=443')
+        self.assertEqual(status, 200)
+        self.assertGreater(len(pcap), 24, 'more than an empty pcap header')
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_raw_stream_too_large_is_413_not_truncated(self):
+        with unittest.mock.patch.object(config, 'MAX_RAW_STREAM_SIZE', 100):
+            status, _, body = self._stream('dst')
+        self.assertEqual(status, 413)
+        self.assertNotIn(b'HTTP/1.1 200', body)
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_raw_stream_unknown_flow_404(self):
+        self.assertEqual(self._stream('both', '10.9.9.9', 1, '10.8.8.8', 2)[0], 404)
+
+    def _ascii(self, src, sport, dst, dport):
+        status, _, body = self._get(f'/api/ascii-stream?md5={self.MD5}&src={src}&sport={sport}&dst={dst}&dport={dport}')
+        self.assertEqual(status, 200)
+        return json.loads(body)
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_ascii_stream_ipv6(self):
+        """REGRESSION: tshark's ip.addr doesn't match IPv6 - the transcript
+        was always empty for IPv6 flows. Suricata logs IPv6 fully expanded,
+        so the direction must still come out right for that form."""
+        data = self._ascii('2001:0db8:0000:0000:0000:0000:0000:0001', 40001, '2001:db8::2', 8080)
+        self.assertEqual([l['direction'] for l in data['lines']][:1], ['src'])
+        self.assertIn('GET /x HTTP/1.1', ''.join(l['text'] for l in data['lines']))
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_ascii_stream_skips_retransmissions(self):
+        """The 10.0.0.1 flow's first response segment is retransmitted -
+        joined into one stream, a duplicate would land mid-line."""
+        data = self._ascii('10.0.0.1', 40000, '10.0.0.2', 80)
+        dst_text = ''.join(l['text'] for l in data['lines'] if l['direction'] == 'dst')
+        self.assertEqual(dst_text.count('HTTP/1.1 200 OK'), 1)
+        self.assertTrue(dst_text.endswith('END'))
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_ascii_stream_keeps_whitespace_only_segments(self):
+        """REGRESSION: whitespace-only segments (an interactive session's
+        Enter keys) were dropped, so once the transcript joins segments the
+        commands ran together ('lspwd')."""
+        data = self._ascii('10.0.0.5', 40003, '10.0.0.6', 23)
+        src_text = ''.join(l['text'] for l in data['lines'] if l['direction'] == 'src')
+        self.assertEqual(src_text, 'ls\r\npwd\r\n')
+
+    @unittest.skipUnless(shutil.which('tshark'), 'tshark not installed')
+    def test_ascii_stream_reports_proto(self):
+        """The transcript joins a TCP stream's segments but keeps UDP
+        datagrams apart - it needs to know which it got."""
+        status, _, body = self._get(f'/api/ascii-stream?md5={self.MD5}&src=10.0.0.1&sport=40000&dst=10.0.0.2&dport=80')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['proto'], 'tcp')
+
+    def test_raw_stream_rejects_bad_params(self):
+        self.assertEqual(self._stream('client')[0], 400)
+        self.assertEqual(self._stream('both', src='10.0.0.1;ls')[0], 400)
+        self.assertEqual(self._get('/api/raw-stream?md5=nothex&src=1.2.3.4&sport=1&dst=1.2.3.5&dport=2')[0], 400)
+
+    def test_extracted_file_exact_bytes(self):
+        status, headers, body = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={self.sha256}')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, self.FILE_BYTES)
+        self.assertEqual(headers['Content-Type'], 'application/octet-stream')
+
+    def test_extracted_file_bad_sha256_400(self):
+        for bad in ('', 'abc', self.sha256.upper(), '../' + self.sha256[3:], self.sha256 + 'a'):
+            status, _, _ = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={bad}')
+            self.assertEqual(status, 400, bad)
+
+    def test_extracted_file_unknown_404(self):
+        status, _, _ = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={"d" * 64}')
+        self.assertEqual(status, 404)
+
+    def test_extracted_file_symlink_out_of_filestore_404(self):
+        status, _, body = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={self.link_sha}')
+        self.assertEqual(status, 404)
+        self.assertNotIn(b'secret', body)
+
+    def test_extracted_file_too_large_413(self):
+        with unittest.mock.patch.object(config, 'MAX_EXTRACTED_FILE_SIZE', 10):
+            status, _, _ = self._get(f'/api/extracted-file?md5={self.MD5}&sha256={self.sha256}')
+        self.assertEqual(status, 413)
+
+    def test_extracted_file_bad_md5_400(self):
+        status, _, _ = self._get(f'/api/extracted-file?md5=../x&sha256={self.sha256}')
+        self.assertEqual(status, 400)
 
 
 if __name__ == '__main__':

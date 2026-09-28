@@ -26,6 +26,19 @@ If the copyright year changed, update `static/LICENSE` accordingly.
 Check for D3 releases at https://github.com/d3/d3/releases.
 Recommended cadence: every 6–12 months, or immediately if a security CVE is announced.
 
+### CyberChef
+
+Unlike D3, CyberChef is not committed to the repo - the Dockerfile's `resources-builder` stage runs `scripts/fetch-cyberchef.sh`, which downloads a pinned release, verifies it, and installs it to `/usr/share/cyberchef` (`CYBERCHEF_DIR`), served at `/cyberchef/`.
+
+To upgrade:
+
+1. Take the new release's tag, asset filename (it carries a commit hash, not the version) and GitHub's published SHA-256 digest from https://github.com/gchq/CyberChef/releases, plus the SHA-256 of `LICENSE` at that tag, and update the four pins at the top of `scripts/fetch-cyberchef.sh`.
+2. Run `scripts/fetch-cyberchef.sh ./cyberchef`. It fails if any internal hook Send to CyberChef relies on (`window.app=`, `loadUIFiles`, `setRecipeConfig`, `options.updateUrl`, `setInput` in `assets/main.js`) disappeared. Passing that check only means the names still exist - step 3 is what confirms they still behave the same.
+3. Serve it (`CYBERCHEF_DIR=./cyberchef python3 socrates.py`), open `/cyberchef/` with DevTools open, and run at least From Base64, Magic, XOR, YARA Rules, SHA2 and Gunzip on a loaded file. Then use Send to CyberChef from a stream's Payload panel, from a stored file's File Info, and from a text selection in an ASCII transcript: the data must arrive (SHA2 of a sent file must equal its SHA256), Magic must be set for a small payload, and the CyberChef tab's URL must not gain an `input=`. Any new CSP violation means `_CSP_TEMPLATE` in `cyberchef.py` needs a carve-out - add only what the violation names, and document why in that comment. The two inline-script hashes are computed from `index.html` automatically, so they need no edit. One violation is expected: `frame-src` for the "Bombe" loading animation (see the same comment). The server doesn't log that one (`cyberchef.is_expected_csp_violation`), so watch DevTools rather than the server console for it; if a new release changes its shape, update that function rather than letting it show up in every user's log.
+4. Run the test suite.
+
+Recommended cadence: every 3–6 months, or immediately for a CyberChef security fix - shorter than D3's, because CyberChef runs on SO-CRATES's origin under a looser CSP, so its bugs matter more here.
+
 ## Backend Architecture
 
 SO-CRATES's backend is split into domain modules. Do not add new logic directly to `socrates.py` - place it in the appropriate module:
@@ -41,6 +54,11 @@ SO-CRATES's backend is split into domain modules. Do not add new logic directly 
 | `ohmydebn_colors.py` | Deriving a full theme (CSS custom properties) from an OhMyDebn/Aether color palette (`colors.toml`/`alacritty.toml`) for the Themes modal's OhMyDebn sync toggle. Pure functions, no I/O. |
 | `playbook_lookup.py` | Security Onion Playbooks lookup - reading the baked-in gzip-compressed indexes (`BAKED_IN_PLAYBOOKS_DIR`/`PLAYBOOKS_DIR`), exact-rule/engine-fallback resolution, in-process caching. No fetch/refresh logic - see "Detection Rule Freshness" below for why. |
 | `ai_summary_lookup.py` | AI-generated per-rule summary lookup - same baked-in gzip-compressed-index/in-process-caching shape as `playbook_lookup.py` (`AI_SUMMARIES_DIR`), but exact-match only, no engine-wide fallback, and covers `nids`/`sigma`/`yara` (one more type than Playbooks). No fetch/refresh logic - see "Detection Rule Freshness" below. |
+| `url_fetch.py` | Downloading a user-supplied URL (`fetch_url_safely`): connecting only to the IPs `validators.py` validated (`Pinned*Connection`) and re-validating every redirect hop. The URL checks themselves stay in `validators.py`. |
+| `storage.py` | Files on disk for uploads and analyses: the upload scratch directory, ZIP extraction, hashing, an analysis directory's `.meta`/pcap lookup, and the artifact lists reanalyze removes. Takes `data_dir` as a parameter rather than reading `socrates.DATA_DIR`. |
+| `analysis_cache.py` | In-memory caches of unfiltered Sankey/aggregation results per analysis, the lock guarding them, and their eviction. |
+| `cyberchef.py` | The bundled CyberChef: where it lives (`CYBERCHEF_DIR`) and the Content-Security-Policy `/cyberchef/` responses get (`build_csp`/`get_csp`). Serving itself stays in `socrates.py`'s `do_GET`. |
+| `stream_payload.py` | Exact-byte stream payloads for `/api/raw-stream`: building the `tshark` follow command and parsing its raw output per direction. Carving the flow out of the capture first stays in the handler, alongside the other stream endpoints. |
 | `db.py` | SQLite schema changes, new query functions, index optimization, bulk loading logic. |
 | `models.py` | New Suricata event field extraction helpers (parsing JSON fields into typed values). |
 | `config.py` | Application-wide constants: size limits, timeouts, thresholds. Adjust here for different deployments. |
@@ -54,17 +72,18 @@ SO-CRATES's backend is split into domain modules. Do not add new logic directly 
 
 ### Frontend Structure
 
-The frontend is split into three files under `static/`:
+The frontend is four files - `socrates.html` in the repo root, the rest under `static/`:
 
 | File | Content |
 |---|---|
-| `socrates.html` | HTML shell (one minimal inline theme-restore script in `<head>` to prevent FOUC; otherwise no inline CSS/JS) |
+| `socrates.html` | HTML shell - no inline CSS or JS at all |
+| `static/theme-boot.js` | The theme restore that runs before first paint (prevents a flash of the default theme) |
 | `static/socrates.css` | All styles |
 | `static/socrates.js` | All JavaScript |
 
-`socrates.html` references them via `<link rel="stylesheet" href="static/socrates.css">` and `<script src="static/socrates.js"></script>`.
+`socrates.html` references them via `<script src="static/theme-boot.js">` (parser-blocking, in `<head>`), `<link rel="stylesheet" href="static/socrates.css">` and `<script src="static/socrates.js"></script>`.
 
-When updating styles or frontend logic, edit the appropriate split file. Keep `socrates.html` free of inline `<style>` blocks. The single inline `<script>` in `<head>` restores the user's theme before the first paint; keep it minimal and fault-tolerant.
+When updating styles or frontend logic, edit the appropriate file. Keep `socrates.html` free of inline `<style>` and `<script>` blocks and inline event handlers: the Content-Security-Policy is a strict `script-src 'self'` with no inline carve-out. Keep `theme-boot.js` minimal and fault-tolerant - it runs before anything else.
 
 ### Theming Conventions
 
@@ -76,7 +95,7 @@ SO-CRATES supports themes via CSS custom properties. The full, current list (nam
 - **Don't define a variable in every theme block "for completeness" without a real consumer.** `--accent-rgb` and `--filter-bar-bg` were defined identically in all 23 theme blocks but never referenced via `var(--name)` anywhere in CSS/JS/HTML - removed as dead CSS (`test_dead_theme_vars_removed` locks this in). If you add a new per-theme variable, grep for `var(--your-name` before considering it done.
 - **`--bg-hover` and `--border-color` are deliberately separate variables.** `--bg-hover` is for hover-state background *fills* (table row hover, button hover); `--border-color` is for border/outline *decorations* (panel borders, header/footer dividers, input borders). Most themes set both to the same value since a muted color works fine for both roles, but don't assume they must match - CGA sets `--border-color` to a bright cyan (`#55ffff`, the real CGA light-cyan RGBI value) while keeping `--bg-hover` a much more muted teal (`#008080`), since a hover *fill* that bright would hurt text contrast but a 1px *border* reads fine at full brightness. `test_border_color_split_from_bg_hover` enforces that every theme defines both and that border declarations reference `var(--border-color)`, not `var(--bg-hover)`.
 - **A theme can override structural colors per-selector, not just per-variable, when a single shared variable can't express the look.** CGA's header/footer use `background: #55ffff` (bright light cyan) directly on `[data-theme="cga"] .app-header, [data-theme="cga"] .footer`, rather than repointing `--bg-secondary` (which every other panel/card also uses and would go bright cyan too), and override `--text-bright`/`--text-muted` scoped to the same selector for legibility against the new background. See `test_cga_header_footer_light_cyan`. **If you add an override like this, only reset the same variables on an element that is an actual DOM descendant of the overridden selector and that actually reads those variables** - CSS custom properties cascade strictly through DOM nesting, not visual/menu grouping, so a modal or panel that merely *opens from* the header (e.g. `#themesModal`, a top-level sibling in the DOM, not a child of `.app-header`) never inherits the override in the first place and needs no reset. A `#themesModal` reset rule existed here for exactly this non-reason - it silently duplicated the theme's own root values - and was removed once `test_cga_header_footer_light_cyan` was checked against the current markup and found to be a no-op.
-- **`--interactive-highlight` is an optional per-theme override for hover/focus/active border feedback.** Every hover/focus/active border rule (`.app-header-filename-input:focus`, `.stat-card:hover`, `.stat-card.tab-active`, `.pagination-page-input:focus`, `.settings-number-input:focus`, `.notes-textarea:focus`, `.settings-text-input:focus`, `.drop-zone-active`, `.view-tab.active`, `.search-input:focus`, `.sample-card:hover`, `.theme-tile:hover`, `.app-logo-text:focus-visible`, `.stat-card.keyboard-selected`, `.sample-card.keyboard-selected`, `.previous-analysis-row.keyboard-selected`, `tr[data-id].keyboard-selected`, `.theme-tile.keyboard-selected`, `.section-toggle-bar.keyboard-selected`, `.agg-row[data-agg-pivot].keyboard-selected`, `.pivot-menu-item.keyboard-selected`, `.filter-chip.keyboard-selected`, `.filter-clear-all.keyboard-selected`, `.stream-btn.keyboard-selected`, `.view-tab.keyboard-selected`, `.row-note-edit-link.keyboard-selected`, `.packet-header.keyboard-selected`, `.packet-control-btn.keyboard-selected`, `.detail-value-pivot.keyboard-selected`, `.autocomplete-item.keyboard-selected`, `.agg-page-btn.keyboard-selected`) reads `var(--interactive-highlight, var(--accent))` - a CSS fallback, so themes that don't define `--interactive-highlight` get exactly the old behavior (`--accent`) with zero risk. A theme needs this when its `--accent` is intentionally identical to `--border-color`/`--text-primary` (a deliberate flat, monochrome look) - without a separate highlight color, hovering/focusing would produce no visible change at all. Breadbin Blue (the original case, formerly named C64), Luna Blue, and DOS Blue all define this for exactly that reason, each to a distinct color from their own palette rather than a jarring color swap. If you add a new theme where `--accent` intentionally matches `--border-color`, check whether it needs `--interactive-highlight` too.
+- **`--interactive-highlight` is an optional per-theme override for hover/focus/active border feedback.** Every hover/focus/active border rule (`.app-header-filename-input:focus`, `.stat-card:hover`, `.stat-card.tab-active`, `.pagination-page-input:focus`, `.settings-number-input:focus`, `.notes-textarea:focus`, `.settings-text-input:focus`, `.drop-zone-active`, `.view-tab.active`, `.search-input:focus`, `.sample-card:hover`, `.theme-tile:hover`, `.app-logo-text:focus-visible`, `.stat-card.keyboard-selected`, `.sample-card.keyboard-selected`, `.previous-analysis-row.keyboard-selected`, `tr[data-id].keyboard-selected`, `.theme-tile.keyboard-selected`, `.section-toggle-bar.keyboard-selected`, `.agg-row[data-agg-pivot].keyboard-selected`, `.pivot-menu-item.keyboard-selected`, `.filter-chip.keyboard-selected`, `.filter-clear-all.keyboard-selected`, `.stream-btn.keyboard-selected`, `.cyberchef-file-btn.keyboard-selected`, `.view-tab.keyboard-selected`, `.row-note-edit-link.keyboard-selected`, `.packet-header.keyboard-selected`, `.packet-control-btn.keyboard-selected`, `.detail-value-pivot.keyboard-selected`, `.autocomplete-item.keyboard-selected`, `.agg-page-btn.keyboard-selected`) reads `var(--interactive-highlight, var(--accent))` - a CSS fallback, so themes that don't define `--interactive-highlight` get exactly the old behavior (`--accent`) with zero risk. A theme needs this when its `--accent` is intentionally identical to `--border-color`/`--text-primary` (a deliberate flat, monochrome look) - without a separate highlight color, hovering/focusing would produce no visible change at all. Breadbin Blue (the original case, formerly named C64), Luna Blue, and DOS Blue all define this for exactly that reason, each to a distinct color from their own palette rather than a jarring color swap. If you add a new theme where `--accent` intentionally matches `--border-color`, check whether it needs `--interactive-highlight` too.
 - **Use `currentColor`** for inline SVG icons so they inherit the surrounding text color and adapt automatically.
 - **Avoid emojis** for UI icons when possible - use inline SVGs instead, since emojis render as full-color system glyphs that ignore CSS `color` and may be invisible in one theme.
 
@@ -86,7 +105,7 @@ To add a new theme:
 
 1. Add it to the `THEMES` registry in `static/socrates.js` with the correct `group` (`'dark'`, `'fun'`, or `'light'`). `setTheme()`, `previewTheme()`, the `toggleTheme()` hotkey cycle, and the Themes modal's tile grid (`renderThemesModalGrid()`) are all generated automatically from the registry (grouped and alphabetical by label within each group) - there is nothing to add in `socrates.html`; its `<div id="themesModalBody">` starts empty and is filled entirely by `renderThemesModalGrid()`. (`renderGearMenu()`, the gear dropdown itself, is unrelated - it's a static 5-item list (Help, Settings, Themes, Rules, About), not driven by the registry.)
 2. Add a `[data-theme="your-name"]` CSS override block in `static/socrates.css`.
-3. If the theme needs a custom favicon, add `static/favicon-your-name.svg` - `updateFavicon()` resolves per-theme favicons by naming convention (the `dark` and `light` themes use the plain `static/favicon.svg`).
+3. If the theme needs a custom favicon, add `static/favicon-your-name.svg` - `updateFavicon()` resolves per-theme favicons by naming convention (the default `dark` theme uses the plain `static/favicon.svg`).
 4. Add any theme-specific runtime behavior (e.g. background effects) and gate it on `getCurrentTheme()`.
 5. Add it to the `THEMES` list in `scripts/capture_screenshots.py` (a separate hardcoded list, not derived from the registry) and re-run the script to generate its Themes-page screenshot - see the Release Checklist below.
 6. Nothing else to wire up for the command palette - `AUTOCOMPLETE_COMMANDS` in `static/socrates.js` generates a typed-autocomplete entry for every theme straight from the `THEMES` registry (matched against the theme's own `label`, lowercased), so step 1 alone already makes the new theme reachable by typing its name outside a text field.
@@ -121,7 +140,7 @@ a third one.
 `config.RULES_MAX_AGE_HOURS` (currently 2 days, `2 * 24` - tuned toward Sigma's/Suricata's roughly-daily release cadence rather than YARA Forge's slower weekly one, since a single shared threshold can't match all three) is the server-side default for "how old is too old" - see its comment in `config.py` for the full breakdown, including that its original job (gating an actual auto-refresh inside `setup_yara_rules()`/`setup_sigma_rules()`) is presently dead code given every current caller passes `force=True` or `network_allowed=False`. It's exposed to the frontend via `/api/rules-info`'s `staleThresholdHours` field, but the *effective* threshold actually used everywhere in the frontend goes through one more step: `_resolveStaleThresholdHours(serverHours)` returns the user's per-browser override (`getUserStaleThresholdDays()`, from the `socrates_staleThresholdDays` localStorage key and the number input next to the Rules modal's checkbox - same `localStorage`-preference-over-a-server-default pattern as `getUserQueryLimit()`/`getUserMaxUploadSizeMB()` in Settings, except there's no client-side fallback constant here, so an unset/invalid override resolves to `null` and falls through to the server value) if one is set, otherwise the server's `staleThresholdHours` unchanged. Both real consumers go through this same resolver, so they can't independently drift the way they did before being unified:
 
 - **The Rules modal's own date-color warning** (`isRulesetStale()`/`formatDateSpan()` in `static/socrates.js`) - colors a ruleset's "updated" date amber once it's older than the resolved threshold. `renderRulesModalBody()` computes `const t = _resolveStaleThresholdHours(info.staleThresholdHours);` once and passes it to every `formatDateSpan()` call.
-- **`checkForStaleRules()`** - opt-in via the `socrates_checkForStaleRules` localStorage key, same default-off mechanics as the `socrates_checkForUpdates` app-version checker, but with no manual "check now" trigger - the Rules modal already shows the same staleness live via `isRulesetStale()`'s amber-date warning, so a separate on-demand button was redundant and was removed. The checkbox (and the day-count input next to it) live in the Rules modal, not About, since they're rules-level settings rather than app-level ones, and are initialized in `showRulesModal()`/`refreshRulesModal()`, not `showAboutModal()`. Fires on every `showWelcomeUI()` view (not just once at `init()`, so it also catches a mid-session return to Welcome). `_staleRulesetLabels(rulesInfo, thresholdHours)` computes staleness itself from each ruleset's raw `updated` epoch via `isRulesetStale()` - the same function the date-color warning uses - rather than trusting `/api/rules-info`'s server-precomputed `stale` field, since the server has no way to already know about a client-side override. (That `stale` field, added to `get_suricata_rules_info()`/`get_yara_rules_info()`/`get_sigma_rules_info()`'s return dicts via `is_file_stale(rules_file, config.RULES_MAX_AGE_HOURS)`, still reflects the server's own default threshold and remains part of the API contract for any consumer that doesn't care about the client override - the frontend just no longer relies on it for this decision.)
+- **`checkForStaleRules()`** - opt-in via the `socrates_checkForStaleRules` localStorage key, same default-off mechanics as the `socrates_checkForUpdates` app-version checker, but with no manual "check now" trigger - the Rules modal already shows the same staleness live via `isRulesetStale()`'s amber-date warning, so a separate on-demand button was redundant and was removed. The checkbox (and the day-count input next to it) live in the Rules modal, not About, since they're rules-level settings rather than app-level ones, and are initialized in `showRulesModal()`/`refreshRulesModal()`, not `showAboutModal()`. Fires on every `showWelcomeUI()` view (not just once at `init()`, so it also catches a mid-session return to Welcome). `_staleRulesetLabels(rulesInfo, thresholdHours)` computes staleness itself from each ruleset's raw `updated` epoch via `isRulesetStale()` - the same function the date-color warning uses - rather than trusting `/api/rules-info`'s server-precomputed `stale` field, since the server has no way to already know about a client-side override. (That `stale` field, added to `get_suricata_rules_info()`/`get_yara_rules_info()`/`get_sigma_rules_info()`'s return dicts via `is_file_stale(rules_file, config.RULES_MAX_AGE_HOURS)` (YARA/Sigma) or `is_epoch_stale(oldest_mtime, config.RULES_MAX_AGE_HOURS)` over the active curated sources (Suricata), still reflects the server's own default threshold and remains part of the API contract for any consumer that doesn't care about the client override - the frontend just no longer relies on it for this decision.)
 - The day-count `<input>` (`#staleThresholdDaysInput`) is static HTML, not part of `#rulesModalBody`'s poll-regenerated template (`refreshRulesModal()` replaces that wholesale every 2s) - it's updated separately each poll via a direct `.value =` assignment, guarded by `document.activeElement !== daysInput` so a poll tick never yanks back a value the user is mid-typing (same class of guard as the log-scroll-position preservation for `.rule-update-log`).
 - The Rules modal is a fixed normal width (`#rulesModal .modal-content { max-width: 900px; ... }`, matching every other modal). It used to widen while Suricata's log was expanded, back when that log streamed `suricata-update`'s full internal output; `_fetch_single_source()` now reports one concise line per source instead (see its docstring), so `.rule-update-log`'s existing `white-space: pre-wrap` handles it at normal width and the widen-on-expand mechanism was removed.
 
@@ -130,6 +149,8 @@ There's also **`checkForMissingRules()`** (`static/socrates.js`) - unconditional
 ## Docs Site Maintenance
 
 User-facing documentation lives on the MkDocs Material site built from `docs/*.md` (config in `mkdocs.yml`, deployed by `.github/workflows/docs.yml`). When adding, removing, or renaming a docs page, update `mkdocs.yml`'s `nav:` list to match - pages not listed there still build but won't appear in the site navigation. `README.md` itself stays a short landing page (tagline, screenshots, links out to the docs site) and should not grow a Table of Contents again; new content belongs in `docs/`, not README.
+
+The header's repository widget shows the container image's total downloads next to Material's own tag and stars (its fork count is hidden by `docs/stylesheets/source-facts.css`). GitHub has no public API for that count, so `hooks/ghcr_downloads.py` (an MkDocs hook) reads it from the public package page at build time, and `overrides/partials/source.html` plus `docs/javascripts/source-downloads.js` add it to the widget. A failed fetch (offline, or GitHub changing that page's markup) just leaves the count off - it never fails the build - so if the count disappears from the live site, check the hook's regex against the current package page. The docs workflow also runs daily on a schedule so the count stays current between docs changes.
 
 Preview changes locally before pushing: `pip install -r requirements-docs.txt && mkdocs serve` (use `mkdocs serve -a 127.0.0.1:8001` if SO-CRATES' own server is already running on its default port 8000). Run `mkdocs build --strict` to catch broken internal links - this fails the build the same way the deploy workflow does.
 
@@ -204,10 +225,28 @@ Before cutting a release:
    after) worked without issue. If you must re-run either script a second
    time for any reason, remove and recreate the container first rather than
    reusing one either script has already driven a real analysis against.
+   (The same timeout also hit an untouched container during 4.3.0: Down
+   with nothing selected starts at the active stat card, not the Sankey
+   toggle, so a fixed number of Down presses never expanded Aggregation
+   Tables. The script now presses Down until the intended toggle bar is
+   selected - `_arrow_down_to` - which may have been the real cause of the
+   ordering failure above too.)
+
+   Also re-record the Home page's "CyberChef, built in" video with
+   `python3 scripts/record_cyberchef_demo.py --base-url
+   http://127.0.0.1:<port>/socrates.html`, against its **own** fresh
+   container (it uploads a capture generated by
+   `scripts/make_cyberchef_demo_pcap.py`, which would replace the sample
+   analysis the other two scripts depend on). It publishes
+   `docs/videos/cyberchef.mp4` and `docs/videos/cyberchef-poster.jpg`,
+   splicing each CyberChef tab's separate Playwright recording into the
+   SO-CRATES tab's - see its module docstring. Re-run it when the Send to
+   CyberChef buttons, the transcript selection pivot menu, or the bundled
+   CyberChef version change.
 4. **Regenerate screenshots.** Run `pip install -r requirements-screenshots.txt
    && python3 scripts/capture_screenshots.py --base-url
    http://127.0.0.1:<port>/socrates.html` against the same container, now
-   that step 3's video is done with it. This refreshes all 7
+   that step 3's video is done with it. This refreshes all 8
    `docs/images/so-crates-*.png` (Home page) and all 35
    `docs/images/themes/*.png` (Themes page) against the app's own default
    sample pcap (`DEFAULT_SAMPLE_URL` in `static/socrates.js` - a one-click
@@ -259,15 +298,15 @@ Before cutting a release:
    **This only catches claims that are wrong - it does not catch a feature
    that's simply absent from user-facing docs.** A new feature can ship
    with `docs/release-notes.md` and the technical `docs/architecture/*.md`
-   pages updated while `docs/usage.md` (the actual how-to-use-the-app guide)
+   pages updated while `docs/usage/*.md` (the actual how-to-use-the-app guide)
    never gets a new section at all - there's no false claim there to catch
    by verifying accuracy, just a silent gap. This happened for real: the
    pivot menu, per-row notes, Security Onion Playbooks, and Decoder Alerts
-   all shipped without a single mention in `docs/usage.md`, caught only
+   all shipped without a single mention in the usage guide, caught only
    because someone asked directly. So: for every user-facing feature added
    or changed since the last release (check `docs/release-notes.md`'s
-   latest section for the list), explicitly confirm `docs/usage.md`
-   describes it - not just that everything already in `docs/usage.md` is
+   latest section for the list), explicitly confirm `docs/usage/*.md`
+   describes it - not just that everything already in `docs/usage/*.md` is
    still true.
 7. **Review all source and docs** for spelling errors, grammar issues, logic
    issues, security issues, orphaned code, and code that needs refactoring.

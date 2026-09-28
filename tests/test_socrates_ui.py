@@ -1126,9 +1126,9 @@ class TestUXFeatures(unittest.TestCase):
     def test_feature_comparison_table_links(self):
         """Feature comparison table must include links to Security Onion resources"""
         self.assertIn('https://securityonion.net', JS_CONTENT)
-        self.assertIn('http://securityonion.net/docs/about', JS_CONTENT)
+        self.assertIn('https://securityonion.net/docs/about', JS_CONTENT)
         self.assertIn('https://securityonion.com/pro', JS_CONTENT)
-        self.assertIn('http://securityonion.net/docs/security-onion-pro', JS_CONTENT)
+        self.assertIn('https://securityonion.net/docs/security-onion-pro', JS_CONTENT)
 
     def test_ascii_transcript_loading(self):
         self.assertIn('ASCII Transcript', JS_CONTENT)
@@ -1177,6 +1177,74 @@ class TestUXFeatures(unittest.TestCase):
         self.assertIn('Host: example.com', result['firstGroupText'])
         self.assertIn('HTTP/1.1 200 OK', result['secondGroupText'])
         self.assertIn('trailing request line', result['thirdGroupText'])
+
+    def _transcript_lines(self, payload):
+        from tests.jsdom_helper import js_statements
+        return js_statements('''
+            window.fetch = function() {
+                return Promise.resolve({ text: () => Promise.resolve(JSON.stringify(%s)) });
+            };
+            var pre = document.createElement('pre');
+            await loadAsciiTranscript('1.1.1.1', 1234, '2.2.2.2', 80, pre);
+            window.__jsdom_result = Array.from(pre.querySelectorAll('div[style*="display:flex"]')).map(function(g) {
+                return Array.from(g.querySelectorAll('div[style*="flex:1"] > div')).map(function(d) { return d.textContent; });
+            });
+        ''' % json.dumps(payload))
+
+    def test_transcript_joins_tcp_segments_into_one_stream(self):
+        """REGRESSION: a line spanning several TCP segments was broken at
+        every segment boundary - so selecting a base64 blob and sending it
+        to CyberChef carried bogus newlines and Magic missed it."""
+        groups = self._transcript_lines({'proto': 'tcp', 'lines': [
+            {'direction': 'src', 'text': '{"blob": "QUJD'},
+            {'direction': 'src', 'text': 'REVG"}\r\nnext line'},
+            {'direction': 'dst', 'text': 'HTTP/1.1 200 OK\r\n'},
+        ]})
+        # (HTML parsing turns each line's trailing \r into \n - compare
+        # without line-ending characters.)
+        strip = lambda g: [t.rstrip('\r\n') for t in g]
+        self.assertEqual(strip(groups[0]), ['{"blob": "QUJDREVG"}', 'next line'])
+        self.assertEqual(strip(groups[1]), ['HTTP/1.1 200 OK', ''])
+
+    def _transcript_text(self, payload_js):
+        from tests.jsdom_helper import js_statements
+        return js_statements('''
+            window.fetch = function() {
+                return Promise.resolve({ status: 500, text: () => Promise.resolve(%s) });
+            };
+            var pre = document.createElement('pre');
+            pre.className = 'ascii-transcript';
+            await loadAsciiTranscript('1.1.1.1', 1234, '2.2.2.2', 80, pre);
+            var note = pre.querySelector('.ascii-transcript-note');
+            window.__jsdom_result = { text: pre.textContent, note: note ? note.textContent : null };
+        ''' % payload_js)
+
+    def test_transcript_error_and_empty_never_show_raw_json(self):
+        """REGRESSION: an empty or failed transcript fell through to a
+        legacy plain-text path and printed the server's JSON itself."""
+        err = self._transcript_text("JSON.stringify({error: 'ASCII transcript extraction timed out'})")
+        self.assertEqual(err['text'], 'Error loading transcript: ASCII transcript extraction timed out')
+        empty = self._transcript_text("JSON.stringify({lines: [], truncated: false, proto: 'udp'})")
+        self.assertEqual(empty['text'], 'No payload data')
+        garbage = self._transcript_text("'<html>proxy error</html>'")
+        self.assertEqual(garbage['text'], 'Error loading transcript (HTTP 500)')
+
+    def test_truncation_note_is_unselectable(self):
+        """The note sits inside the transcript (so it hides with it in the
+        Hexdump view) but must never be part of a selection sent to
+        CyberChef."""
+        r = self._transcript_text("JSON.stringify({lines: [{direction: 'src', text: 'abc'}], truncated: true, proto: 'tcp'})")
+        self.assertIn('Truncated', r['note'])
+        self.assertIn('.ascii-transcript-note', CSS_CONTENT)
+        rule = re.search(r'\.ascii-transcript-note\s*\{([^}]*)\}', CSS_CONTENT).group(1)
+        self.assertIn('user-select: none', rule)
+
+    def test_transcript_keeps_udp_datagrams_apart(self):
+        groups = self._transcript_lines({'proto': 'udp', 'lines': [
+            {'direction': 'src', 'text': '<13>syslog message one'},
+            {'direction': 'src', 'text': '<13>syslog message two'},
+        ]})
+        self.assertEqual(groups[0], ['<13>syslog message one', '<13>syslog message two'])
 
     def test_table_sorting_ui(self):
         self.assertIn('cursor: pointer', CSS_CONTENT)
@@ -1252,9 +1320,12 @@ class TestUXFeatures(unittest.TestCase):
         self.assertIn('.packet-block.dst-dir { border-left: 3px solid var(--tag-blue-text); }', CSS_CONTENT)
 
     def test_hexdump_direction_detection(self):
-        """loadHexdumpData must detect direction by splitting on ' > ' and checking src."""
+        """loadHexdumpData must detect direction by splitting on ' > ' and
+        matching the sender exactly (hexdumpSenderIs - a substring check
+        confused 10.0.0.1 with 10.0.0.10; see TestHexdumpDirection)."""
         self.assertIn("pkt.header.split(' > ')", JS_CONTENT)
-        self.assertIn("dirParts[0].includes(src)", JS_CONTENT)
+        self.assertIn("hexdumpSenderIs(dirParts[0], src, sport)", JS_CONTENT)
+        self.assertNotIn("dirParts[0].includes(src)", JS_CONTENT)
 
     def test_loadAnalysis_calls_loadTabData_after_buildSections(self):
         """loadAnalysis must call loadTabData after buildSections since buildSections no longer loads data."""
@@ -3021,6 +3092,23 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn("localStorage.setItem('socrates-theme',t='white')", boot,
                       'FOUC script must persist the White migration back to localStorage')
 
+    def test_fouc_script_migrates_c64_to_breadbin_blue(self):
+        """REGRESSION: 'c64' was a THEMES key in 3.0.0-3.1.0 before being
+        renamed Breadbin Blue, but only 'light' was migrated - upgraders
+        who'd picked it got data-theme="c64": the unstyled default
+        palette, a 404 favicon and no active tile."""
+        boot = self._theme_boot_source().replace(' ', '')
+        self.assertIn("if(t=='c64')localStorage.setItem('socrates-theme',t='breadbin-blue');", boot)
+
+    def test_unknown_stored_theme_falls_back_to_default(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            document.documentElement.setAttribute('data-theme', 'no-such-theme');
+            await init();
+            window.__jsdom_result = { theme: getCurrentTheme(), stored: localStorage.getItem('socrates-theme') };
+        ''')
+        self.assertEqual(result, {'theme': 'dark', 'stored': 'dark'})
+
     def test_hacker_theme_override_exists(self):
         self.assertIn('[data-theme="hacker"]', CSS_CONTENT,
                       'CSS must have a Hacker theme override block')
@@ -3487,6 +3575,7 @@ class TestThemeAndMenu(unittest.TestCase):
             '.filter-chip.keyboard-selected',
             '.filter-clear-all.keyboard-selected',
             '.stream-btn.keyboard-selected',
+            '.cyberchef-file-btn.keyboard-selected',
             '.view-tab.keyboard-selected',
             '.row-note-edit-link.keyboard-selected',
             '.packet-header.keyboard-selected',
@@ -7801,37 +7890,550 @@ class TestPivotMenu(unittest.TestCase):
         ''')
         self.assertTrue(result['menuGone'])
 
-    def test_cyberchef_button_opens_base64_encoded_input(self):
+    def test_detail_value_partial_selection_pivots_on_selection(self):
+        """Selecting part of a detail-panel value (a drag or double-click
+        inside it ends in this click) opens the menu for the selected text,
+        without Include/Exclude/Only; a plain click still pivots on the
+        whole value."""
         from tests.jsdom_helper import js_statements
-        result = js_statements(self._row_html() + '''
-            var opened = null;
-            window.open = function(url) { opened = url; };
+        result = js_statements('''
+            var table = document.createElement('table');
+            table.innerHTML = '<tbody><tr data-event-type="http" data-community-id="1:abc="><td></td></tr>'
+                + '<tr class="detail-row visible"><td>' + htmlRowText('URL', '/api/v2/telemetry') + '</td></tr></tbody>';
+            document.body.appendChild(table);
+            var span = table.querySelector('.detail-value-pivot');
+            function clickValue() {
+                span.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+                var m = document.querySelector('.pivot-menu');
+                var out = { label: m.querySelector('.pivot-menu-label').textContent,
+                            items: Array.from(m.querySelectorAll('.pivot-menu-item')).map(function(b) { return b.textContent.trim(); }) };
+                closePivotMenu();
+                return out;
+            }
+            getSelection().removeAllRanges();
+            var whole = clickValue();
+            var r = document.createRange();
+            r.setStart(span.firstChild, 0); r.setEnd(span.firstChild, 5);
+            getSelection().removeAllRanges(); getSelection().addRange(r);
+            var part = clickValue();
+            r.setEnd(span.firstChild, span.firstChild.length);
+            getSelection().removeAllRanges(); getSelection().addRange(r);
+            var all = clickValue();
+            window.__jsdom_result = { whole: whole, part: part, all: all };
+        ''')
+        self.assertEqual(result['whole']['label'], 'URL: /api/v2/telemetry')
+        self.assertIn('Include', result['whole']['items'])
+        self.assertEqual(result['part']['label'], 'URL (selection): /api/')
+        self.assertNotIn('Include', result['part']['items'])
+        self.assertIn('Correlate', result['part']['items'])
+        self.assertIn('CyberChef', result['part']['items'])
+        self.assertEqual(result['all']['label'], 'URL: /api/v2/telemetry',
+                         'selecting the whole value is the same as clicking it')
+
+    def test_cyberchef_button_hands_value_to_bundled_cyberchef(self):
+        """The CyberChef entry hands the value straight to the bundled
+        CyberChef (as input, with Magic) - the same handoff as Send to
+        CyberChef - instead of packing it into a #input= URL."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(TestSendToCyberChef.FAKE_WIN + self._row_html() + '''
             var srcIpCell = tr.children[2];
             srcIpCell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
             var btn = Array.from(document.querySelectorAll('.pivot-menu-item')).find(function(b) {
                 return b.textContent.trim() === 'CyberChef';
             });
             btn.click();
-            window.__jsdom_result = { url: opened };
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { order: calls.order, text: calls.text, recipe: calls.recipe,
+                                      menuGone: !document.querySelector('.pivot-menu') };
         ''')
-        self.assertTrue(result['url'].startswith('https://gchq.github.io/CyberChef/#input='))
-        # 1.1.1.1 base64-encoded and then URL-encoded (the trailing '='
-        # padding becomes %3D).
-        self.assertIn('MS4xLjEuMQ%3D%3D', result['url'])
+        self.assertEqual(result['order'], ['open:/cyberchef/|'])
+        self.assertEqual(result['text'], '1.1.1.1')
+        self.assertEqual(result['recipe'], [{'op': 'Magic', 'args': [3, False, False, '']}])
+        self.assertTrue(result['menuGone'])
 
-    def test_cyberChefUrl_is_utf8_safe(self):
-        """REGRESSION: btoa() alone throws on non-Latin1 characters (e.g. a
-        log field containing non-ASCII text) - cyberChefUrl() must not
-        propagate that as an uncaught error."""
+    def test_cyberchef_button_keeps_non_ascii_text(self):
+        """REGRESSION: the old #input= URL went through btoa(), which
+        throws on non-Latin1 text (e.g. a non-ASCII log field)."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(TestSendToCyberChef.FAKE_WIN + '''
+            showPivotMenu({ clientX: 10, clientY: 10 }, null, 'Message', 'héllo wörld 日本語', true);
+            Array.from(document.querySelectorAll('.pivot-menu-item')).find(function(b) {
+                return b.textContent.trim() === 'CyberChef';
+            }).click();
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { text: calls.text };
+        ''')
+        self.assertEqual(result['text'], 'héllo wörld 日本語')
+
+
+class TestSendToCyberChef(unittest.TestCase):
+    """Send to CyberChef: stream Payload panel and File Info buttons, and
+    the handoff into the bundled CyberChef's window (stubbed here - the
+    real CyberChef side is covered by the manual/Playwright check in
+    AGENTS.md's "Updating CyberChef")."""
+
+    # A fake CyberChef window: records what SO-CRATES hands it.
+    FAKE_WIN = """
+        var calls = { order: [], recipe: null, files: null, closed: false };
+        var fakeWin = {
+            closed: false,
+            close: function() { this.closed = true; calls.closed = true; },
+            document: { body: { classList: { contains: function(c) { return c === 'loaded'; } } } },
+            File: window.File,
+            app: {
+                options: { updateUrl: true },
+                setRecipeConfig: function(r) { calls.recipe = r; calls.updateUrlAtRecipe = fakeWin.app.options.updateUrl; },
+                setInput: function(t) { calls.text = t; calls.updateUrlAtInput = fakeWin.app.options.updateUrl; },
+                manager: { input: { loadUIFiles: function(f) { calls.files = f; } } }
+            }
+        };
+        window.open = function(url, target, features) {
+            calls.order.push('open:' + url + '|' + (features || ''));
+            return fakeWin;
+        };
+        var toasts = [];
+        showToast = function(m) { toasts.push(m); };
+    """
+
+    def _stub_fetch(self, status=200, body_js="new Blob([new Uint8Array([0, 1, 255, 128])])", json_body=None):
+        json_js = json.dumps(json_body) if json_body is not None else 'null'
+        return """
+        window.fetch = function(url) {
+            // Only the endpoints under test - the app's own startup
+            // requests (rules-info, analyses) go through here too.
+            if (/raw-stream|extracted-file/.test(String(url))) calls.order.push('fetch:' + url);
+            return Promise.resolve({
+                ok: %d < 400, status: %d,
+                blob: function() { return Promise.resolve(%s); },
+                json: function() { var j = %s; return j ? Promise.resolve(j) : Promise.reject(new Error('no json')); }
+            });
+        };
+        """ % (status, status, body_js, json_js)
+
+    def test_payload_panel_has_three_direction_buttons(self):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
-            var threw = false;
-            var url = null;
-            try { url = cyberChefUrl('héllo wörld 日本語'); } catch (e) { threw = true; }
-            window.__jsdom_result = { threw: threw, url: url };
+            var html = _formatEventPayload({src_ip: '10.0.0.1', src_port: 40000, dest_ip: '10.0.0.2', dest_port: 80});
+            var div = document.createElement('div'); div.innerHTML = html;
+            var btns = Array.from(div.querySelectorAll('[data-action="send-stream-to-cyberchef"]'));
+            window.__jsdom_result = {
+                directions: btns.map(function(b) { return b.dataset.direction; }),
+                labels: btns.map(function(b) { return b.textContent; }),
+                allStreamBtn: btns.every(function(b) { return b.classList.contains('stream-btn'); }),
+                srcTitle: btns[1].title
+            };
         ''')
-        self.assertFalse(result['threw'])
-        self.assertTrue(result['url'].startswith('https://gchq.github.io/CyberChef/#input='))
+        self.assertEqual(result['directions'], ['both', 'src', 'dst'])
+        self.assertEqual(result['labels'], ['Both', 'Source', 'Dest'])
+        self.assertTrue(result['allStreamBtn'])
+        self.assertIn('10.0.0.1:40000', result['srcTitle'])
+
+    def test_payload_buttons_escape_ip_in_titles(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var html = _formatEventPayload({src_ip: '"><img src=x onerror=alert(1)>', src_port: 1, dest_ip: '10.0.0.2', dest_port: 2});
+            var div = document.createElement('div'); div.innerHTML = html;
+            window.__jsdom_result = { imgs: div.querySelectorAll('img').length };
+        ''')
+        self.assertEqual(result['imgs'], 0)
+
+    def test_file_info_button_only_for_stored_files(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            currentMd5 = 'abc';
+            function btn(fi) {
+                var div = document.createElement('div');
+                div.innerHTML = renderFileInfoDetails({event_type: 'fileinfo', fileinfo: fi});
+                return div.querySelector('[data-action="send-file-to-cyberchef"]');
+            }
+            var sha = 'a'.repeat(64);
+            var stored = btn({sha256: sha, stored: true, filename: '/dir/evil.exe', size: 10});
+            var notStored = btn({sha256: sha, stored: false, size: 10});
+            currentMd5 = '';
+            var noAnalysis = btn({sha256: sha, stored: true, size: 10});
+            window.__jsdom_result = {
+                stored: stored ? {sha: stored.dataset.sha256, name: stored.dataset.filename, streamBtn: stored.classList.contains('stream-btn')} : null,
+                notStored: !!notStored, noAnalysis: !!noAnalysis
+            };
+        ''')
+        self.assertEqual(result['stored'], {'sha': 'a' * 64, 'name': 'evil.exe', 'streamBtn': False})
+        self.assertFalse(result['notStored'])
+        self.assertFalse(result['noAnalysis'])
+
+    def test_file_button_is_keyboard_reachable_but_not_in_stream_group(self):
+        from tests.jsdom_helper import js_statements
+        selector = re.search(r"const EXPANDED_ROW_ITEM_SELECTOR = '([^']*)'", JS_CONTENT).group(1)
+        self.assertIn('.cyberchef-file-btn', selector)
+        result = js_statements('''
+            var b = document.createElement('button'); b.className = 'cyberchef-file-btn';
+            window.__jsdom_result = { inGroup: isStreamControlGroupMember(b) };
+        ''')
+        self.assertFalse(result['inGroup'])
+
+    def test_stream_send_opens_first_then_loads_file_with_magic(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch() + '''
+            currentMd5 = 'abc';
+            sendStreamToCyberChef('2001:db8::1', '40001', '2001:db8::2', '8080', 'dst');
+            await new Promise(function(r) { setTimeout(r, 300); });
+            var f = calls.files && calls.files[0];
+            var bytes = f ? Array.from(new Uint8Array(await f.arrayBuffer())) : null;
+            window.__jsdom_result = { order: calls.order, recipe: calls.recipe, name: f && f.name, bytes: bytes, toasts: toasts,
+                                      updateUrlAtRecipe: calls.updateUrlAtRecipe };
+        ''')
+        # Off before anything that bakes, so the payload never reaches the
+        # tab's URL (and browser history).
+        self.assertIs(result['updateUrlAtRecipe'], False)
+        # Opened before the fetch (pop-up blockers), and without noopener.
+        self.assertEqual(result['order'][0], 'open:/cyberchef/|')
+        self.assertTrue(result['order'][1].startswith('fetch:/api/raw-stream?'))
+        self.assertIn('direction=dst', result['order'][1])
+        self.assertIn('md5=abc', result['order'][1])
+        self.assertEqual(result['recipe'], [{'op': 'Magic', 'args': [3, False, False, '']}])
+        self.assertEqual(result['name'], 'stream_2001-db8--1_40001_to_2001-db8--2_8080_dst.bin')
+        self.assertEqual(result['bytes'], [0, 1, 255, 128])
+        self.assertEqual(result['toasts'], [])
+
+    def test_magic_threshold_is_16kb(self):
+        """The limit test_large_payload_skips_magic crosses - see the
+        measurements in the comment above CYBERCHEF_MAGIC_MAX_BYTES."""
+        self.assertIn('const CYBERCHEF_MAGIC_MAX_BYTES = 16 * 1024;', JS_CONTENT)
+
+    def test_large_payload_skips_magic(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch(body_js="new Blob([new Uint8Array(16 * 1024 + 1)])") + '''
+            currentMd5 = 'abc';
+            sendExtractedFileToCyberChef('b'.repeat(64), 'big.bin');
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { recipe: calls.recipe, loaded: !!calls.files, order: calls.order };
+        ''')
+        self.assertIsNone(result['recipe'])
+        self.assertTrue(result['loaded'])
+        self.assertEqual(result['order'][1], 'fetch:/api/extracted-file?md5=abc&sha256=' + 'b' * 64)
+
+    def test_server_error_closes_tab_and_shows_message(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch(status=413, json_body={'error': 'Stream payload too large'}) + '''
+            currentMd5 = 'abc';
+            sendStreamToCyberChef('10.0.0.1', '1', '10.0.0.2', '2', 'both');
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { closed: calls.closed, loaded: !!calls.files, toasts: toasts };
+        ''')
+        self.assertTrue(result['closed'])
+        self.assertFalse(result['loaded'])
+        self.assertEqual(result['toasts'], ['Stream payload too large'])
+
+    def test_popup_blocked_does_not_fetch(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch() + '''
+            window.open = function() { calls.order.push('open'); return null; };
+            currentMd5 = 'abc';
+            sendStreamToCyberChef('10.0.0.1', '1', '10.0.0.2', '2', 'both');
+            await new Promise(function(r) { setTimeout(r, 100); });
+            window.__jsdom_result = { order: calls.order, toasts: toasts };
+        ''')
+        self.assertEqual(result['order'], ['open'])
+        self.assertEqual(len(result['toasts']), 1)
+        self.assertIn('pop-ups', result['toasts'][0])
+
+    TRANSCRIPT = """
+        // jsdom has no layout, so no Range geometry - stub it (real
+        // browsers all implement both).
+        // A small on-screen rect: no menu for a zero-size rect (a
+        // collapsed row) or one outside the viewport.
+        Range.prototype.getClientRects = function() { return []; };
+        Range.prototype.getBoundingClientRect = function() { return { left: 10, right: 110, top: 10, bottom: 30, width: 100, height: 20 }; };
+        var tr = document.createElement('div');
+        tr.innerHTML = '<div class="stream-payload"><div class="ascii-transcript"><div><span></span><div>'
+            + '<div id="l1">GET /x HTTP/1.1</div><div id="l2">X-Data: aGVsbG8=</div></div></div></div>'
+            + '<div class="hexdump-content"><div id="hx">0x0000: 4745 5420</div></div></div>'
+            + '<div id="outside">not a transcript</div>';
+        document.body.appendChild(tr);
+        function select(startId, endId) {
+            var r = document.createRange();
+            r.setStart(document.getElementById(startId).firstChild, 0);
+            var end = document.getElementById(endId).firstChild;
+            r.setEnd(end, end.length);
+            var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+            closePivotMenu();
+            openTranscriptSelectionMenu();
+            return menuLabel();
+        }
+        // The open pivot menu's label, or null when none is open.
+        function menuLabel() {
+            var m = document.querySelector('.pivot-menu');
+            return m ? m.querySelector('.pivot-menu-label').textContent : null;
+        }
+        function menuItems() {
+            return Array.from(document.querySelectorAll('.pivot-menu .pivot-menu-item')).map(function(b) { return b.textContent.trim(); });
+        }
+    """
+
+    def test_selection_menu_only_for_transcript_selections(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.TRANSCRIPT + '''
+            var inTranscript = select('l1', 'l2');
+            var items = menuItems();
+            var text = getSelection().toString();
+            var hexdump = select('hx', 'hx');
+            var outside = select('outside', 'outside');
+            var spanning = select('l2', 'outside');
+            window.__jsdom_result = { inTranscript: inTranscript, items: items, text: text,
+                                      hexdump: hexdump, outside: outside, spanning: spanning };
+        ''')
+        self.assertTrue(result['inTranscript'].startswith('Selection: GET /x HTTP/1.1'))
+        self.assertIn('X-Data: aGVsbG8=', result['text'])
+        self.assertIn('CyberChef', result['items'])
+        self.assertIn('Hunt', result['items'])
+        for item in ('Include', 'Exclude', 'Only'):
+            self.assertNotIn(item, result['items'], 'a transcript fragment is not a column value')
+        self.assertIsNone(result['hexdump'])
+        self.assertIsNone(result['outside'])
+        self.assertIsNone(result['spanning'], 'a selection running out of the transcript is not offered')
+
+    def test_selection_sent_as_text_input(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self.TRANSCRIPT + '''
+            select('l1', 'l2');
+            Array.from(document.querySelectorAll('.pivot-menu-item')).find(function(b) {
+                return b.textContent.trim() === 'CyberChef';
+            }).click();
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { text: calls.text, files: calls.files, recipe: calls.recipe,
+                                      updateUrlAtInput: calls.updateUrlAtInput, order: calls.order };
+        ''')
+        self.assertIn('GET /x HTTP/1.1', result['text'])
+        self.assertIsNone(result['files'], 'text goes in as input, not as a File')
+        self.assertEqual(result['recipe'], [{'op': 'Magic', 'args': [3, False, False, '']}])
+        self.assertIs(result['updateUrlAtInput'], False)
+        self.assertEqual(result['order'], ['open:/cyberchef/|'], 'no server request for a selection')
+
+    def test_selection_menu_correlates_on_its_rows_community_id(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.TRANSCRIPT + '''
+            var table = document.createElement('table');
+            table.innerHTML = '<tbody><tr data-community-id="1:abc="><td></td></tr><tr class="detail-row"><td></td></tr></tbody>';
+            document.body.appendChild(table);
+            table.querySelector('tr.detail-row td').appendChild(tr);
+            select('l1', 'l1');
+            var btn = document.querySelector('[data-pivot-action="correlate"]');
+            window.__jsdom_result = { title: btn ? btn.title : null };
+        ''')
+        self.assertIn('1:abc=', result['title'])
+
+    def test_choosing_a_menu_item_does_not_reopen_the_menu(self):
+        """The selection stays in place after an item is chosen, so the
+        mouseup that chose it must not open the menu again."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.TRANSCRIPT + '''
+            window.open = function() { return null; };
+            showToast = function() {};
+            select('l1', 'l2');
+            var item = Array.from(document.querySelectorAll('.pivot-menu-item')).find(function(b) {
+                return b.textContent.trim() === 'Copy to Clipboard';
+            });
+            item.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+            item.click();
+            await new Promise(function(r) { setTimeout(r, 50); });
+            window.__jsdom_result = { menu: menuLabel() };
+        ''')
+        self.assertIsNone(result['menu'])
+
+    def test_cyberchef_never_ready_times_out_with_message(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch() + '''
+            fakeWin.app = undefined;
+            currentMd5 = 'abc';
+            var realNow = Date.now;
+            var start = realNow();
+            Date.now = function() { return realNow() + 60000 * (realNow() - start > 50 ? 1 : 0); };
+            sendStreamToCyberChef('10.0.0.1', '1', '10.0.0.2', '2', 'both');
+            await new Promise(function(r) { setTimeout(r, 600); });
+            Date.now = realNow;
+            window.__jsdom_result = { toasts: toasts };
+        ''')
+        self.assertEqual(len(result['toasts']), 1)
+        self.assertIn('did not finish loading', result['toasts'][0])
+
+
+class TestCyberChefThemeSync(unittest.TestCase):
+    """syncCyberChefTheme(): the bundled CyberChef follows SO-CRATES's
+    light/dark theme via the localStorage 'options' key the two share,
+    without overriding a theme picked in CyberChef itself. (Every real
+    THEMES entry was checked in Chromium: all 'dark' group -> dark, all
+    'light' group -> classic.)"""
+
+    def test_background_brightness_decides(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.__jsdom_result = [
+                cyberChefThemeForBackground('rgb(13, 17, 23)'),
+                cyberChefThemeForBackground('rgb(255, 255, 255)'),
+                cyberChefThemeForBackground('rgba(0, 0, 0, 1)'),
+                cyberChefThemeForBackground('rgb(250, 244, 237)'),
+                cyberChefThemeForBackground(''),
+            ];
+        ''')
+        self.assertEqual(result, ['dark', 'classic', 'dark', 'classic', None])
+
+    def _sync(self, bg, stored_options_js, last_synced_js='null'):
+        from tests.jsdom_helper import js_statements
+        return js_statements('''
+            localStorage.clear();
+            var stored = %s;
+            if (stored !== null) localStorage.setItem('options', stored);
+            var last = %s;
+            if (last !== null) localStorage.setItem('socrates-cyberchef-theme', last);
+            document.body.style.backgroundColor = '%s';
+            syncCyberChefTheme();
+            window.__jsdom_result = {
+                options: localStorage.getItem('options'),
+                last: localStorage.getItem('socrates-cyberchef-theme')
+            };
+        ''' % (stored_options_js, last_synced_js, bg))
+
+    def test_first_sync_writes_theme(self):
+        result = self._sync('rgb(10, 10, 10)', 'null')
+        self.assertEqual(json.loads(result['options']), {'theme': 'dark'})
+        self.assertEqual(result['last'], 'dark')
+
+    def test_keeps_other_cyberchef_options(self):
+        result = self._sync('rgb(255, 255, 255)', "JSON.stringify({theme: 'dark', wordWrap: false})", "'dark'")
+        self.assertEqual(json.loads(result['options']), {'theme': 'classic', 'wordWrap': False})
+        self.assertEqual(result['last'], 'classic')
+
+    def test_theme_picked_in_cyberchef_is_left_alone(self):
+        result = self._sync('rgb(255, 255, 255)', "JSON.stringify({theme: 'geocities'})", "'dark'")
+        self.assertEqual(json.loads(result['options']), {'theme': 'geocities'})
+        self.assertEqual(result['last'], 'dark')
+
+    def test_unreadable_options_not_overwritten(self):
+        result = self._sync('rgb(10, 10, 10)', "'not json'")
+        self.assertEqual(result['options'], 'not json')
+        self.assertIsNone(result['last'])
+
+
+class TestTranscriptDragSelection(unittest.TestCase):
+    """REGRESSION (real report: "other areas outside of the transcript
+    are selecting and de-selecting" while selecting in it): a plain drag
+    that starts in an ASCII transcript is done by hand, clamped into the
+    transcript, instead of by the browser - whose drag over the
+    transcript's surrounding padding extended the selection to the end of
+    the whole results table and back as the pointer moved. jsdom has no
+    layout, so geometry and caret hit-testing are stubbed; the real
+    behavior was measured in Chromium (0 escaped frames, previously
+    30-50%)."""
+
+    SETUP = TestSendToCyberChef.TRANSCRIPT + """
+        // A 500x100 transcript: y < 50 is line 1, below is line 2; each
+        // 10px across is one character.
+        Element.prototype.getBoundingClientRect = function() {
+            return { left: 0, top: 0, right: 500, bottom: 100, width: 500, height: 100 };
+        };
+        document.caretRangeFromPoint = function(x, y) {
+            var node = document.getElementById(y < 50 ? 'l1' : 'l2').firstChild;
+            var r = document.createRange();
+            r.setStart(node, Math.min(Math.floor(x / 10), node.length));
+            return r;
+        };
+        getSelection().removeAllRanges();
+        function down(targetId, x, y, opts) {
+            var ev = new MouseEvent('mousedown', Object.assign({ bubbles: true, cancelable: true, button: 0, detail: 1, clientX: x, clientY: y }, opts || {}));
+            document.getElementById(targetId).dispatchEvent(ev);
+            return ev.defaultPrevented;
+        }
+        function move(x, y) {
+            document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1, clientX: x, clientY: y }));
+        }
+    """
+
+    def test_drag_is_clamped_into_transcript(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            var prevented = down('l1', 40, 10);           // 'GET |/x...' - 4 chars in
+            var afterDown = getSelection().isCollapsed;
+            move(9000, 9000);                              // far outside, down-right
+            var sel = getSelection();
+            var r = sel.getRangeAt(0);
+            window.__jsdom_result = {
+                prevented: prevented, afterDown: afterDown,
+                text: sel.toString(),
+                endsIn: r.endContainer.parentElement.id,
+                inside: !!r.commonAncestorContainer.parentElement.closest('.ascii-transcript')
+                        || !!(r.commonAncestorContainer.closest && r.commonAncestorContainer.closest('.ascii-transcript'))
+            };
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        ''')
+        self.assertTrue(result['prevented'], 'native drag-selection must be taken over')
+        self.assertTrue(result['afterDown'])
+        self.assertEqual(result['endsIn'], 'l2', 'clamped to the transcript, not beyond it')
+        self.assertTrue(result['inside'])
+        self.assertTrue(result['text'].startswith('/x HTTP/1.1'))
+        self.assertTrue(result['text'].endswith('X-Data: aGVsbG8='))
+
+    def test_native_behavior_kept_where_it_works(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            window.__jsdom_result = {
+                doubleClick: down('l1', 40, 10, { detail: 2 }),
+                shiftClick: down('l1', 40, 10, { shiftKey: true }),
+                rightButton: down('l1', 40, 10, { button: 2 }),
+                outside: down('outside', 40, 10),
+            };
+        ''')
+        self.assertEqual(result, {'doubleClick': False, 'shiftClick': False, 'rightButton': False, 'outside': False})
+
+    def test_selection_menu_waits_for_drag_to_end(self):
+        """REGRESSION (real report, with the earlier button): anything
+        appearing mid-drag just past the selection's end blocked dragging
+        further right - caret hit-testing under the pointer found it, not
+        text. The menu opens on the mouseup that ends the drag, after that
+        mouseup's click (which would otherwise close it at once)."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            down('l1', 0, 10);
+            move(90, 10);
+            var openedDuring = openTranscriptSelectionMenu();
+            var during = menuLabel();
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+            document.getElementById('l1').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise(function(r) { setTimeout(r, 50); });
+            window.__jsdom_result = { openedDuring: openedDuring, during: during, after: menuLabel(),
+                                      text: getSelection().toString() };
+        ''')
+        self.assertFalse(result['openedDuring'])
+        self.assertIsNone(result['during'])
+        self.assertEqual(result['after'], 'Selection: GET /x HT')
+        self.assertEqual(result['text'], 'GET /x HT')
+
+    def test_selection_menu_point_needs_selection_on_screen(self):
+        """No menu pinned to the top edge when the selection's end has
+        scrolled off-screen, or in the corner when its row collapsed (a
+        zero-size rect)."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            function pointFor(rect) {
+                Range.prototype.getClientRects = function() { return [rect]; };
+                return selectionMenuPoint(document.createRange());
+            }
+            window.__jsdom_result = {
+                inView: pointFor({ left: 10, right: 60, top: 100, bottom: 120, width: 50, height: 20 }),
+                scrolledAbove: pointFor({ left: 10, right: 60, top: -80, bottom: -60, width: 50, height: 20 }),
+                collapsed: pointFor({ left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 }),
+            };
+        ''')
+        self.assertEqual(result, {'inView': {'clientX': 60, 'clientY': 124}, 'scrolledAbove': None, 'collapsed': None})
+
+    def test_drag_ends_on_mouseup(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            down('l1', 40, 10);
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            var before = getSelection().toString();
+            move(9000, 9000);   // a later move with no drag must not touch the selection
+            window.__jsdom_result = { unchanged: getSelection().toString() === before };
+        ''')
+        self.assertTrue(result['unchanged'])
 
 
 class TestCorrelatePivotMenu(unittest.TestCase):
@@ -9966,7 +10568,7 @@ class TestRenameAnalysis(unittest.TestCase):
         but loadAnalysis() then unconditionally overwrote currentFileName
         with analysisStatus.meta.extracted (the ORIGINAL upload-time
         filename, never touched by a rename) whenever that field was
-        present - which per socrates.py's _write_meta() call sites, it
+        present - which per socrates.py's write_meta() call sites, it
         always is for a normal upload. That override must be gone; the
         already-correct, rename-aware file_name from /api/load-analysis
         must be what's actually used."""
@@ -10744,6 +11346,113 @@ class TestRowNoteIconState(unittest.TestCase):
         self.assertIn('title="' + 'x' * 200 + '"', result['html'])
         self.assertIn('data-note="' + 'x' * 300 + '"', result['html'],
                       'the data-note attribute must carry the full, untruncated note')
+
+
+class TestSmallRenderingFixes(unittest.TestCase):
+    """Release-review findings in row/detail rendering."""
+
+    def test_http_row_user_agent_and_status_dot(self):
+        from tests.jsdom_helper import js_statements
+        ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120'
+        result = js_statements('''
+            function uaCell(status) {
+                var html = buildRowForEvent({event_type: 'http', timestamp: '2026-01-01T00:00:00', src_ip: '1.1.1.1',
+                    src_port: 1, dest_ip: '2.2.2.2', dest_port: 80, proto: 'TCP',
+                    http: {http_method: 'GET', hostname: 'h', url: '/', status: status, http_user_agent: %s}});
+                var t = document.createElement('table'); t.innerHTML = html;
+                var cells = t.querySelectorAll('tr')[0].children;
+                return { ua: cells[cells.length - 3].textContent,
+                         dot: cells[cells.length - 2].querySelector('.value-dot').getAttribute('style') };
+            }
+            window.__jsdom_result = { none: uaCell(''), ok: uaCell(200) };
+        ''' % json.dumps(ua))
+        self.assertEqual(result['ok']['ua'], ua[:50])
+        self.assertIn('--badge-success-text', result['ok']['dot'])
+        self.assertIn('--text-muted', result['none']['dot'])
+        self.assertNotIn('danger', result['none']['dot'])
+
+    def test_flow_age_zero_shown(self):
+        self.assertIn("e.flow?.age == null ? '' : `${e.flow.age} seconds`", JS_CONTENT)
+
+
+class TestJumpToPageClamped(unittest.TestCase):
+    """REGRESSION: in server-paged mode a page past the end was fetched
+    before renderPaginatedTable clamped it - page 99 of a 5-page table
+    fetched offset 9800, got nothing, and showed "Showing 401-400 of 500"."""
+
+    def test_page_clamped_to_last_page(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.__jsdom_result = [clampPageNumber(99, 5), clampPageNumber(0, 5), clampPageNumber(3, 5),
+                                     clampPageNumber(7, NaN)];
+        ''')
+        self.assertEqual(result, [5, 1, 3, 7])
+
+    def test_jump_to_page_clamps_before_rerender(self):
+        body = JS_CONTENT[JS_CONTENT.index('async function jumpToPage()'):]
+        body = body[:body.index('async function changeTablePage')]
+        self.assertLess(body.index('clampPageNumber('), body.index('rerender()'))
+
+
+class TestHexdumpDirection(unittest.TestCase):
+    """REGRESSION: packet direction used dirParts[0].includes(src), so with
+    src 10.0.0.1 and dst 10.0.0.10 the dst's packets were colored as src,
+    and a same-IP (loopback) flow was colored all-src."""
+
+    def test_sender_matched_exactly(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.__jsdom_result = [
+                hexdumpSenderIs('12:00:00.000000 IP 10.0.0.1.40000', '10.0.0.1', 40000),
+                hexdumpSenderIs('12:00:00.000000 IP 10.0.0.10.80', '10.0.0.1', 40000),
+                hexdumpSenderIs('12:00:00.000000 IP 127.0.0.1.8000', '127.0.0.1', 40000),
+                hexdumpSenderIs('12:00:00.000000 IP 127.0.0.1.40000', '127.0.0.1', 40000),
+                hexdumpSenderIs('12:00:00.000000 IP6 2001:db8::1.40001', '2001:0db8:0000:0000:0000:0000:0000:0001', 40001),
+                hexdumpSenderIs('12:00:00.000000 IP6 2001:db8::2.8080', '2001:db8::1', 40001),
+                hexdumpSenderIs('garbage', '10.0.0.1', 40000),
+            ];
+        ''')
+        self.assertEqual(result, [True, False, False, True, True, False, False])
+
+
+class TestRowNoteSaveTargetsRightRows(unittest.TestCase):
+    """REGRESSION: saving a row note updated only the first
+    tr[data-id="N"] in the document - often a hidden tab's copy of the
+    same row, so the visible row still showed "+ Add Note" - and in log
+    mode events.id and sigma_alerts.id can share a number, so a log-row
+    note could land on a Sigma row."""
+
+    def test_note_reaches_every_copy_of_its_row_and_no_other_table(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            function rowPair(table, id) {
+                return '<tr data-id="' + id + '">' + rowNoteIconHtml(table, id, null) + '<td>x</td></tr>'
+                    + '<tr class="detail-row"><td>' + rowNoteDetailValueHtml(table, id, null) + '</td></tr>';
+            }
+            var host = document.createElement('div');
+            host.innerHTML = '<table id="hiddenTab" style="display:none"><tbody>' + rowPair('events', 42) + '</tbody></table>'
+                + '<table id="visibleTab"><tbody>' + rowPair('events', 42) + '</tbody></table>'
+                + '<table id="sigmaTab"><tbody>' + rowPair('sigma_alerts', 42) + '</tbody></table>';
+            document.body.appendChild(host);
+            currentMd5 = 'abc';
+            window.fetch = function() {
+                return Promise.resolve({ ok: true, json: function() { return Promise.resolve({ success: true, note: 'triaged' }); } });
+            };
+            currentRowNoteScope = { table: 'events', rowId: 42 };
+            document.getElementById('analysisNotesInput').value = 'triaged';
+            await saveAnalysisNotes();
+            function state(id) {
+                var t = document.getElementById(id);
+                return { icon: !!t.querySelector('.row-note-icon'),
+                         detail: t.querySelector('.row-note-detail-value').textContent.trim() };
+            }
+            window.__jsdom_result = { hidden: state('hiddenTab'), visible: state('visibleTab'), sigma: state('sigmaTab') };
+        ''')
+        self.assertTrue(result['visible']['icon'])
+        self.assertTrue(result['visible']['detail'].startswith('triaged'))
+        self.assertTrue(result['hidden']['icon'])
+        self.assertFalse(result['sigma']['icon'])
+        self.assertEqual(result['sigma']['detail'], '+ Add Note')
 
 
 class TestRowNoteDetailPanel(unittest.TestCase):

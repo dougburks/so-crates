@@ -66,3 +66,6 @@ site/
 # Same as above, for Playbooks (PLAYBOOKS_DIR) - built from the public
 # securityonion-resources-playbooks repo.
 .dev-playbooks/
+
+# Local CyberChef copy (scripts/fetch-cyberchef.sh) - baked into the image, never committed
+cyberchef/

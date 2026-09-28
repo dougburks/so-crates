@@ -7,7 +7,6 @@ on first run if internet is available.
 """
 
 import config
-import gzip
 import hashlib
 import json
 import os
@@ -20,7 +19,7 @@ import urllib.request
 import zipfile
 
 from file_analyzer import analyze_file
-from validators import is_host_reachable, is_file_stale
+from validators import is_host_reachable, is_file_stale, gunzip_atomically
 
 YARA_FORGE_URL = (
     'https://github.com/YARAHQ/yara-forge/releases/latest/download/'
@@ -90,7 +89,7 @@ def setup_yara_rules(data_dir=None, on_progress=print, network_allowed=True, for
 
     force: when True, checks for an update even if the cached copy isn't
     stale yet - used by the on-demand "check for rule updates" action,
-    where staying silent just because the 24h cache window hasn't expired
+    where staying silent just because the config.RULES_MAX_AGE_HOURS cache window hasn't expired
     would defeat the point of the user explicitly asking for a check right
     now. Has no effect if there's no cached copy to begin with (that path
     always checks/downloads already). When network_allowed is False, force
@@ -129,14 +128,7 @@ def setup_yara_rules(data_dir=None, on_progress=print, network_allowed=True, for
     if os.path.isfile(BAKED_IN_YARA_FILE):
         os.makedirs(os.path.dirname(rules_file), exist_ok=True)
         try:
-            with gzip.open(BAKED_IN_YARA_FILE, 'rb') as f_in, open(rules_file, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
-            # Decompressing writes a brand-new file, so its mtime would
-            # otherwise be "now" (container start) rather than when the
-            # ruleset was actually baked into the image at build time -
-            # carry the compressed source's mtime over so the Rules modal's
-            # "updated" date reflects reality, not container uptime.
-            shutil.copystat(BAKED_IN_YARA_FILE, rules_file)
+            gunzip_atomically(BAKED_IN_YARA_FILE, rules_file)
             return rules_file
         except OSError as e:
             on_progress(f'Warning: could not copy baked-in rules: {e}')

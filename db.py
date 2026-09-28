@@ -32,7 +32,7 @@ def _related_file_path(db_path, filename):
 # and _ensure_ip_port_indexes (backfilled onto pre-existing ones) so the two
 # can't drift apart. event_type leads every index because every query (via
 # _build_where_conditions) always excludes the internal 'stats' row
-# (`event_type != 'stats'`), and the 10 per-type tabs additionally filter on
+# (`event_type != 'stats'`), and every per-type tab additionally filters on
 # a specific `event_type = ?`. event_type leading lets SQLite use a
 # covering-index SEARCH for the equality-filtered per-type case (instead of
 # falling back to idx_event_type - correct on cardinality, but not covering,
@@ -551,7 +551,8 @@ def init_empty_db(db_path):
 
 
 def _build_events_query(conn, event_type, offset, limit, q, order_by, sort_dir, acknowledged_only=False):
-    """Shared SQL-building logic for query_events_sqlite / query_events_sqlite_json."""
+    """SQL-building logic for query_events_sqlite_json (which
+    query_events_sqlite wraps)."""
     terms = _build_search_terms(q)
     has_fts = _has_fts5(conn) if terms else False
     select, event_type_col = _events_select(terms, has_fts, 'id, json_data', 'e.id, e.json_data')
@@ -587,16 +588,15 @@ def query_events_sqlite(db_path, event_type=None, offset=0, limit=1000, q=None, 
 
 
 def query_events_sqlite_json(db_path, event_type=None, offset=0, limit=1000, q=None, order_by=None, sort_dir='asc', acknowledged_only=False):
-    """Same query as query_events_sqlite, but returns a ready-to-send JSON
-    array string built directly from the stored json_data blobs, skipping
+    """The events query, returned as a ready-to-send JSON array string built
+    directly from the stored json_data blobs, skipping
     the parse-then-reserialize round trip. json_data is always produced by
     json.dumps at insert time (_insert_event is the only writer), so each
     value is already complete, valid JSON in the overwhelming common case -
     but a cheap shape check (not a full parse, which would defeat the point
     of this fast path) guards against a corrupted/malformed blob silently
-    breaking the entire response, matching query_events_sqlite's own
-    graceful-degradation behavior for that case. ~5x faster than
-    query_events_sqlite + json.dumps for large result sets (measured:
+    breaking the entire response. ~5x faster than parsing every row and
+    re-serializing with json.dumps for large result sets (measured:
     4.8s -> 0.9s at 500,000 rows).
 
     Returns (json_str, ids) - ids is the row's SQL id for each event in the
@@ -961,9 +961,14 @@ def get_sankey_data_sqlite(db_path, event_type=None, q=None, max_nodes_per_colum
         return {'nodes': nodes, 'links': links}
 
 
-# Must match AGG_PAGE_SIZE in static/socrates.js - the fixed page size for
-# every Aggregation Table (not client-controllable; only the page number is).
+# The default Aggregation Table page size, used when a request omits
+# page_size - must match CONFIG.AGGREGATION_TOP_N in static/socrates.js.
 AGGREGATION_TOP_N = 10
+
+# The page sizes a client may pick with the "Items per page" selector - must
+# match AGG_PAGE_SIZE_OPTIONS in static/socrates.js. Anything else falls back
+# to AGGREGATION_TOP_N.
+AGGREGATION_PAGE_SIZE_OPTIONS = (10, 25, 50, 100)
 
 # Real, already-populated columns aggregated for every event type (same
 # columns get_sankey_data_sqlite already GROUP BYs on for src_ip/dest_ip/
@@ -1245,7 +1250,9 @@ AGGREGATION_VALUE_TRANSFORMS = {
     # from - see suricata_sid_ranges.py for how SURICATA_SID_RANGES was
     # derived. Generated from that same table (not hand-duplicated SQL) so
     # this can never drift from classify_alert_ruleset(), the Python
-    # equivalent used by extractValue()'s client-side fallback path.
+    # equivalent the tests use as the reference answer. (The client-side
+    # fallback is static/socrates.js's classifyRuleset(), fed the same
+    # table via /api/rules-info's sidRanges.)
     ('alert', 'Ruleset'): lambda expr: sid_ranges_sql_case(f'CAST({expr} AS INTEGER)'),
     # protocol_decode is reclassified from 'alert' at ingestion (see
     # create_sqlite_db) with the same alert.* JSON shape - same transforms.
@@ -1480,8 +1487,8 @@ def _aggregation_column_specs(event_type, prefix):
 
 def get_aggregation_data_sqlite(db_path, event_type, q=None, top_n=AGGREGATION_TOP_N, offset=0, column=None):
     """Server-side equivalent of buildAggregationTablesCore()/extractValue()
-    in socrates.js, for the 10 per-type pcap tabs that share that code path
-    (alert/dns/http/tls/flow/fileinfo/filealerts/modbus/dnp3/pgsql), plus the
+    in socrates.js, for every per-type pcap tab with an AGGREGATION_JSON_PATHS
+    entry (alert, dns, http, tls, flow, fileinfo and ~30 more), plus the
     merged 'all events' view when event_type is None (Type/Detail computed
     via _all_events_detail_expr instead of a per-type AGGREGATION_JSON_PATHS
     lookup). 'log'/'sigmaalert' are still not supported here (see

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import gzip
 import json
 import os
 import re
@@ -11,7 +10,7 @@ import time
 
 import config
 from db import create_sqlite_db
-from validators import is_host_reachable, is_epoch_stale
+from validators import is_host_reachable, is_epoch_stale, gunzip_atomically
 from yara_analyzer import run_yara_pipeline
 
 REQUIRED_EXECUTABLES = ['tcpdump', 'tshark', 'suricata', 'suricata-update']
@@ -47,11 +46,12 @@ SURICATA_RULE_SOURCES = {
 DEFAULT_SURICATA_SOURCES = ['et/open']
 
 # ipfire/dbl deliberately excluded from what the Docker image bakes in -
-# it's the single biggest space cost of the curated set (~51 of ~83 MiB
-# when baking in everything else, via its dataset:-based domain lists) and
-# is actually a content-*filtering* blocklist (ads/dating/gambling/social/
-# streaming/etc. categories), not threat detection - most of it would just
-# add alert noise on ordinary browsing traffic. It stays in
+# it's the single biggest source in the curated set (~51 MiB on its own,
+# via its dataset:-based domain lists - the other 14 together are ~84 MB
+# uncompressed, measured 2026-09-25) and is actually a content-*filtering*
+# blocklist (ads/dating/gambling/social/streaming/etc. categories), not
+# threat detection - most of it would just add alert noise on ordinary
+# browsing traffic. It stays in
 # SURICATA_RULE_SOURCES so online users can still fetch it on demand via
 # the Rules modal; Dockerfile's bake loop derives its own list from this
 # (BAKED_IN_SURICATA_SOURCES), not a separately hand-maintained one.
@@ -442,8 +442,7 @@ def _reconcile_suricata_sources(suricata_dir, data_dir, desired_names, on_progre
 
     Unlike the old suricata-update-CLI-based design (enable-source/
     disable-source, whose state lived in a --data-dir with no relationship
-    between build-time/image and run-time/DATA_DIR - see this module's
-    module-level notes), toggling a source that's already in the library
+    between build-time/image and run-time/DATA_DIR), toggling a source that's already in the library
     is pure local file copy/delete, no network at all - this is what lets
     an airgapped user choose among whatever was baked into the image.
     Only a source that has never been staged locally (not baked in, never
@@ -535,8 +534,9 @@ def _seed_active_from_library(baked_in_library_dir, data_dir, source_names, on_p
     as a last-resort fallback if every live refresh attempt fails.
 
     The image bakes these in gzip-compressed (`<name>.rules.gz` - see the
-    Dockerfile's bake loop; plain-text Suricata rules compress ~93%, 73MB
-    down to 5MB across all 14 curated sources) - decompressed here into the
+    Dockerfile's bake loop; plain-text Suricata rules compress ~93%, ~84MB
+    down to ~6MB across the 14 baked-in sources, measured 2026-09-25) -
+    decompressed here into the
     plain `.rules` filename every other reader in this module already
     expects, so nothing downstream needs to know the baked-in copy was ever
     compressed.
@@ -554,15 +554,9 @@ def _seed_active_from_library(baked_in_library_dir, data_dir, source_names, on_p
                 continue
             src = os.path.join(baked_in_library_dir, filename)
             if filename.endswith('.gz'):
-                with gzip.open(src, 'rb') as f_in, open(dest, 'wb') as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-                # Decompressing writes a brand-new file, so its mtime would
-                # otherwise be "now" (container start) rather than when the
-                # ruleset was actually baked into the image at build time -
-                # carry the compressed source's mtime over (as shutil.copy2
-                # already does for the uncompressed branch below) so the
-                # Rules modal's "updated" date reflects reality, not uptime.
-                shutil.copystat(src, dest)
+                # Atomic, and carries the baked-in mtime over (as copy2
+                # does below) - see gunzip_atomically.
+                gunzip_atomically(src, dest)
             else:
                 shutil.copy2(src, dest)
     except OSError as e:
@@ -925,6 +919,31 @@ def spawn_suricata(dir_path, pcap_path, suricata_config_path=None, data_dir=None
         _set_error(dir_path, f'Suricata failed to start: {e}')
         _clear_phase(dir_path)
         return False
+
+
+_SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
+
+
+def find_extracted_file(dir_path, sha256):
+    """Path of the file Suricata extracted with this SHA256 in the analysis
+    at dir_path, or None. Suricata's file-store (v2) names every file by
+    its SHA256 under a two-hex-character subdirectory:
+    filestore/<sha256[:2]>/<sha256>. sha256 is validated before it touches
+    the filesystem, and the resolved real path must still be a regular
+    file inside filestore/ - so neither a crafted hash nor a symlink
+    placed in the filestore can reach anything else."""
+    if not isinstance(sha256, str) or not _SHA256_RE.match(sha256):
+        return None
+    filestore_dir = os.path.realpath(os.path.join(dir_path, 'filestore'))
+    path = os.path.realpath(os.path.join(filestore_dir, sha256[:2], sha256))
+    try:
+        if os.path.commonpath([path, filestore_dir]) != filestore_dir:
+            return None
+    except ValueError:
+        return None
+    if not os.path.isfile(path):
+        return None
+    return path
 
 
 def _set_phase(dir_path, phase):

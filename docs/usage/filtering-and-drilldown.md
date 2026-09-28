@@ -4,16 +4,21 @@
 
 Clicking a value in a data table row, an expanded row's detail panel, or an aggregation table opens a pivot menu instead of immediately filtering or expanding the row:
 
+- **Expand Row / Collapse Row** - expand or collapse the row's detail panel (the row's timestamp cell also does this directly on click, without opening the menu)
+- **Acknowledge this alert / Acknowledge all instances of this alert** - on a Network Alert or Sigma Alert row, immediately removes it from view (or every row sharing the same signature/rule, for "all instances") and moves it into the **Acknowledged Alerts** tab. Reduced counts show up everywhere else the alert would have counted - its own tab, All Events, and the Sankey diagram
+- **Un-acknowledge this alert** - shown instead of the above when the row is already inside the Acknowledged Alerts tab; returns it to its original tab
 - **Include** - broaden the current filter to also match this value
 - **Exclude** - narrow the current filter to hide this value
 - **Only** - start a new filter scoped to just this value, clearing every other filter
 - **Hunt** - a full-text search for this value across every field, replacing the whole search and clearing any active filters
 - **Correlate** - shown on any row whose flow has a community ID (computed for every PCAP analysis); searches for every other log across the whole capture sharing that same flow, protocol events and alerts alike. Not offered when the value you clicked is the community ID itself, since Hunt above already does the same search in that case
 - **Copy to Clipboard** - copy the value as-is
-- **Lookups** - one-click lookups against Google, VirusTotal, Shodan, AbuseIPDB, urlscan.io, and CyberChef, plus any custom lookup sites you've added in Settings
-- **Expand Row / Collapse Row** - expand or collapse the row's detail panel (the row's timestamp cell also does this directly on click, without opening the menu)
-- **Acknowledge this alert / Acknowledge all instances of this alert** - on a Network Alert or Sigma Alert row, immediately removes it from view (or every row sharing the same signature/rule, for "all instances") and moves it into the **Acknowledged Alerts** tab. Reduced counts show up everywhere else the alert would have counted - its own tab, All Events, and the Sankey diagram
-- **Un-acknowledge this alert** - shown instead of the above when the row is already inside the Acknowledged Alerts tab; returns it to its original tab
+- **Lookups** - one-click lookups against Google, VirusTotal, Shodan, AbuseIPDB, urlscan.io, and CyberChef, plus any custom lookup sites you've added in Settings. CyberChef is built into SO-CRATES, so it opens in a new tab with the value already in its input - with **Magic** applied to suggest decodings, for values up to 16 KB - and works without internet access (its Optical Character Recognition operation is the exception - it downloads language data when run)
+- **Add Custom Lookup...** - add a lookup site of your own (opens Settings' Custom Lookup Sites)
+
+Values in a row's detail panel that aren't also a table column get a shorter menu, without Include/Exclude/Only, since there's no column to filter on.
+
+The menu also works on selected text. Select part of a detail-panel value - a drag or a double-clicked word inside it, such as a domain in an AI Summary or Playbook description - and the menu opens for just that text instead of the whole value. Selecting text in an ASCII transcript opens it too (see [Stream Analysis](#stream-analysis)). A selection gets the shorter menu, since a fragment isn't a value you can filter on.
 
 The **Acknowledged Alerts** stat-card tab (PCAP analyses only) is the only place acknowledged alerts still show, for review or undo - acknowledging is per-analysis and does not affect any other analysis. It groups Network Alerts and Sigma Alerts under separate sub-sections only when both have acknowledged rows; with just one type present, it displays as a single sortable table identical to that type's own tab. Un-acknowledging the last row switches you back to Network Alerts automatically.
 
@@ -34,6 +39,9 @@ Expanding a Suricata or Sigma alert shows a **Playbook** section (after Alert De
 
 Click a row's timestamp cell (or use the pivot menu's **Expand Row** entry) to expand it, then:
 
-- **ASCII Transcript** - view decoded TCP/UDP payload as readable text
+- **ASCII Transcript** - view decoded TCP/UDP payload as readable text. Select any part of it - a base64 blob, a header, a URL - and the [pivot menu](#pivot-menu) opens for that text when you let go: Hunt for it, Correlate, copy it, look it up, or open it in CyberChef. It uses the text as shown, where non-printable bytes are already `.`, so for binary data use **Send to CyberChef** below instead
 - **Hexdump** - view per-packet hex dumps with collapsible packet headers
 - **Download PCAP** - carve that specific stream into a standalone `.pcap` file
+- **Send to CyberChef** - open the stream's exact payload bytes in the built-in CyberChef, in a new tab: **Both** directions, or just the bytes sent by the **Source** or **Dest** side (their dots match the ASCII Transcript's red/blue direction colors). Unlike the transcript, nothing is replaced or trimmed, so XOR keys, compressed data and shellcode survive intact. Payloads up to 16 KB open with CyberChef's **Magic** operation already applied to suggest decodings; larger ones open with an empty recipe, since Magic can take minutes on them. Payloads over 10 MB aren't sent
+
+Expanded **File Info** rows for files Suricata extracted from the traffic have their own **Send to CyberChef** button, which opens the file's exact bytes the same way (up to 25 MB). Nothing is saved to disk by SO-CRATES either way, but CyberChef's own save button can, so treat what you save as potentially live malware.

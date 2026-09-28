@@ -18,10 +18,11 @@ any registry and don't follow one): every curated source was enabled
 individually and fetched with `suricata-update --no-merge --data-dir
 <tmp> --output <tmp>`, which writes one file per source instead of a
 single merged suricata.rules, then every `sid:` value in each resulting
-file was extracted directly. Confirmed zero actual duplicate SID values
-between any two sources, including the one pair (et/open vs Suricata's own
-built-in decoder/stream/app-layer/file rules) whose numeric spans happen to
-overlap. This is a snapshot, not a guarantee - a source's rules could in
+file was extracted directly. No two curated sources share a SID. et/open
+does ship copies of Suricata's own built-in decoder/stream/app-layer event
+rules (2200000-2299999, same SIDs - re-checked 2026-09-25: 440 of them),
+which is why those are classified as built-in first - see
+SURICATA_BUILTIN_SID_RANGES. This is a snapshot, not a guarantee - a source's rules could in
 principle drift outside its recorded range as it's updated over time; an
 unexpected rise in 'Other / Unrecognized' classifications is the signal
 that re-deriving this table (same method) may be due.
@@ -45,6 +46,7 @@ SURICATA_SID_RANGES = [
     (3115102, 3115668, 'stamus/lateral', 'Stamus Lateral Movement'),
     (3300003, 3321492, 'pawpatrules', 'PAW Patrules'),
     (3400001, 3400021, 'aleksibovellan/nmap', 'NMAP Scan Detection'),
+    (3500000, 3500201, 'the-hunters-ledger/open', "The Hunter's Ledger"),
     (5000000, 5000020, 'etnetera/aggressive', 'Etnetera Aggressive IP Blacklist'),
     (6000000, 6013663, 'julioliraup/antiphishing', 'Antiphishing'),
     (10000035, 11004724, 'ptrules/open', 'Positive Technologies PT Rules (Open)'),
@@ -59,11 +61,13 @@ SURICATA_SID_RANGES = [
 # Suricata's own bundled decoder/stream/app-layer/file rules - always
 # loaded from /etc/suricata/rules/* regardless of which curated online
 # sources are enabled, so not a "ruleset" in SURICATA_RULE_SOURCES at all.
-# Numerically overlaps et/open's range above (1-2290020 vs 2000005-2527021)
-# but the two never share an actual SID value (verified) - checked last so
-# a genuine curated-source SID always wins if the ranges were ever to
-# collide for real.
-SURICATA_BUILTIN_SID_RANGE = (1, 2290020)
+# Checked FIRST, before SURICATA_SID_RANGES: the 2200000-2299999 block sits
+# inside et/open's span, and et/open even ships copies of these same rules,
+# so checking et/open first labelled essentially every protocol-decode
+# alert "Emerging Threats Open". Two exact ranges, not one span from 1:
+# the low one ends below et/open's floor (2000005), so no et/open rule
+# outside the event-rule block is ever claimed as built-in.
+SURICATA_BUILTIN_SID_RANGES = [(1, 1999999), (2200000, 2299999)]
 SURICATA_BUILTIN_LABEL = 'Suricata (built-in)'
 
 OTHER_RULESET_LABEL = 'Other / Unrecognized'
@@ -78,12 +82,12 @@ def classify_alert_ruleset(sid):
         sid = int(sid)
     except (TypeError, ValueError):
         return OTHER_RULESET_LABEL
+    for builtin_min, builtin_max in SURICATA_BUILTIN_SID_RANGES:
+        if builtin_min <= sid <= builtin_max:
+            return SURICATA_BUILTIN_LABEL
     for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES:
         if sid >= min_sid and (max_sid is None or sid <= max_sid):
             return label
-    builtin_min, builtin_max = SURICATA_BUILTIN_SID_RANGE
-    if builtin_min <= sid <= builtin_max:
-        return SURICATA_BUILTIN_LABEL
     return OTHER_RULESET_LABEL
 
 
@@ -93,15 +97,14 @@ def sid_ranges_sql_case(expr):
     Python, generated from the exact same table so the two can never
     independently drift apart. expr is interpolated as-is - callers must
     never pass anything derived from untrusted input."""
-    parts = []
+    builtin_escaped = SURICATA_BUILTIN_LABEL.replace("'", "''")
+    parts = [f"WHEN {expr} BETWEEN {builtin_min} AND {builtin_max} THEN '{builtin_escaped}'"
+             for builtin_min, builtin_max in SURICATA_BUILTIN_SID_RANGES]
     for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES:
         escaped = label.replace("'", "''")
         if max_sid is None:
             parts.append(f"WHEN {expr} >= {min_sid} THEN '{escaped}'")
         else:
             parts.append(f"WHEN {expr} BETWEEN {min_sid} AND {max_sid} THEN '{escaped}'")
-    builtin_min, builtin_max = SURICATA_BUILTIN_SID_RANGE
-    builtin_escaped = SURICATA_BUILTIN_LABEL.replace("'", "''")
-    parts.append(f"WHEN {expr} BETWEEN {builtin_min} AND {builtin_max} THEN '{builtin_escaped}'")
     other_escaped = OTHER_RULESET_LABEL.replace("'", "''")
     return 'CASE ' + ' '.join(parts) + f" ELSE '{other_escaped}' END"

@@ -1293,8 +1293,8 @@
         /* Without this, the SO-CRATES logo link (a bare <a>, no other
            focus styling defined) falls back to the browser's native
            outline: auto ring - a stray gray/white box that doesn't match
-           any theme and (since keyboard focus isn't cleared by the 't'
-           theme-cycle hotkey) stays visibly mismatched after switching
+           any theme and (since keyboard focus isn't cleared by the '<'/'>'
+           theme-cycle hotkeys) stays visibly mismatched after switching
            themes while it's focused. Same themed outline pattern already
            used for .theme-switch's focus-visible ring. */
         .app-logo-text:focus-visible { outline: 2px solid var(--interactive-highlight, var(--accent)); outline-offset: 2px; border-radius: 4px; }
@@ -1340,14 +1340,13 @@
         .stat-card { background: var(--bg-secondary); padding: 20px; border-radius: 10px; border: 1px solid var(--border-color); text-align: center; cursor: pointer; container-type: inline-size; position: relative; }
         .stat-card:hover { border-color: var(--interactive-highlight, var(--accent)); }
         .stat-card.tab-active { border-color: var(--interactive-highlight, var(--accent)); background: var(--bg-tertiary); }
-        /* The one stat-card that ever receives .keyboard-selected (Down/Up
-           wrapping past a table's last/first row - see navigateVertical's
-           getVerticalNavItems) is always the active tab's own card, i.e.
-           always already carrying .tab-active - reusing that same
-           border-color signal here would be invisible (nothing actually
-           changes to look at), so this needs a genuinely different
-           treatment layered on top, same outline-based idiom every other
-           .keyboard-selected element in this file already uses. */
+        /* A stat-card gets .keyboard-selected from Up/Down (the active tab's
+           card, already carrying .tab-active) or from Left/Right previewing
+           any card before Enter commits it. Reusing .tab-active's
+           border-color signal would be invisible on the active card
+           (nothing changes to look at), so this is a genuinely different
+           treatment layered on top - the same outline-based idiom every
+           other .keyboard-selected element in this file already uses. */
         .stat-card.keyboard-selected { outline: 2px solid var(--interactive-highlight, var(--accent)); outline-offset: 2px; }
         /* HUD-style corner-bracket accent (theme-agnostic - pulls from
            --accent like every other decoration, no new per-theme variable):
@@ -1423,8 +1422,9 @@
         .detail-content { font-family: 'Consolas', 'Monaco', monospace; font-size: 0.8rem; color: var(--text-primary); overflow-wrap: break-word; }
         .detail-label { color: var(--text-muted); }
         .detail-value { color: var(--text-primary); }
-        /* Click target for the detail-panel pivot menu (see
-           handleDetailValueClick) - only htmlRowText's non-empty values
+        /* Click target for the detail-panel pivot menu (see the
+           document-level [data-detail-pivot] click listener in
+           socrates.js) - only htmlRowText's non-empty values
            get this span, so hover only ever highlights an actual value,
            never an empty placeholder. */
         .detail-value-pivot { cursor: pointer; border-radius: 3px; }
@@ -1445,6 +1445,17 @@
            a positive offset, not inset, since this is a small pill/button rather
            than a full-width row. */
         .stream-btn.keyboard-selected { outline: 2px solid var(--interactive-highlight, var(--accent)); outline-offset: 2px; }
+        /* File Info's Send to CyberChef - styled like .stream-btn but its own
+           class, so it stays a plain flat-list item for arrow-key navigation
+           instead of joining the stream Payload panel's Left/Right group
+           (isStreamControlGroupMember keys off .stream-btn). */
+        .cyberchef-file-btn { background: var(--bg-hover); border: none; color: var(--accent); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+        .cyberchef-file-btn:hover { background: var(--bg-hover-light); }
+        .cyberchef-file-btn.keyboard-selected { outline: 2px solid var(--interactive-highlight, var(--accent)); outline-offset: 2px; }
+        .cyberchef-send-label { color: var(--text-muted); font-size: 0.75rem; margin: 0 6px 0 16px; }
+        .stream-btn + .stream-btn { margin-left: 6px; }
+        .ascii-transcript-note { margin-top: 10px; color: var(--text-muted); font-style: italic; user-select: none; }
+        .cyberchef-direction-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
         /* The "+ Add Note"/"Edit" link (see rowNoteDetailValueHtml) is otherwise
            unstyled apart from its own inline color - same outline treatment as
            .stream-btn/.view-tab above, the other controls in an expanded row's
@@ -1550,7 +1561,7 @@
            comment for why two pseudo-elements paint two corners each via
            background gradients rather than a border), always-on rather
            than hover-triggered - the menu only exists in the DOM while
-           open (see showPivotMenu()/hidePivotMenu()), so there's no
+           open (see showPivotMenu()/closePivotMenu()), so there's no
            separate "active" state to gate it on. Scoped under .fun-theme
            like .stat-card's (see its own comment for the full rationale). */
         .fun-theme .pivot-menu::before, .fun-theme .pivot-menu::after {
@@ -1866,7 +1877,6 @@
         .mitre-tag:hover { text-decoration: underline; }
         .log-detail-panel { background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; font-size: 0.85rem; color: var(--text-primary); overflow-wrap: break-word; }
         .log-detail-panel .mono { font-family: 'Consolas', 'Monaco', monospace; }
-        .playbook-question { border-top: 1px solid var(--border-color); padding: 10px 0; }
         .playbook-question-text { color: var(--text-primary); font-weight: 600; }
         .playbook-question-context { color: var(--text-muted); font-size: 0.85rem; margin-top: 4px; }
         .playbook-questions-toggle:hover { color: var(--text-primary); }

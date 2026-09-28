@@ -8,7 +8,12 @@ on:
       - 'overrides/**'
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
+      - 'hooks/**'
       - '.github/workflows/docs.yml'
+  # Daily rebuild so the header's container download count
+  # (hooks/ghcr_downloads.py) stays current between docs changes.
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
 
 permissions:

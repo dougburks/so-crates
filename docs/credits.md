@@ -28,6 +28,7 @@ SO-CRATES is built on many excellent open-source projects and freely available r
 | [The Hunter's Ledger](https://the-hunters-ledger.com/) | CC-BY-4.0 | Suricata network rules (optional) |
 | [D3](https://d3js.org/) | ISC | Sankey diagram visualization |
 | [d3-sankey](https://github.com/d3/d3-sankey) | BSD-3-Clause | Sankey diagram layout |
+| [CyberChef](https://github.com/gchq/CyberChef) | Apache-2.0 | Built-in data decoding and analysis (pivot-menu lookup, Send to CyberChef) |
 | [tcpdump](https://www.tcpdump.org/) | BSD-3-Clause | Stream/hexdump carving |
 | [Wireshark/tshark](https://www.wireshark.org/) | GPL-2.0-only | ASCII transcript extraction |
 | [ExifTool](https://exiftool.org/) | Perl Artistic License / GPL | EXIF/media metadata extraction |

@@ -7,6 +7,16 @@ docs_dir: docs
 
 watch:
   - overrides
+  - hooks
+
+hooks:
+  - hooks/ghcr_downloads.py
+
+extra_css:
+  - stylesheets/source-facts.css
+
+extra_javascript:
+  - javascripts/source-downloads.js
 
 plugins:
   - glightbox

@@ -1,26 +1,22 @@
 #!/usr/bin/env python3
 import http.server
-import http.client
 import socketserver
 import concurrent.futures
 import json
 import os
-import ssl
 import sqlite3
 import subprocess
-import hashlib
 import ipaddress
 import posixpath
-from urllib.parse import urlparse, parse_qs, urljoin, unquote
+import signal
+from urllib.parse import urlparse, parse_qs, unquote
 import urllib.request
 import urllib.error
-import zipfile
 import re
 import tempfile
 import time
 import shutil
 import sys
-import socket
 import threading
 
 from db import (
@@ -29,25 +25,35 @@ from db import (
     query_sigma_alerts_sqlite, get_sigma_stats_sqlite,
     get_sigma_alert_count_sqlite, get_event_date_range_sqlite,
     get_sankey_data_sqlite, get_aggregation_data_sqlite, get_aggregation_totals_sqlite,
-    AGGREGATION_TOP_N, AGGREGATION_JSON_PATHS, REAL_AGGREGATION_COLUMNS,
+    AGGREGATION_TOP_N, AGGREGATION_PAGE_SIZE_OPTIONS,
     set_row_note, has_row_notes,
     set_acknowledged, set_acknowledged_bulk,
 )
 from validators import (
     validate_ip, validate_port, sanitize_filename, is_safe_path,
-    validate_url_safety, resolve_safe_ips, validate_zip_extraction,
     is_log_file, is_log_file_by_extension, is_office_file_by_extension,
     is_pcap_file,
+)
+from url_fetch import FileTooLargeError, fetch_url_safely
+from storage import (
+    PCAP_EXTENSIONS, PCAP_ANALYSIS_ARTIFACTS, FILE_ANALYSIS_ARTIFACTS,
+    upload_tmp_dir, cleanup_upload_tmp_dir, resolve_upload_size_limit, extract_zip_contents,
+    hash_file, hash_file_with_prefix, is_pcap_path, write_meta, read_meta, find_pcap_file,
+)
+from analysis_cache import (
+    SANKEY_CACHE, AGGREGATION_CACHE, AGGREGATION_TOTALS_CACHE, ALL_CACHES, CACHE_LOCK,
+    cache_put, evict_analysis_cache, cacheable_aggregation_key,
 )
 from suricata_analyzer import (
     check_executables, setup_suricata_config, spawn_suricata,
     _set_error, _set_phase, _clear_phase, get_suricata_rules_info,
     get_suricata_enabled_sources, get_suricata_show_protocol_decode_alerts,
     SURICATA_RULE_SOURCES, BAKED_IN_SURICATA_SOURCES,
-    DEFAULT_SURICATA_SOURCES,
+    DEFAULT_SURICATA_SOURCES, find_extracted_file,
 )
+from stream_payload import DIRECTIONS as STREAM_DIRECTIONS, run_follow_raw
 from suricata_sid_ranges import (
-    SURICATA_SID_RANGES, SURICATA_BUILTIN_SID_RANGE, SURICATA_BUILTIN_LABEL,
+    SURICATA_SID_RANGES, SURICATA_BUILTIN_SID_RANGES, SURICATA_BUILTIN_LABEL,
 )
 from yara_analyzer import check_yara_executable, setup_yara_rules, scan_single_file, get_yara_rules_info
 from sigma_analyzer import (
@@ -60,9 +66,10 @@ from ohmydebn_colors import (
 from playbook_lookup import get_playbook
 from ai_summary_lookup import get_ai_summary
 import config
+import cyberchef
 import tomllib
 
-VERSION = '4.2.0'
+VERSION = '4.3.0'
 GITHUB_RELEASES_API = 'https://api.github.com/repos/dougburks/so-crates/releases/latest'
 PORT = int(os.environ.get('PORT', 8000))
 BIND_ADDRESS = os.environ.get('BIND_ADDRESS', '127.0.0.1')
@@ -78,7 +85,6 @@ MAX_TRANSCRIPT_SIZE = config.MAX_TRANSCRIPT_SIZE
 MAX_EVE_SIZE = config.MAX_EVE_SIZE
 SURICATA_DIR = os.path.join(DATA_DIR, 'suricata')
 
-PCAP_EXTENSIONS = ('.pcap', '.pcapng', '.cap', '.trace')
 MD5_RE = re.compile(r'^[a-f0-9]{32}$')
 # Deliberately permissive rather than an enum of known theme names, so the
 # client's own THEMES allowlist (static/socrates.js) stays the single source
@@ -87,35 +93,7 @@ MD5_RE = re.compile(r'^[a-f0-9]{32}$')
 # installed OhMyDebn theme names use them (e.g. "black_arch", "snow_black").
 THEME_NAME_RE = re.compile(r'^[a-z0-9_-]{1,40}$')
 
-# Pipeline output artifacts removed by /api/reanalyze before re-running analysis
-PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json')
-FILE_ANALYSIS_ARTIFACTS = ('events.db', '.error', 'yara_matches.json', 'sigma_matches.json', '.meta', 'zircolite.log', '.zircolite_events.db')
-
-MAX_URL_REDIRECTS = 5
-
-# Cache of the unfiltered (no search query) Sankey/aggregation result per
-# (md5, event_type) - the events table is written once by create_sqlite_db
-# and never mutated afterward except by delete/reanalyze (both evict below),
-# so caching it is safe and turns every repeat tab-view after the first into
-# a no-op instead of a multi-hundred-ms SQL recomputation.
-_SANKEY_CACHE = {}
-_AGGREGATION_CACHE = {}
-_AGGREGATION_TOTALS_CACHE = {}
-# Single source of truth for "every analysis-result cache": _evict_analysis_cache
-# and the delete-all handler must always cover the same set, so a new cache
-# added here is automatically evicted/cleared in both places.
-_ALL_CACHES = (_SANKEY_CACHE, _AGGREGATION_CACHE, _AGGREGATION_TOTALS_CACHE)
-_CACHE_LOCK = threading.Lock()
-# Backstop against cache-fill abuse: cache keys include client-supplied
-# strings, so even with per-key validation the total entry count is bounded.
-_CACHE_MAX_ENTRIES = 2048
-
-
-def _evict_analysis_cache(md5):
-    with _CACHE_LOCK:
-        for cache in _ALL_CACHES:
-            for key in [k for k in cache if k[0] == md5]:
-                del cache[key]
+_REANALYZE_LOCK = threading.Lock()
 
 
 def _sanitize_error_text(text):
@@ -124,6 +102,18 @@ def _sanitize_error_text(text):
     locations) that a browser client has no use for."""
     text = text.replace(DATA_DIR + os.sep, '').replace(DATA_DIR, '')
     return re.sub(r'(?:^|(?<=[\s:\'"(]))/(?:[\w.+-]+/)+[\w.+-]+', '<path>', text)
+
+
+def _stream_bpf_filter(src, sport, dst, dport):
+    """tcpdump filter for one flow. 'and port', not 'or port', so unrelated
+    flows sharing a port stay out. The second half matches the same flow
+    inside 802.1Q VLAN-tagged frames: BPF's host/port primitives only look
+    at untagged offsets, so without it a capture from a tagged SPAN/trunk
+    port carves to an empty file (seen for real: a Security Onion capture
+    with every packet on VLAN 244). 'vlan' shifts the offsets for what
+    follows it, hence the whole expression repeated after it."""
+    flow = f'host {src} and host {dst} and port {sport} and port {dport}'
+    return f'({flow}) or (vlan and ({flow}))'
 
 
 def _run_capped(cmd, max_bytes, timeout, text=False):
@@ -143,6 +133,10 @@ def _run_capped(cmd, max_bytes, timeout, text=False):
         proc.kill()
 
     timer = threading.Timer(timeout, _kill_on_timeout)
+    # Daemon, like every request thread: a non-daemon timer still pending
+    # when the server shuts down would hold the process open for up to
+    # the full timeout.
+    timer.daemon = True
     timer.start()
     chunks = []
     total = 0
@@ -165,33 +159,13 @@ def _run_capped(cmd, max_bytes, timeout, text=False):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+        proc.stdout.close()
     if timed_out[0]:
         raise subprocess.TimeoutExpired(cmd, timeout)
     data = b''.join(chunks)
     if text:
         data = data.decode('utf-8', errors='replace')
     return proc.returncode, data, truncated
-
-
-def _cache_put(cache, key, value):
-    """Insert into an analysis cache; caller must hold _CACHE_LOCK."""
-    if len(cache) >= _CACHE_MAX_ENTRIES:
-        cache.clear()
-    cache[key] = value
-
-
-def _cacheable_aggregation_key(event_type, column=None):
-    """Only cache keys built from recognized event types/columns - arbitrary
-    client strings must not become permanent cache entries (memory DoS)."""
-    if event_type is not None and event_type not in AGGREGATION_JSON_PATHS:
-        return False
-    if column is None:
-        return True
-    if column in REAL_AGGREGATION_COLUMNS:
-        return True
-    if event_type is None:
-        return column in ('Type', 'Detail')
-    return column in AGGREGATION_JSON_PATHS[event_type]
 
 
 # Server-wide rule-update job state, polled by the frontend via
@@ -226,194 +200,14 @@ def _run_ruleset_update(name, sources=None, show_protocol_decode_alerts=None):
         elif name == 'sigma':
             setup_sigma_rules(DATA_DIR, on_progress=on_progress, force=True)
     except Exception as e:
-        on_progress(f'Error updating {_RULESET_LABELS[name]} rules: {e}')
+        # Served back by /api/rule-update-status - no absolute paths.
+        on_progress(_sanitize_error_text(f'Error updating {_RULESET_LABELS[name]} rules: {e}'))
         with _rule_update_lock:
-            _rule_update_state[name]['error'] = f'{e}'
+            _rule_update_state[name]['error'] = _sanitize_error_text(f'{e}')
     finally:
         with _rule_update_lock:
             _rule_update_state[name]['done'] = True
             _rule_update_state[name]['running'] = False
-
-
-class _FileTooLargeError(Exception):
-    """Raised by _fetch_url_safely when the downloaded body exceeds max_size."""
-
-
-def _connect_to_pinned_ips(pinned_ips, port, timeout):
-    """Try each pre-validated IP in turn, same fallback behavior as a plain
-    hostname connect (e.g. skip an unreachable IPv6 address and fall back to
-    IPv4), but every candidate comes from the already-validated set -- no
-    new DNS lookup happens here, so the pinning/SSRF protection holds."""
-    last_err = None
-    for ip in pinned_ips:
-        try:
-            return socket.create_connection((ip, port), timeout)
-        except OSError as e:
-            last_err = e
-    raise last_err or OSError('No addresses to connect to')
-
-
-class _PinnedHTTPConnection(http.client.HTTPConnection):
-    """HTTPConnection that connects to a pre-validated IP instead of letting
-    the socket layer re-resolve the hostname, closing the DNS-rebinding
-    TOCTOU window between validate_url_safety() and the real connection."""
-
-    def __init__(self, hostname, pinned_ips, port, timeout):
-        super().__init__(hostname, port, timeout=timeout)
-        self._pinned_ips = pinned_ips
-
-    def connect(self):
-        self.sock = _connect_to_pinned_ips(self._pinned_ips, self.port, self.timeout)
-
-
-class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, hostname, pinned_ips, port, timeout):
-        super().__init__(hostname, port, timeout=timeout, context=ssl.create_default_context())
-        self._pinned_ips = pinned_ips
-
-    def connect(self):
-        sock = _connect_to_pinned_ips(self._pinned_ips, self.port, self.timeout)
-        # server_hostname uses the real hostname (self.host) for SNI/cert
-        # validation even though we dialed a pinned IP directly.
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
-
-
-def _fetch_url_safely(url, timeout, max_size, chunk_size=64 * 1024):
-    """Download a URL while guarding against SSRF.
-
-    Every hop -- including redirect targets -- is validated with
-    validate_url_safety() and then connected via the specific IPs that
-    validation just checked (see resolve_safe_ips). This prevents both:
-      - DNS-rebinding TOCTOU: an attacker's DNS server returning a public IP
-        for validation and a private/internal IP for the real connection.
-      - Redirect-based bypass: a public URL that 30x-redirects to a blocked
-        address after the initial URL already passed validation.
-
-    Returns the path to a temp file (under _upload_tmp_dir()) containing the
-    downloaded body -- streamed directly to disk rather than buffered in
-    memory, so peak memory doesn't scale with the response size.
-    Raises ValueError on validation/protocol failures, or _FileTooLargeError
-    if the body exceeds max_size.
-    """
-    current_url = url
-    for _ in range(MAX_URL_REDIRECTS + 1):
-        validate_url_safety(current_url)
-        parsed = urlparse(current_url)
-        hostname = parsed.hostname
-        port = parsed.port or (443 if parsed.scheme == 'https' else 80)
-        pinned_ips = resolve_safe_ips(hostname)
-
-        path = parsed.path or '/'
-        if parsed.query:
-            path += '?' + parsed.query
-
-        conn_cls = _PinnedHTTPSConnection if parsed.scheme == 'https' else _PinnedHTTPConnection
-        conn = conn_cls(hostname, pinned_ips, port, timeout)
-        try:
-            conn.request('GET', path, headers={'User-Agent': 'Mozilla/5.0'})
-            resp = conn.getresponse()
-
-            if resp.status in (301, 302, 303, 307, 308):
-                location = resp.getheader('Location')
-                # Bounded discard, not a bare resp.read() - a malicious or
-                # compromised server could otherwise pair a redirect with an
-                # unbounded (or slow-trickling) body and exhaust memory
-                # before we ever look at Location.
-                total = 0
-                while True:
-                    chunk = resp.read(chunk_size)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > max_size:
-                        raise _FileTooLargeError('Redirect response body too large')
-                if not location:
-                    raise ValueError('Redirect response missing Location header')
-                current_url = urljoin(current_url, location)
-                continue
-
-            if resp.status != 200:
-                raise ValueError(f'Server returned HTTP {resp.status}')
-
-            fd, tmp_path = tempfile.mkstemp(dir=_upload_tmp_dir(), suffix='.download')
-            try:
-                total = 0
-                with os.fdopen(fd, 'wb') as f:
-                    while True:
-                        chunk = resp.read(chunk_size)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if total > max_size:
-                            raise _FileTooLargeError('File too large')
-                        f.write(chunk)
-                return tmp_path
-            except Exception:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                raise
-        finally:
-            conn.close()
-
-    raise ValueError('Too many redirects')
-
-
-def _attempt_zip_extract(zip_ref, extract_dir, passwords, max_size=None):
-    """Extract ZIP contents, trying passwords if needed.
-
-    Returns True on success, False if extraction failed.
-    Raises ValueError on zip slip or size violations.
-    """
-    validate_zip_extraction(zip_ref, extract_dir, max_size)
-    extracted = False
-    try:
-        zip_ref.extractall(extract_dir)
-        extracted = True
-    except (RuntimeError, NotImplementedError):
-        # RuntimeError: bad/missing password. NotImplementedError: zipfile's
-        # own signal for strong encryption (AES) or an unsupported
-        # compression method - both are real, fairly common in
-        # malware-sample archives, not just "wrong password".
-        pass
-
-    if not extracted and passwords:
-        for pwd in passwords:
-            try:
-                zip_ref.extractall(extract_dir, pwd=pwd)
-                extracted = True
-                break
-            except (RuntimeError, NotImplementedError):
-                continue
-
-    return extracted
-
-
-
-def _write_meta(dir_path, original, extracted, detected_type):
-    """Write analysis metadata for frontend routing."""
-    from datetime import datetime
-    meta = {
-        'version': 1,
-        'original': original,
-        'extracted': extracted,
-        'detected_type': detected_type,
-        'extracted_at': datetime.now().isoformat(),
-    }
-    meta_path = os.path.join(dir_path, '.meta')
-    with open(meta_path, 'w') as f:
-        json.dump(meta, f)
-
-
-def _read_meta(dir_path):
-    """Read analysis metadata if it exists."""
-    meta_path = os.path.join(dir_path, '.meta')
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            pass
-    return None
 
 
 def _is_newer_version(candidate, current):
@@ -470,149 +264,29 @@ def _get_ohmydebn_custom_colors():
     return None
 
 
-def _upload_tmp_dir():
-    """Scratch dir for in-progress uploads, on the same filesystem as DATA_DIR
-    so the final move into DATA_DIR/<md5>/... is an atomic rename rather than
-    a cross-device copy. Recomputed from the current DATA_DIR on every call
-    (not cached as a module constant) so it stays correct if DATA_DIR is
-    reassigned after import, as the test suite does.
-    """
-    d = os.path.join(DATA_DIR, config.UPLOAD_TMP_SUBDIR)
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def _cleanup_upload_tmp_dir():
-    """Remove any leftover entries from _upload_tmp_dir(). Meant to be called
-    once at startup, before the server accepts requests -- at that point,
-    anything found here is guaranteed orphaned (no upload can legitimately
-    be in progress yet), left behind by a process that died mid-upload
-    (crash, OOM-kill, kill -9) before its own request-scoped cleanup in
-    _process_uploaded_file/_fetch_url_safely/_parse_multipart_stream could
-    run. Those normal completion/exception paths already clean up after
-    themselves within a single request's lifetime; this just catches what
-    a hard process death leaves behind, which would otherwise accumulate
-    forever across restarts.
-    """
-    tmp_dir = _upload_tmp_dir()
-    for entry in os.listdir(tmp_dir):
-        path = os.path.join(tmp_dir, entry)
-        try:
-            if os.path.isdir(path):
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                os.unlink(path)
-        except OSError:
-            pass
-
-
-def _find_pcap_file(dir_path):
-    """Find the analyzed pcap file within an analysis directory.
-
-    Tries the fast extension-based match first, then falls back to
-    magic-byte detection (is_pcap_file) over the remaining non-artifact
-    entries. The fallback matters because some real pcaps have no
-    recognized extension at all (e.g. Security Onion's
-    so-pcap.<timestamp> downloads) -- they were still correctly detected
-    and ingested as pcaps at upload time via magic bytes (see
-    _process_uploaded_file), so lookups here must use the same detection
-    method rather than relying on the filename alone.
-
-    Returns the filename (not full path), or None if not found.
-    """
-    if not os.path.exists(dir_path):
-        return None
-    entries = os.listdir(dir_path)
-    for f in entries:
-        if f.lower().endswith(PCAP_EXTENSIONS):
-            return f
-    for f in entries:
-        if f.startswith('.') or f in PCAP_ANALYSIS_ARTIFACTS or f in ('name.txt', 'notes.txt'):
-            continue
-        full_path = os.path.join(dir_path, f)
-        if not os.path.isfile(full_path):
-            continue
-        try:
-            with open(full_path, 'rb') as fh:
-                if is_pcap_file(fh.read(4)):
-                    return f
-        except OSError:
-            continue
-    return None
-
-
-def _resolve_upload_size_limit(requested):
-    """Resolve the effective per-request upload-size ceiling from a
-    client-provided override (X-Max-Upload-Size header for /api/upload, or
-    the maxUploadSize JSON field for /api/load-url), clamped to the hard
-    server ceiling (config.MAX_UPLOAD_SIZE) -- mirrors _parse_pagination's
-    clamping semantics for MAX_QUERY_LIMIT. Falls back to
-    config.DEFAULT_UPLOAD_SIZE if the override is missing/malformed/
-    non-positive, matching the pre-existing default behavior for any
-    caller that doesn't send one.
-    """
-    try:
-        value = int(requested)
-    except (TypeError, ValueError):
-        return config.DEFAULT_UPLOAD_SIZE
-    if value <= 0:
-        return config.DEFAULT_UPLOAD_SIZE
-    return min(value, config.MAX_UPLOAD_SIZE)
-
-
-def _hash_file(path):
-    """MD5 of a file, streamed in HASH_CHUNK_SIZE chunks (mirrors the hashing
-    pattern in yara_analyzer.scan_single_file)."""
-    return _hash_file_with_prefix(path)[0]
-
-
-def _hash_file_with_prefix(path, prefix_len=4096):
-    """Like _hash_file, but also returns the first prefix_len bytes in the
-    same pass, for callers that also need a magic-byte/content prefix (e.g.
-    is_pcap_file, is_log_file) without a second full-file read."""
-    h = hashlib.md5()
-    prefix = b''
-    with open(path, 'rb') as f:
-        first = True
-        for chunk in iter(lambda: f.read(config.HASH_CHUNK_SIZE), b''):
-            h.update(chunk)
-            if first:
-                prefix = chunk[:prefix_len]
-                first = False
-    return h.hexdigest(), prefix
-
-
-def _extract_zip_contents(zip_path, extract_dir, passwords=None, max_size=None):
-    """Extract all contents of the zip file at zip_path into extract_dir.
-
-    max_size is the decompression-size ceiling passed through to
-    validate_zip_extraction (defaults to config.MAX_UPLOAD_SIZE there);
-    callers should pass the resolved per-request effective_max so the
-    zip-bomb budget tracks what this particular upload was actually
-    allowed, not always the fixed hard ceiling.
-
-    Returns list of extracted file paths.
-    Raises ValueError if extraction fails.
-    """
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        if not _attempt_zip_extract(zip_ref, extract_dir, passwords, max_size):
-            raise ValueError('Password-protected ZIP could not be opened.')
-
-    # Return all extracted files recursively, excluding hidden/metadata files
-    files = []
-    for root, _dirs, filenames in os.walk(extract_dir):
-        for f in filenames:
-            if f.startswith('.') or f.startswith('__'):
-                continue
-            full_path = os.path.join(root, f)
-            if os.path.isfile(full_path):
-                files.append(full_path)
-    return files
-
-
 class Handler(http.server.SimpleHTTPRequestHandler):
+    # Set by do_GET for a /cyberchef/ request that passed its path checks -
+    # switches translate_path() to CYBERCHEF_DIR and _add_security_headers()
+    # to CyberChef's own CSP for this one response.
+    _serving_cyberchef = False
+
     def log_message(self, format, *args):
         pass
+
+    def translate_path(self, path):
+        if not self._serving_cyberchef:
+            return super().translate_path(path)
+        # do_GET already rejected any '..' segment in this normalized form.
+        normalized = posixpath.normpath(unquote(urlparse(path).path))
+        parts = [p for p in normalized.split('/')[2:] if p]
+        return os.path.join(cyberchef.CYBERCHEF_DIR, *parts)
+
+    def list_directory(self, path):
+        # SimpleHTTPRequestHandler's fallback for a directory with no
+        # index.html (e.g. /static/ or /cyberchef/assets/) - never a page
+        # this app means to serve.
+        self._send_error(404, 'Not found')
+        return None
 
     def _add_security_headers(self):
         self.send_header('X-Frame-Options', 'DENY')
@@ -626,13 +300,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # style-src keeps 'unsafe-inline' deliberately: the UI uses inline
         # style= attributes throughout, and CSS injection is a far weaker
         # primitive than script injection.
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'self'; report-uri /api/csp-report;")
+        # /cyberchef/ gets its own, looser policy - see cyberchef.py for
+        # what each carve-out is for and why it stays off this app's pages.
+        if self._serving_cyberchef:
+            self.send_header('Content-Security-Policy', cyberchef.get_csp())
+        else:
+            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'self'; report-uri /api/csp-report;")
 
     def end_headers(self):
         self._add_security_headers()
         # Prevent browser caching of HTML and static assets so upgrades
         # are reflected immediately without manual cache clearing.
-        if self.path.endswith('.html') or self.path.startswith('/static/'):
+        # CyberChef is ~48MB, too big to re-download on every open, but its
+        # asset names don't change between versions (assets/main.js), so it
+        # can't be cached blindly either: no-cache makes the browser
+        # revalidate each time, and the stdlib handler answers with a cheap
+        # 304 until an image upgrade changes the files' Last-Modified.
+        if self._serving_cyberchef:
+            self.send_header('Cache-Control', 'no-cache')
+        elif self.path.endswith('.html') or self.path.startswith('/static/'):
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
@@ -801,7 +487,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         directory listing race against the real uploaded file's name.
 
         pcap_file, if the caller already knows it (e.g. from
-        _find_pcap_file(), which also matches extension-less pcaps via
+        find_pcap_file(), which also matches extension-less pcaps via
         magic bytes - not just this function's own PCAP_EXTENSIONS check),
         is excluded by exact name too.
         """
@@ -858,7 +544,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # path) are always 400 - never guessed from the message text.
             return None, error, 400
 
-        pcap_file = _find_pcap_file(dir_path)
+        pcap_file = find_pcap_file(dir_path)
         pcap = os.path.join(dir_path, pcap_file) if pcap_file else None
         if not pcap:
             return None, 'No pcap file found', 404
@@ -875,6 +561,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/download-stream': 'handle_get_download_stream',
         '/api/ascii-stream': 'handle_get_ascii_stream',
         '/api/hexdump-stream': 'handle_get_hexdump_stream',
+        '/api/raw-stream': 'handle_get_raw_stream',
+        '/api/extracted-file': 'handle_get_extracted_file',
         '/api/analyses': 'handle_get_analyses',
         '/api/load-analysis': 'handle_get_load_analysis',
         '/api/pcap-path': 'handle_get_pcap_path',
@@ -1024,8 +712,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 super().do_GET()
             else:
                 self._send_error(404, 'Not found')
+        elif path == '/cyberchef':
+            self.send_response(301)
+            self.send_header('Location', '/cyberchef/')
+            self.end_headers()
+        elif path.startswith('/cyberchef/'):
+            # Same normalized-form re-check as /static/ above.
+            normalized = posixpath.normpath(unquote(path))
+            if ((normalized == '/cyberchef' or normalized.startswith('/cyberchef/'))
+                    and '..' not in normalized.split('/')):
+                self._serving_cyberchef = True
+                super().do_GET()
+            else:
+                self._send_error(404, 'Not found')
         else:
             self._send_error(404, 'Not found')
+
+    def do_HEAD(self):
+        # SimpleHTTPRequestHandler's inherited do_HEAD serves straight from
+        # the working directory, skipping every check do_GET makes (Host
+        # header, routing, path normalization) - HEAD /socrates.py answered
+        # 200 with the file's size. Nothing in this app needs HEAD (browsers
+        # never send it here), so refuse it outright rather than duplicate
+        # do_GET's routing for a method no client uses. No body: a HEAD
+        # response must not have one, so not _send_error.
+        self.send_response(405)
+        self.send_header('Allow', 'GET, POST')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
 
     def do_POST(self):
         if self._reject_cross_origin(is_post=True):
@@ -1130,16 +844,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({'nodes': [], 'links': []})
             return
         try:
-            if q is None and _cacheable_aggregation_key(event_type):
+            if q is None and cacheable_aggregation_key(event_type):
                 cache_key = (md5, event_type)
-                with _CACHE_LOCK:
-                    cached = _SANKEY_CACHE.get(cache_key)
+                with CACHE_LOCK:
+                    cached = SANKEY_CACHE.get(cache_key)
                 if cached is not None:
                     self._send_json(cached)
                     return
                 data = get_sankey_data_sqlite(db_file, event_type, q)
-                with _CACHE_LOCK:
-                    _cache_put(_SANKEY_CACHE, cache_key, data)
+                with CACHE_LOCK:
+                    cache_put(SANKEY_CACHE, cache_key, data)
             else:
                 data = get_sankey_data_sqlite(db_file, event_type, q)
         except Exception:
@@ -1174,7 +888,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             page_size = int(params.get('page_size', [''])[0])
         except (ValueError, TypeError):
             page_size = AGGREGATION_TOP_N
-        if page_size not in (10, 25, 50, 100):
+        if page_size not in AGGREGATION_PAGE_SIZE_OPTIONS:
             page_size = AGGREGATION_TOP_N
         offset = (page - 1) * page_size
 
@@ -1183,16 +897,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({})
             return
         try:
-            if q is None and _cacheable_aggregation_key(event_type, column):
+            if q is None and cacheable_aggregation_key(event_type, column):
                 cache_key = (md5, event_type, column, page, page_size)
-                with _CACHE_LOCK:
-                    cached = _AGGREGATION_CACHE.get(cache_key)
+                with CACHE_LOCK:
+                    cached = AGGREGATION_CACHE.get(cache_key)
                 if cached is not None:
                     self._send_json(cached)
                     return
                 data = get_aggregation_data_sqlite(db_file, event_type, q, top_n=page_size, offset=offset, column=column)
-                with _CACHE_LOCK:
-                    _cache_put(_AGGREGATION_CACHE, cache_key, data)
+                with CACHE_LOCK:
+                    cache_put(AGGREGATION_CACHE, cache_key, data)
             else:
                 data = get_aggregation_data_sqlite(db_file, event_type, q, top_n=page_size, offset=offset, column=column)
         except Exception:
@@ -1219,16 +933,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({})
             return
         try:
-            if q is None and _cacheable_aggregation_key(event_type):
+            if q is None and cacheable_aggregation_key(event_type):
                 cache_key = (md5, event_type)
-                with _CACHE_LOCK:
-                    cached = _AGGREGATION_TOTALS_CACHE.get(cache_key)
+                with CACHE_LOCK:
+                    cached = AGGREGATION_TOTALS_CACHE.get(cache_key)
                 if cached is not None:
                     self._send_json(cached)
                     return
                 data = get_aggregation_totals_sqlite(db_file, event_type, q)
-                with _CACHE_LOCK:
-                    _cache_put(_AGGREGATION_TOTALS_CACHE, cache_key, data)
+                with CACHE_LOCK:
+                    cache_put(AGGREGATION_TOTALS_CACHE, cache_key, data)
             else:
                 data = get_aggregation_totals_sqlite(db_file, event_type, q)
         except Exception:
@@ -1250,7 +964,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         try:
             returncode, stdout, truncated = _run_capped(
-                ['tcpdump', '-r', pcap, '-w', '-', f"host {src} and host {dst} and port {sport} and port {dport}"],
+                ['tcpdump', '-r', pcap, '-w', '-', _stream_bpf_filter(src, sport, dst, dport)],
                 max_bytes=config.MAX_STREAM_DOWNLOAD_SIZE,
                 timeout=config.STREAM_TIMEOUT_SECONDS
             )
@@ -1286,8 +1000,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         dport = result['dport']
 
         try:
+            proto = 'tcp'
             lines = self._extract_payload_lines(pcap, src, sport, dst, dport, 'tcp')
             if not lines:
+                proto = 'udp'
                 lines = self._extract_payload_lines(pcap, src, sport, dst, dport, 'udp')
 
             truncated = False
@@ -1307,22 +1023,35 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 kept.append(line)
             lines = kept
 
-            self._send_json({'lines': lines, 'truncated': truncated})
+            # proto lets the transcript join a TCP stream's segments back
+            # into one byte stream (a UDP datagram is its own message).
+            self._send_json({'lines': lines, 'truncated': truncated, 'proto': proto})
         except subprocess.TimeoutExpired:
             self._send_error(500, 'ASCII transcript extraction timed out')
         except Exception:
             self._send_error(500, 'Internal server error')
 
     def _extract_payload_lines(self, pcap, src, sport, dst, dport, proto):
+        # tshark's ip.* fields don't match IPv6 at all ("not a valid
+        # hostname or IPv4 address", silently giving an empty transcript) -
+        # IPv6 flows need the ipv6.* fields instead.
+        family = 'ipv6' if ipaddress.ip_address(src).version == 6 else 'ip'
+        display_filter = (f'{family}.addr == {src} && {family}.addr == {dst} && '
+                          f'{proto}.port == {sport} && {proto}.port == {dport}')
+        if proto == 'tcp':
+            # The transcript joins a TCP stream's segments into one byte
+            # stream, so a retransmitted segment would be spliced into the
+            # middle of a line rather than show as a harmless duplicate.
+            display_filter += ' && !tcp.analysis.retransmission'
         # Capped read: the response is trimmed to MAX_TRANSCRIPT_* far below
         # this, so anything past the cap could never be shown anyway.
         _, stdout, _ = _run_capped(
-            ['tshark', '-r', pcap, '-Y',
-             f'ip.addr == {src} && ip.addr == {dst} && {proto}.port == {sport} && {proto}.port == {dport}',
-             '-T', 'fields', '-e', 'ip.src', '-e', f'{proto}.payload'],
+            ['tshark', '-r', pcap, '-Y', display_filter,
+             '-T', 'fields', '-e', f'{family}.src', '-e', f'{proto}.payload'],
             max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
             timeout=config.STREAM_TIMEOUT_SECONDS, text=True
         )
+        src_addr = ipaddress.ip_address(src)
         lines = []
         for line in stdout.strip().split('\n'):
             if not line.strip():
@@ -1337,10 +1066,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     payload_bytes = bytes.fromhex(payload_hex)
                     payload_str = payload_bytes.decode('utf-8', errors='replace')
                     cleaned = ''.join(c if c in '\n\r\t' or 32 <= ord(c) < 127 else '.' for c in payload_str)
-                    if cleaned.strip():
-                        direction = 'src' if packet_src == src else 'dst'
-                        lines.append({'text': cleaned, 'direction': direction})
-                except (ValueError, UnicodeDecodeError):
+                    # Whitespace-only payloads are kept: an interactive
+                    # session sends Enter or a space as its own segment, and
+                    # dropping it ran the neighboring commands together once
+                    # the transcript joins segments.
+                    # Compared as addresses, not strings: Suricata logs IPv6
+                    # fully expanded, tshark prints it compressed.
+                    direction = 'src' if ipaddress.ip_address(packet_src) == src_addr else 'dst'
+                    lines.append({'text': cleaned, 'direction': direction})
+                except ValueError:
                     pass
         return lines
 
@@ -1359,7 +1093,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try:
             _, stdout, raw_truncated = _run_capped(
                 ['tcpdump', '-r', pcap, '-X', '-nn',
-                 f'host {src} and host {dst} and port {sport} and port {dport}'],
+                 _stream_bpf_filter(src, sport, dst, dport)],
                 max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
                 timeout=config.STREAM_TIMEOUT_SECONDS, text=True
             )
@@ -1395,6 +1129,97 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except subprocess.TimeoutExpired:
             self._send_error(500, 'Hexdump extraction timed out')
         except Exception:
+            self._send_error(500, 'Internal server error')
+
+    def _send_bytes(self, data, filename):
+        """Exact bytes as a download - application/octet-stream plus the
+        global nosniff header means a browser navigating here directly
+        never renders them, whatever they contain."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/octet-stream')
+        self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_get_raw_stream(self, params):
+        """One flow's exact payload bytes (see stream_payload.py) - unlike
+        /api/ascii-stream, nothing is decoded, replaced or trimmed.
+        direction: 'src' (bytes sent by src:sport), 'dst', or 'both'."""
+        result, error, status_code = self._validate_stream_params(params)
+        if error:
+            self._send_error(status_code, error)
+            return
+        direction = params.get('direction', ['both'])[0]
+        if direction not in STREAM_DIRECTIONS:
+            self._send_error(400, 'Invalid direction')
+            return
+        pcap, src, sport, dst, dport = (result[k] for k in ('pcap', 'src', 'sport', 'dst', 'dport'))
+        try:
+            # tshark reads the entire capture even to follow one flow (~8s
+            # on a 1GB pcap, measured), while tcpdump's BPF filter carves
+            # the flow out in a fraction of a second - so carve first, the
+            # same way /api/download-stream does, and follow only that.
+            _, carved, truncated = _run_capped(
+                ['tcpdump', '-r', pcap, '-w', '-', _stream_bpf_filter(src, sport, dst, dport)],
+                max_bytes=config.MAX_STREAM_DOWNLOAD_SIZE,
+                timeout=config.STREAM_TIMEOUT_SECONDS
+            )
+            if truncated:
+                self._send_error(413, 'Stream payload too large')
+                return
+            # upload_tmp_dir() is swept at startup, so a hard crash
+            # mid-request can't strand the carved copy.
+            with tempfile.NamedTemporaryFile(dir=upload_tmp_dir(DATA_DIR), suffix='.pcap') as tmp:
+                tmp.write(carved)
+                tmp.flush()
+                payload, too_large = run_follow_raw(
+                    _run_capped, tmp.name, src, sport, dst, dport, direction,
+                    max_bytes=config.MAX_RAW_STREAM_SIZE,
+                    timeout=config.STREAM_TIMEOUT_SECONDS)
+            if too_large:
+                # Refuse rather than cut off: a truncated payload would
+                # decode wrongly with nothing to say it's incomplete.
+                self._send_error(413, 'Stream payload too large')
+            elif not payload:
+                self._send_error(404, 'No payload found')
+            else:
+                self._send_bytes(payload, f'stream_{src}_{sport}_to_{dst}_{dport}_{direction}.bin'
+                                          .replace(':', '-'))
+        except subprocess.TimeoutExpired:
+            self._send_error(500, 'Stream payload extraction timed out')
+        except Exception:
+            self._send_error(500, 'Internal server error')
+
+    def handle_get_extracted_file(self, params):
+        """One file Suricata extracted from this analysis's traffic, by
+        SHA256 (the fileinfo event's fileinfo.sha256)."""
+        dir_path, error = self._resolve_md5_dir(params.get('md5', [''])[0])
+        if error:
+            self._send_error(400, error)
+            return
+        sha256 = params.get('sha256', [''])[0]
+        if not re.match(r'^[a-f0-9]{64}$', sha256):
+            self._send_error(400, 'Invalid SHA256')
+            return
+        path = find_extracted_file(dir_path, sha256)
+        if not path:
+            # Suricata logs a fileinfo event for every transfer it sees,
+            # but only stores the ones it could fully reassemble.
+            self._send_error(404, 'Extracted file not found')
+            return
+        try:
+            if os.path.getsize(path) > config.MAX_EXTRACTED_FILE_SIZE:
+                self._send_error(413, 'Extracted file too large')
+                return
+            with open(path, 'rb') as f:
+                data = f.read(config.MAX_EXTRACTED_FILE_SIZE + 1)
+            if len(data) > config.MAX_EXTRACTED_FILE_SIZE:
+                self._send_error(413, 'Extracted file too large')
+                return
+            self._send_bytes(data, f'{sha256}.bin')
+        except OSError:
             self._send_error(500, 'Internal server error')
 
     def handle_get_analyses(self, params):
@@ -1482,7 +1307,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         shutil.rmtree(dir_path)
-        _evict_analysis_cache(md5)
+        evict_analysis_cache(md5)
         self._send_json({'success': True})
 
     def handle_post_rename_analysis(self):
@@ -1728,7 +1553,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         this reads the raw body instead of going through _read_json_body's
         application/json requirement. The enforced policy's report-uri
         points here, so any future inline-script regression is blocked by
-        the browser AND logged (deduplicated) server-side. Always 204.
+        the browser AND logged (deduplicated) server-side - except the one
+        violation the bundled CyberChef always causes (see
+        cyberchef.is_expected_csp_violation). Always 204.
         """
         body = self._read_post_body(65536)
         if body is None:
@@ -1737,7 +1564,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             report = json.loads(body).get('csp-report', {})
         except (json.JSONDecodeError, AttributeError):
             report = {}
-        if report:
+        if report and not cyberchef.is_expected_csp_violation(report):
             key = (report.get('violated-directive'),
                    report.get('blocked-uri'),
                    report.get('source-file'),
@@ -1753,6 +1580,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def handle_post_delete_all_analyses(self):
+        # The body itself is unused, but reading it through _read_json_body
+        # enforces the same application/json requirement every other JSON
+        # POST has - the CSRF guard a cross-site "simple request" can't meet.
+        # This is the most destructive endpoint, so it needs it most.
+        if self._read_json_body(config.MAX_REQUEST_BODY_SIZE) is None:
+            return
         deleted = 0
         errors = []
         if os.path.exists(DATA_DIR):
@@ -1769,12 +1602,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     shutil.rmtree(dir_path)
                     deleted += 1
                 except Exception as e:
-                    errors.append(f'{md5_dir}: {e}')
+                    # The exception text embeds the absolute DATA_DIR path.
+                    errors.append(_sanitize_error_text(f'{md5_dir}: {e}'))
         if errors and deleted == 0:
             self._send_error(500, f'Could not delete analyses: {errors[0]}')
             return
-        with _CACHE_LOCK:
-            for cache in _ALL_CACHES:
+        with CACHE_LOCK:
+            for cache in ALL_CACHES:
                 cache.clear()
         self._send_json({'success': True, 'deleted': deleted})
 
@@ -1864,11 +1698,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # reads this instead of hardcoding a duplicate range table, mirroring
         # db.py's sid_ranges_sql_case() (both generated from
         # suricata_sid_ranges.SURICATA_SID_RANGES).
+        # classifyRuleset() takes the first match, so the built-in ranges
+        # go first here too - same order as classify_alert_ruleset().
         suricata_info['sidRanges'] = (
-            [{'min': min_sid, 'max': max_sid, 'label': label}
-             for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES]
-            + [{'min': SURICATA_BUILTIN_SID_RANGE[0], 'max': SURICATA_BUILTIN_SID_RANGE[1],
-                'label': SURICATA_BUILTIN_LABEL}]
+            [{'min': lo, 'max': hi, 'label': SURICATA_BUILTIN_LABEL}
+             for lo, hi in SURICATA_BUILTIN_SID_RANGES]
+            + [{'min': min_sid, 'max': max_sid, 'label': label}
+               for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES]
         )
         self._send_json({
             'suricata': suricata_info,
@@ -1933,7 +1769,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if error:
             self._send_error(400, error)
             return
-        pcap_file = _find_pcap_file(dir_path)
+        pcap_file = find_pcap_file(dir_path)
         if pcap_file:
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain')
@@ -1952,7 +1788,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         (see pollOhmydebnTheme() for the same "check localStorage before
         ever fetching" pattern this mirrors). GITHUB_RELEASES_API is a
         hardcoded constant, not user input, so this doesn't need the
-        SSRF-hardened path _fetch_url_safely() exists for - same reasoning
+        SSRF-hardened path fetch_url_safely() exists for - same reasoning
         already applied to the YARA Forge/Sigma rule downloads' hardcoded
         URLs."""
         latest_version = None
@@ -2097,7 +1933,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         Returns (md5_hash, deduped: bool).
         """
         if md5_hash is None:
-            md5_hash = _hash_file(extracted_pcap_path)
+            md5_hash = hash_file(extracted_pcap_path)
         dir_path = os.path.join(DATA_DIR, md5_hash)
         pcap_filename = sanitize_filename(os.path.basename(extracted_pcap_path))
         pcap_path = os.path.join(dir_path, pcap_filename)
@@ -2109,13 +1945,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not deduped:
             with open(os.path.join(dir_path, 'name.txt'), 'w') as f:
                 f.write(pcap_filename)
-            _write_meta(dir_path, safe_filename, pcap_filename, 'pcap')
+            write_meta(dir_path, safe_filename, pcap_filename, 'pcap')
             spawn_suricata(dir_path, pcap_path, os.path.join(SURICATA_DIR, 'suricata.yaml'), data_dir=DATA_DIR)
         return md5_hash, bool(deduped)
 
     def _commit_and_analyze_standalone_file(self, extracted_path, safe_filename, md5_hash, prefix):
         """Commit one already-extracted, already-hashed non-pcap file (see
-        _hash_file_with_prefix) into DATA_DIR/<md5>/ if not already
+        hash_file_with_prefix) into DATA_DIR/<md5>/ if not already
         analyzed, and dispatch it to log or binary/YARA analysis in the
         background. Mirrors _commit_and_spawn_pcap_analysis for the pcap
         case - md5_hash/prefix are always precomputed by the caller so
@@ -2134,7 +1970,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         )
         detected = 'log' if (is_log_file(prefix) or is_log_file_by_extension(dest_path)) else 'binary'
         if not deduped:
-            _write_meta(dir_path, safe_filename, dest_filename, detected)
+            write_meta(dir_path, safe_filename, dest_filename, detected)
             if detected == 'log':
                 self._analyze_log_file(dir_path, dest_path, dest_filename)
             else:
@@ -2146,13 +1982,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         Args:
             src_path: Path to the already-on-disk uploaded/downloaded file
-                (e.g. under _upload_tmp_dir()). This function takes ownership
+                (e.g. under upload_tmp_dir()). This function takes ownership
                 of it -- it's moved into place on success and unlinked in all
                 other cases (dedup-return, zip extraction, failure).
             original_filename: Original filename for password derivation.
             passwords: Optional list of bytes passwords for ZIP extraction.
             effective_max: The resolved per-request upload-size ceiling (see
-                _resolve_upload_size_limit), passed through to zip-bomb
+                resolve_upload_size_limit), passed through to zip-bomb
                 decompression-size checks so it tracks what this particular
                 upload was actually allowed rather than always the fixed
                 hard ceiling. Defaults to config.MAX_UPLOAD_SIZE if not given.
@@ -2170,9 +2006,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             is_zip = magic == b'PK'
 
             if is_zip and not is_office_file_by_extension(safe_filename):
-                tmp_dir = tempfile.mkdtemp(dir=_upload_tmp_dir())
+                tmp_dir = tempfile.mkdtemp(dir=upload_tmp_dir(DATA_DIR))
                 try:
-                    extracted_files = _extract_zip_contents(src_path, tmp_dir, passwords or [], effective_max)
+                    extracted_files = extract_zip_contents(src_path, tmp_dir, passwords or [], effective_max)
                     # Every extracted file is analyzed, each as its own
                     # independent analysis - pcaps get network analysis
                     # (_commit_and_spawn_pcap_analysis), everything else
@@ -2181,7 +2017,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     # now only ever reflects genuine per-file failures, not
                     # by-design drops.
                     non_hidden_extracted = [f for f in extracted_files if not os.path.basename(f).startswith('.')]
-                    pcap_files = [f for f in extracted_files if f.lower().endswith(PCAP_EXTENSIONS)]
+                    # By extension, or by magic bytes like a direct upload -
+                    # an extension-less pcap was otherwise only YARA-scanned.
+                    pcap_files = [f for f in extracted_files
+                                  if f.lower().endswith(PCAP_EXTENSIONS)
+                                  or (f in non_hidden_extracted and is_pcap_path(f))]
                     pcap_file_set = set(pcap_files)
                     non_pcap_files = [f for f in non_hidden_extracted if f not in pcap_file_set]
 
@@ -2193,7 +2033,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     else:
                         if not non_pcap_files:
                             raise ValueError('ZIP archive is empty')
-                        first_md5, first_prefix = _hash_file_with_prefix(non_pcap_files[0])
+                        first_md5, first_prefix = hash_file_with_prefix(non_pcap_files[0])
                         primary_md5, primary_deduped, primary_detected = self._commit_and_analyze_standalone_file(
                             non_pcap_files[0], safe_filename, first_md5, first_prefix)
                         primary_phase = 'logs' if primary_detected == 'log' else 'files'
@@ -2213,7 +2053,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
                     for extra in remaining_pcaps:
                         try:
-                            md5_hash = _hash_file(extra)
+                            md5_hash = hash_file(extra)
                         except OSError:
                             failed_count += 1
                             continue
@@ -2231,7 +2071,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
                     for extra in remaining_non_pcaps:
                         try:
-                            md5_hash, prefix = _hash_file_with_prefix(extra)
+                            md5_hash, prefix = hash_file_with_prefix(extra)
                         except OSError:
                             failed_count += 1
                             continue
@@ -2257,9 +2097,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 finally:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
             else:
-                md5_hash, prefix = _hash_file_with_prefix(src_path)
+                md5_hash, prefix = hash_file_with_prefix(src_path)
                 dir_path = os.path.join(DATA_DIR, md5_hash)
-                dest_filename = safe_filename if safe_filename else 'uploaded'
+                dest_filename = safe_filename  # sanitize_filename() raises rather than return ''
                 dest_path = os.path.join(dir_path, dest_filename)
                 name_path = os.path.join(dir_path, 'name.txt')
 
@@ -2284,7 +2124,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     detected = 'binary'
                     self._analyze_standalone_file(dir_path, dest_path, dest_filename)
                     phase = 'files'
-                _write_meta(dir_path, dest_filename, dest_filename, detected)
+                write_meta(dir_path, dest_filename, dest_filename, detected)
                 return {'status': 'processing', 'md5': md5_hash, 'phase': phase}
         finally:
             if os.path.exists(src_path):
@@ -2482,7 +2322,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             raise
 
     def handle_post_upload(self):
-        effective_max = _resolve_upload_size_limit(self.headers.get('X-Max-Upload-Size'))
+        effective_max = resolve_upload_size_limit(self.headers.get('X-Max-Upload-Size'))
         content_length = self._parse_content_length(effective_max)
         if content_length is None:
             return
@@ -2491,7 +2331,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         content_type = self.headers.get('Content-Type', '')
         src_path, original_filename = self._parse_multipart_stream(
-            self.rfile, content_length, content_type, _upload_tmp_dir()
+            self.rfile, content_length, content_type, upload_tmp_dir(DATA_DIR)
         )
 
         if src_path is None:
@@ -2522,12 +2362,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(400, 'No URL provided')
             return
 
-        effective_max = _resolve_upload_size_limit(data.get('maxUploadSize'))
+        effective_max = resolve_upload_size_limit(data.get('maxUploadSize'))
         if not self._check_disk_space(effective_max):
             return
 
         try:
-            src_path = _fetch_url_safely(url, config.URL_DOWNLOAD_TIMEOUT, effective_max)
+            src_path = fetch_url_safely(url, config.URL_DOWNLOAD_TIMEOUT, effective_max, upload_tmp_dir(DATA_DIR))
 
             parsed_url = urlparse(url)
             original_filename = os.path.basename(parsed_url.path)
@@ -2543,7 +2383,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             result = self._process_uploaded_file(src_path, original_filename, passwords, effective_max)
             self._send_json(result)
-        except _FileTooLargeError:
+        except FileTooLargeError:
             self._send_error(413, 'File too large')
         except ValueError as exc:
             self._send_error(400, str(exc))
@@ -2589,7 +2429,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except OSError:
                 pass
 
-        meta = _read_meta(dir_path)
+        meta = read_meta(dir_path)
         # events.db is created the instant create_sqlite_db opens its
         # connection - well before the row-by-row ingest finishes - so its
         # mere existence isn't sufficient for 'ready'. .phase stays set for
@@ -2674,79 +2514,108 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(*error)
             return
 
-        phase_file = os.path.join(dir_path, '.phase')
-        if os.path.exists(phase_file):
-            self._send_error(409, 'Analysis already in progress')
-            return
+        # Held from the in-progress check until Suricata/the file analysis
+        # has been launched: otherwise two concurrent reanalyze requests
+        # could both pass the check, and the second would delete the
+        # first's .phase lock and in-progress output (its artifact sweep
+        # includes .phase) and start a second Suricata on the same
+        # directory. Launching returns quickly - the analysis itself runs
+        # in the background, outside the lock.
+        with _REANALYZE_LOCK:
+            phase_file = os.path.join(dir_path, '.phase')
+            if os.path.exists(phase_file):
+                self._send_error(409, 'Analysis already in progress')
+                return
 
-        _evict_analysis_cache(md5)
+            evict_analysis_cache(md5)
 
-        pcap_file = _find_pcap_file(dir_path)
-        non_pcap_files = self._non_artifact_files(dir_path, pcap_file=pcap_file)
+            pcap_file = find_pcap_file(dir_path)
+            non_pcap_files = self._non_artifact_files(dir_path, pcap_file=pcap_file)
 
-        # Preserve existing .meta so we can rewrite it after cleanup
-        meta_path = os.path.join(dir_path, '.meta')
-        preserved_meta = None
-        if os.path.exists(meta_path):
-            try:
-                with open(meta_path, 'r') as f:
-                    preserved_meta = json.load(f)
-            except (OSError, ValueError):
-                preserved_meta = None
-
-        # Determine if this is a PCAP, log file, or standalone file analysis
-        if pcap_file:
-            pcap_path = os.path.join(dir_path, pcap_file)
-
-            self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)
-
-            # Clean up extracted files from previous analysis
-            filestore_dir = os.path.join(dir_path, 'filestore')
-            if os.path.isdir(filestore_dir):
+            # Preserve existing .meta so we can rewrite it after cleanup
+            meta_path = os.path.join(dir_path, '.meta')
+            preserved_meta = None
+            if os.path.exists(meta_path):
                 try:
-                    shutil.rmtree(filestore_dir)
-                except OSError:
-                    pass
+                    with open(meta_path, 'r') as f:
+                        preserved_meta = json.load(f)
+                except (OSError, ValueError):
+                    preserved_meta = None
 
-            self._restore_meta(meta_path, preserved_meta)
+            # Determine if this is a PCAP, log file, or standalone file analysis
+            if pcap_file:
+                pcap_path = os.path.join(dir_path, pcap_file)
 
-            if spawn_suricata(dir_path, pcap_path, os.path.join(SURICATA_DIR, 'suricata.yaml'), data_dir=DATA_DIR):
-                self._send_json({'status': 'processing', 'md5': md5, 'phase': 'network'})
-            else:
-                # spawn_suricata() returns False for two different reasons -
-                # already in progress (no .error written), or a genuine
-                # failure to start (Suricata missing/permissions/etc, which
-                # does write .error) - check which one actually happened
-                # rather than always reporting "already in progress" for a
-                # real startup failure.
-                error_file = os.path.join(dir_path, '.error')
-                if os.path.exists(error_file):
+                self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)
+
+                # Clean up extracted files from previous analysis
+                filestore_dir = os.path.join(dir_path, 'filestore')
+                if os.path.isdir(filestore_dir):
                     try:
-                        with open(error_file, 'r') as f:
-                            error_msg = _sanitize_error_text(f.read().strip())
+                        shutil.rmtree(filestore_dir)
                     except OSError:
-                        error_msg = 'Suricata failed to start'
-                    self._send_error(500, error_msg)
-                else:
-                    self._send_error(409, 'Analysis already in progress')
-        elif non_pcap_files:
-            file_path = os.path.join(dir_path, non_pcap_files[0])
-            self._remove_artifacts(dir_path, FILE_ANALYSIS_ARTIFACTS)
-            self._restore_meta(meta_path, preserved_meta)
+                        pass
 
-            if is_log_file_by_extension(file_path):
-                self._analyze_log_file(dir_path, file_path, non_pcap_files[0])
-                self._send_json({'status': 'processing', 'md5': md5, 'phase': 'logs'})
+                self._restore_meta(meta_path, preserved_meta)
+
+                if spawn_suricata(dir_path, pcap_path, os.path.join(SURICATA_DIR, 'suricata.yaml'), data_dir=DATA_DIR):
+                    self._send_json({'status': 'processing', 'md5': md5, 'phase': 'network'})
+                else:
+                    # spawn_suricata() returns False for two different reasons -
+                    # already in progress (no .error written), or a genuine
+                    # failure to start (Suricata missing/permissions/etc, which
+                    # does write .error) - check which one actually happened
+                    # rather than always reporting "already in progress" for a
+                    # real startup failure.
+                    error_file = os.path.join(dir_path, '.error')
+                    if os.path.exists(error_file):
+                        try:
+                            with open(error_file, 'r') as f:
+                                error_msg = _sanitize_error_text(f.read().strip())
+                        except OSError:
+                            error_msg = 'Suricata failed to start'
+                        self._send_error(500, error_msg)
+                    else:
+                        self._send_error(409, 'Analysis already in progress')
+            elif non_pcap_files:
+                file_path = os.path.join(dir_path, non_pcap_files[0])
+                self._remove_artifacts(dir_path, FILE_ANALYSIS_ARTIFACTS)
+                self._restore_meta(meta_path, preserved_meta)
+
+                # The same test upload used (content or extension), so a log
+                # recognized by its content - JSON/CSV/EVTX without a log
+                # extension - isn't reanalyzed as a binary.
+                try:
+                    with open(file_path, 'rb') as fh:
+                        prefix = fh.read(4096)
+                except OSError:
+                    prefix = b''
+                if is_log_file(prefix) or is_log_file_by_extension(file_path):
+                    self._analyze_log_file(dir_path, file_path, non_pcap_files[0])
+                    self._send_json({'status': 'processing', 'md5': md5, 'phase': 'logs'})
+                else:
+                    self._analyze_standalone_file(dir_path, file_path, non_pcap_files[0])
+                    self._send_json({'status': 'processing', 'md5': md5, 'phase': 'files'})
             else:
-                self._analyze_standalone_file(dir_path, file_path, non_pcap_files[0])
-                self._send_json({'status': 'processing', 'md5': md5, 'phase': 'files'})
-        else:
-            self._send_error(404, 'No analysis file found')
+                self._send_error(404, 'No analysis file found')
 
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+def _install_sigterm_handler():
+    """Exit cleanly on SIGTERM. In the container, python3 is PID 1 (the
+    entrypoint execs it), and the kernel gives PID 1 no default action for
+    SIGTERM - without a handler, 'docker/podman stop' was silently ignored
+    and always fell back to SIGKILL after its 10-second grace period.
+    SystemExit unwinds serve_forever() and the server's 'with' block like
+    Ctrl-C's KeyboardInterrupt does; request and analysis threads are all
+    daemons, so nothing holds the process open after that."""
+    def _handle_sigterm(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
 
 def main():
     """Run SO-CRATES server."""
@@ -2754,7 +2623,7 @@ def main():
     os.chdir(script_dir)
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(os.path.join(DATA_DIR, config.UPLOAD_TMP_SUBDIR), exist_ok=True)
-    _cleanup_upload_tmp_dir()
+    cleanup_upload_tmp_dir(DATA_DIR)
 
     # Check for required executables
     missing = check_executables()
@@ -2802,8 +2671,13 @@ def main():
     ================================================================
     """)
     
-    with ThreadedTCPServer((BIND_ADDRESS, PORT), Handler) as httpd:
-        httpd.serve_forever()
+    _install_sigterm_handler()
+    try:
+        with ThreadedTCPServer((BIND_ADDRESS, PORT), Handler) as httpd:
+            httpd.serve_forever()
+    except (KeyboardInterrupt, SystemExit):
+        pass  # Ctrl-C, or SIGTERM via the handler above - a normal stop, not an error
+    print('SO-CRATES stopped')
 
 
 if __name__ == '__main__':

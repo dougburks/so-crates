@@ -14,7 +14,7 @@ You'll need these prerequisites:
 - **Suricata** - for PCAP analysis and rule-based alerting
 - **suricata-update** - for downloading/updating Suricata rules (internet access required; the app will warn and continue without rules if offline)
 - **tcpdump** - for stream carving (`/api/download-stream`) and hexdump extraction (`/api/hexdump-stream`)
-- **tshark** - for ASCII transcript extraction (`/api/ascii-stream`)
+- **tshark** - for ASCII transcript extraction (`/api/ascii-stream`) and exact stream payloads (`/api/raw-stream`, which also carves the flow with tcpdump first)
 - **yara** (optional) - if installed, SO-CRATES scans extracted/uploaded files with YARA rules (baked-in in Docker; otherwise downloaded on demand via the Rules modal). If missing, YARA scanning and File Alerts are skipped (files are still extracted).
 - **Zircolite** (optional) - for Sigma rule detection on log files. SO-CRATES auto-detects if Zircolite is installed and skips log analysis if absent. The Dockerfile bakes in Zircolite v3.7.1.
 - **exiftool** (optional) - for extracting EXIF/media metadata from binary files. If missing, EXIF extraction is silently skipped (the rest of the file analysis still runs).
@@ -41,5 +41,6 @@ Then open http://localhost:8000/socrates.html in your browser.
 | `DEMO` | unset | Set to any non-empty value to show a shortened startup message pointing at a hosted demo link, instead of the usual `http://<host>:<port>/socrates.html` URL - used for the public demo deployment, not a typical local install. |
 | `PLAYBOOKS_DIR` | `/usr/share/playbooks` | Directory holding the Security Onion Playbooks gzip-compressed indexes (`nids.json.gz`/`sigma.json.gz`). The default path is only populated inside the Docker/Podman image (baked in by the Dockerfile's `resources-builder` stage) - a from-source setup has nothing there by default, so Playbook sections simply don't appear on alerts. Point this at a directory containing your own indexes (in the same format) to enable the feature locally. |
 | `AI_SUMMARIES_DIR` | `/usr/share/ai-summaries` | Directory holding the AI-generated rule summary gzip-compressed indexes (`nids.json.gz`/`sigma.json.gz`/`yara.json.gz`). Same story as `PLAYBOOKS_DIR` above - only populated inside the Docker/Podman image, baked by the same `resources-builder` stage. Point this at a directory containing your own indexes (in the same format) to enable the feature locally. |
+| `CYBERCHEF_DIR` | `/usr/share/cyberchef` | Directory holding the bundled CyberChef that SO-CRATES serves at `/cyberchef/`. Like `PLAYBOOKS_DIR`, only populated inside the Docker/Podman image (baked in by the Dockerfile's `resources-builder` stage) - from source, the pivot menu's CyberChef lookup gets a 404 until you run `scripts/fetch-cyberchef.sh ./cyberchef` and point this at `./cyberchef`. |
 
 Environment variables override the hardcoded defaults at startup.

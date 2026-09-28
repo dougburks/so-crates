@@ -4,7 +4,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Build-only stage: compiles the Zircolite venv (evtx/orjson have Rust
 # extensions, lxml has a C extension) so the Rust toolchain, build-essential,
-# dev headers, and git never need to exist in the final runtime image.
+# dev headers, and git never need to exist in the final runtime image. pip
+# itself (~12MB) is uninstalled from the venv once the requirements are in -
+# nothing imports it at runtime, and the image never installs packages
+# after build time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
@@ -24,6 +27,7 @@ RUN git clone --depth 1 --branch v3.7.1 \
     python3 -m venv /usr/local/lib/zircolite-venv && \
     /usr/local/lib/zircolite-venv/bin/pip install --no-cache-dir \
     -r /usr/local/lib/zircolite/requirements.txt && \
+    /usr/local/lib/zircolite-venv/bin/pip uninstall -y pip && \
     rm -rf /usr/local/lib/zircolite/rules /usr/local/lib/zircolite/gui \
     /usr/local/lib/zircolite/pics /usr/local/lib/zircolite/tests \
     /usr/local/lib/zircolite/docs /usr/local/lib/zircolite/templates \
@@ -44,7 +48,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # actually reads) into small gzip-compressed JSON indexes holding only the
 # plain-English content - see playbook_lookup.py and ai_summary_lookup.py.
 # python3-yaml and the raw YAML trees never need to exist in the final
-# runtime image.
+# runtime image. It also downloads the pinned CyberChef release (see the
+# last step of this stage), so the release zip and unzip stay out too.
 #
 # ca-certificates is required explicitly, not assumed from the base image -
 # debian:13-slim (trixie) is still an actively-updated release, and a base
@@ -54,9 +59,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # not an expired/invalid cert - this happened for real in CI).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     git \
     python3 \
     python3-yaml \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 \
@@ -179,6 +186,13 @@ for detection_type, filename in (
     print(f'Baked {len(index)} {detection_type} AI summary entries -> {out_path}')
 PY
 
+# Downloads the pinned, checksum-verified CyberChef release - see
+# scripts/fetch-cyberchef.sh for the pins and what it strips. Last in this
+# stage so a CyberChef upgrade doesn't re-run the slow YAML conversions
+# above.
+COPY scripts/fetch-cyberchef.sh /tmp/fetch-cyberchef.sh
+RUN sh /tmp/fetch-cyberchef.sh /tmp/cyberchef-out
+
 
 FROM debian:13-slim
 
@@ -220,7 +234,7 @@ ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY config.py db.py models.py validators.py suricata_analyzer.py suricata_sid_ranges.py yara_analyzer.py sigma_analyzer.py file_analyzer.py exif_analyzer.py ohmydebn_colors.py playbook_lookup.py ai_summary_lookup.py socrates.py socrates.html ./
+COPY config.py db.py models.py validators.py url_fetch.py storage.py analysis_cache.py suricata_analyzer.py suricata_sid_ranges.py yara_analyzer.py sigma_analyzer.py file_analyzer.py exif_analyzer.py ohmydebn_colors.py playbook_lookup.py ai_summary_lookup.py cyberchef.py stream_payload.py socrates.py socrates.html ./
 COPY static/ static/
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
@@ -310,7 +324,8 @@ for slug in BAKED_IN_SURICATA_SOURCES:
             check=True,
         )
         # Baked in gzip-compressed - plain-text Suricata rules compress
-        # ~93% (measured: 73MB -> 5MB across all 14 curated sources) - see
+        # ~93% (measured 2026-09-25: ~84MB -> ~6MB across the 14 baked-in
+        # sources) - see
         # _seed_active_from_library() in suricata_analyzer.py for the
         # matching decompress-on-read.
         dest = f'/usr/share/suricata/rules-available/{_source_filename(slug)}.gz'
@@ -358,6 +373,10 @@ COPY --from=resources-builder /tmp/playbooks-out/ /usr/share/playbooks/
 # Bake AI-generated rule summaries into the image the same way - see the
 # resources-builder stage above and ai_summary_lookup.py.
 COPY --from=resources-builder /tmp/ai-summaries-out/ /usr/share/ai-summaries/
+
+# Bake CyberChef in so the pivot menu's CyberChef lookup works air-gapped -
+# see the resources-builder stage above and cyberchef.py.
+COPY --from=resources-builder /tmp/cyberchef-out/ /usr/share/cyberchef/
 
 RUN mkdir -p /data && chown -R 1000:1000 /data
 

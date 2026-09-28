@@ -6,7 +6,11 @@
 (function () {
     try {
         var t = localStorage.getItem('socrates-theme');
+        // Renamed themes: 'light' became 'white', and 'c64' (3.0.0-3.1.0)
+        // became 'breadbin-blue'. Any other unknown key falls back to the
+        // default in socrates.js's init().
         if (t == 'light') localStorage.setItem('socrates-theme', t = 'white');
+        if (t == 'c64') localStorage.setItem('socrates-theme', t = 'breadbin-blue');
         if (t && t != 'dark') document.documentElement.setAttribute('data-theme', t);
     } catch (e) {}
 })();
