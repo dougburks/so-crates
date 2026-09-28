@@ -2804,6 +2804,19 @@
             const [label, value, isDynamicField] = pair;
             const detailRow = pivotEl.closest('tr.detail-row');
             const collapsedRow = detailRow ? detailRow.previousElementSibling : null;
+            // Part of the value selected (a drag, or a double-clicked word,
+            // inside it - finishing either fires this click): the menu is
+            // for the selected text, not the whole value, and like a
+            // transcript selection it gets no Include/Exclude/Only - a
+            // fragment isn't the field's value.
+            const sel = window.getSelection();
+            const selected = sel && !sel.isCollapsed && sel.rangeCount === 1
+                && pivotEl.contains(sel.getRangeAt(0).commonAncestorContainer) ? sel.toString() : '';
+            if (selected.trim() && selected !== String(value)) {
+                event.stopPropagation();
+                showPivotMenu(event, null, `${label} (selection)`, selected, true, null, collapsedRow ? collapsedRow.dataset.communityId : null);
+                return;
+            }
             const eventType = collapsedRow ? collapsedRow.dataset.eventType : null;
             const columns = detailColumnsForEventType(eventType);
             // A label already matching a real column (e.g. 'Source IP')
@@ -3097,12 +3110,14 @@
                 const site = allLookupSites[Number(btn.dataset.pivotLookupIndex)];
                 btn.addEventListener('click', function() {
                     closePivotMenu();
-                    // PIVOT_LOOKUP_SITES' own entries carry a function
-                    // (CyberChef's own base64 encoding, for one, can't be
-                    // expressed as a plain string template); custom sites
-                    // from getCustomLookupSites() are plain {value}-template
-                    // strings instead (see applyCustomLookupUrlTemplate's
-                    // own comment for why).
+                    if (site.send) {
+                        site.send(value);
+                        return;
+                    }
+                    // PIVOT_LOOKUP_SITES' own entries carry a function;
+                    // custom sites from getCustomLookupSites() are plain
+                    // {value}-template strings instead (see
+                    // applyCustomLookupUrlTemplate's own comment for why).
                     const url = typeof site.urlTemplate === 'function'
                         ? site.urlTemplate(value)
                         : applyCustomLookupUrlTemplate(site.urlTemplate, value);
@@ -10485,29 +10500,12 @@
             }
         }
 
-        // CyberChef takes its input pre-filled via a base64 blob in the URL
-        // fragment (#input=...), not a plain query string like the other
-        // lookup sites - unescape(encodeURIComponent(...)) is the standard
-        // idiom for UTF-8-safe btoa() (btoa() alone only accepts Latin1 and
-        // throws on e.g. multi-byte characters in a log field's value).
-        // Falls back to a bare (empty-input) CyberChef link on any encoding
-        // failure rather than the whole menu action silently doing nothing.
-        // Points at the copy baked into the image (served by socrates.py at
-        // /cyberchef/, see cyberchef.py) rather than gchq.github.io, so the
-        // lookup works air-gapped like everything else in SO-CRATES.
-        function cyberChefUrl(value) {
-            try {
-                const b64 = btoa(unescape(encodeURIComponent(String(value))));
-                return `/cyberchef/#input=${encodeURIComponent(b64)}`;
-            } catch (e) {
-                return '/cyberchef/';
-            }
-        }
-
-        // Send to CyberChef (stream Payload panel, File Info): whole payloads
-        // are far too big for cyberChefUrl()'s #input= URL, so instead the
-        // bundled CyberChef - same origin as this page - is opened in a new
-        // tab and the bytes are handed straight to it as a File. That goes
+        // Send to CyberChef (stream Payload panel, File Info, the pivot
+        // menu's CyberChef entry): the bundled CyberChef - same origin as
+        // this page - is opened in a new tab and the data handed straight
+        // to it, rather than packed into its #input= URL, which whole
+        // payloads are far too big for (and which leaves the data in the
+        // tab's URL and history). Bytes go as a File, text as input. That goes
         // through CyberChef's internal window.app object, not a published
         // API (scripts/fetch-cyberchef.sh fails the build if an upgrade
         // renames any of the pieces used here). A File, not a string,
@@ -10602,35 +10600,18 @@
             whenCyberChefReady(win, new Blob([text]).size, (app) => app.setInput(text));
         }
 
-        // Send a selection of an ASCII transcript to CyberChef: a small
-        // floating button appears just past the end of any non-empty
-        // selection that lies entirely inside one .ascii-transcript, once the
-        // selection is finished (see updateCyberChefSelectionButton). It sends the text as
-        // displayed - the transcript already shows non-printable bytes as
-        // '.', so this is for text (a base64 blob, a header, a URL); whole
-        // binary payloads go through the Both/Source/Dest buttons instead.
-        // Hexdump selections are deliberately not offered - they'd drag
-        // the offset and ASCII columns along with the bytes.
-        let cyberChefSelectionText = '';
-        let cyberChefSelectionFrame = 0;
-
-        function getCyberChefSelectionButton() {
-            let btn = document.getElementById('cyberChefSelectionBtn');
-            if (!btn) {
-                btn = document.createElement('button');
-                btn.type = 'button';
-                btn.id = 'cyberChefSelectionBtn';
-                btn.className = 'cyberchef-selection-btn';
-                btn.dataset.action = 'send-selection-to-cyberchef';
-                btn.textContent = 'Send selection to CyberChef';
-                btn.hidden = true;
-                // Pressing a button would otherwise collapse the selection
-                // before the click lands.
-                btn.addEventListener('mousedown', e => e.preventDefault());
-                document.body.appendChild(btn);
-            }
-            return btn;
-        }
+        // Selecting text in an ASCII transcript opens the standard pivot
+        // menu (Hunt, Correlate, Copy, the lookup sites, CyberChef) for the
+        // selected text, once the selection is finished - on the mouseup
+        // that ends a drag, a double-click or a Shift+click, not while a
+        // drag is still going (a menu appearing mid-drag would sit where the
+        // drag is heading). It works on the text as displayed - the
+        // transcript already shows non-printable bytes as '.', so this is
+        // for text (a base64 blob, a header, a URL); whole binary payloads
+        // go through the Both/Source/Dest buttons instead. Include/Exclude/
+        // Only are left out: a fragment of a transcript isn't a column
+        // value. Hexdump selections are deliberately not offered - they'd
+        // drag the offset and ASCII columns along with the bytes.
 
         // The transcript a selection lies entirely within, or null.
         function transcriptForSelection(sel) {
@@ -10640,61 +10621,40 @@
             return el ? el.closest('.ascii-transcript') : null;
         }
 
-        function updateCyberChefSelectionButton() {
-            cyberChefSelectionFrame = 0;
+        // Where a pivot menu for this range opens: just below where the
+        // selection ends. null when that end isn't on screen - its row
+        // collapsed (a zero-size rect) or it scrolled out of view - rather
+        // than pinning the menu to an edge, away from what it belongs to.
+        function selectionMenuPoint(range) {
+            const rects = range.getClientRects();
+            const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
+            if ((!last.width && !last.height) || last.bottom < 0 || last.top > window.innerHeight) return null;
+            return { clientX: last.right, clientY: last.bottom + 4 };
+        }
+
+        function openTranscriptSelectionMenu() {
+            if (transcriptDrag) return false;
             const sel = window.getSelection();
             const transcript = transcriptForSelection(sel);
-            // Not while a transcript drag is still going: the button sits
-            // just past the selection's end - exactly where a rightward
-            // drag is heading - and caret hit-testing under the pointer
-            // would find the button instead of text, stopping the drag
-            // (real report). It appears once the drag ends instead - see
-            // endTranscriptDrag.
-            const text = transcript && !transcriptDrag ? sel.toString() : '';
-            const btn = document.getElementById('cyberChefSelectionBtn');
-            if (!text.trim()) {
-                if (btn) btn.hidden = true;
-                cyberChefSelectionText = '';
-                return;
-            }
-            cyberChefSelectionText = text;
-            const rects = sel.getRangeAt(0).getClientRects();
-            const last = rects.length ? rects[rects.length - 1] : sel.getRangeAt(0).getBoundingClientRect();
-            // Its row collapsed (a zero-size rect) or the selection's end
-            // scrolled out of view: hide rather than pin the button to an
-            // edge of the screen, away from anything it belongs to.
-            if ((!last.width && !last.height) || last.bottom < 0 || last.top > window.innerHeight) {
-                if (btn) btn.hidden = true;
-                return;
-            }
-            const shown = getCyberChefSelectionButton();
-            shown.hidden = false;
-            // position: fixed (see .cyberchef-selection-btn), so viewport
-            // coordinates straight from the range. Just right of where the
-            // selection ends, on that same line - transcript lines are
-            // usually short, so that's blank space; placing it below
-            // instead covered the next line's text. Too close to the right
-            // edge for that, it drops just below the selection's end.
-            const w = shown.offsetWidth, h = shown.offsetHeight;
-            let left = last.right + 8;
-            let top = last.top + (last.height - h) / 2;
-            if (left + w > window.innerWidth - 8) {
-                left = window.innerWidth - w - 8;
-                top = last.bottom + 6;
-            }
-            shown.style.left = `${Math.max(8, left)}px`;
-            shown.style.top = `${Math.max(8, Math.min(top, window.innerHeight - h - 8))}px`;
+            const text = transcript ? sel.toString() : '';
+            if (!text.trim()) return false;
+            const point = selectionMenuPoint(sel.getRangeAt(0));
+            if (!point) return false;
+            const detailRow = transcript.closest('tr.detail-row');
+            const row = detailRow ? detailRow.previousElementSibling : null;
+            showPivotMenu(point, null, 'Selection', text, true, null, row ? row.dataset.communityId : null);
+            return true;
         }
 
-        function scheduleCyberChefSelectionButton() {
-            if (!cyberChefSelectionFrame) cyberChefSelectionFrame = requestAnimationFrame(updateCyberChefSelectionButton);
-        }
-
-        document.addEventListener('selectionchange', scheduleCyberChefSelectionButton);
-        // Capture phase: also catches the scrolling containers inside the
-        // page, not just the window, so the button follows its selection.
-        window.addEventListener('scroll', scheduleCyberChefSelectionButton, true);
-        window.addEventListener('resize', scheduleCyberChefSelectionButton);
+        document.addEventListener('mouseup', e => {
+            if (e.button !== 0) return;
+            // Choosing an item from the menu itself leaves the selection
+            // in place - don't reopen it.
+            if (e.target.closest && e.target.closest('.pivot-menu')) return;
+            // After this mouseup's own click event: the pivot menu's
+            // outside-click listener would otherwise close it at once.
+            setTimeout(openTranscriptSelectionMenu, 0);
+        });
 
         // Click-and-drag selection inside an ASCII transcript, done by hand.
         // Left to the browser, dragging past a transcript line's end or the
@@ -10753,7 +10713,6 @@
             if (!transcriptDrag) return;
             clearInterval(transcriptDrag.scrollTimer);
             transcriptDrag = null;
-            scheduleCyberChefSelectionButton();  // now show it, if there's a selection
         }
 
         document.addEventListener('mousedown', e => {
@@ -10788,10 +10747,6 @@
         document.addEventListener('mouseup', endTranscriptDrag);
         window.addEventListener('blur', endTranscriptDrag);
 
-        function sendSelectionToCyberChef() {
-            if (cyberChefSelectionText.trim()) sendTextToCyberChef(cyberChefSelectionText);
-        }
-
         function sendStreamToCyberChef(src, sport, dst, dport, direction) {
             const url = buildStreamUrl('raw-stream', src, sport, dst, dport) + `&direction=${encodeURIComponent(direction)}`;
             sendToCyberChef(url, `stream_${src}_${sport}_to_${dst}_${dport}_${direction}.bin`.replace(/:/g, '-'));
@@ -10817,7 +10772,9 @@
             { label: 'Shodan', urlTemplate: v => `https://www.shodan.io/search?query=${encodeURIComponent(v)}` },
             { label: 'AbuseIPDB', urlTemplate: v => `https://www.abuseipdb.com/check/${encodeURIComponent(v)}` },
             { label: 'urlscan.io', urlTemplate: v => `https://urlscan.io/search/#${encodeURIComponent(v)}` },
-            { label: 'CyberChef', urlTemplate: cyberChefUrl },
+            // Handed straight to the bundled CyberChef instead of opened
+            // as a URL - see sendTextToCyberChef.
+            { label: 'CyberChef', send: v => sendTextToCyberChef(String(v)) },
         ];
 
         // User-added lookup sites (Settings modal's "Custom Lookup Sites"
@@ -12314,7 +12271,6 @@
                 if (p) sendStreamToCyberChef(p.dataset.srcIp, p.dataset.srcPort, p.dataset.dstIp, p.dataset.dstPort, el.dataset.direction);
             },
             'send-file-to-cyberchef': (el) => sendExtractedFileToCyberChef(el.dataset.sha256, el.dataset.filename),
-            'send-selection-to-cyberchef': () => sendSelectionToCyberChef(),
             // The note-icon <td>: clicks that miss the icon must do
             // nothing (not toggle the row) - shadowing handles that; the
             // preventDefault/stopPropagation mirror the old inline pair.

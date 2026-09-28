@@ -5,7 +5,8 @@ An infected finance desktop talks to a fake C2 server over three channels,
 one for each way SO-CRATES hands data to CyberChef:
 
 1. An HTTP POST whose JSON body hides an encoded blob in one field - the
-   Send selection to CyberChef case (select just the blob).
+   transcript-selection case (select just the blob, then CyberChef from
+   the pivot menu).
 2. A raw-TCP beacon on port 4444 whose reply is nothing but an encoded
    blob - the Payload panel's Send to CyberChef "Dest" case.
 3. An HTTP GET whose response body is an encoded blob, which Suricata

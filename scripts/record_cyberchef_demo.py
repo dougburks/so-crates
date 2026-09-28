@@ -174,20 +174,35 @@ async def main(base_url):
         await blob_line.scroll_into_view_if_needed()
         await caption(page, "Its POST hides an encoded blob inside one JSON field", blob_line)
         await page.wait_for_timeout(4500)
-        await page.evaluate("""() => {
+        # A real mouse drag across exactly the blob - selecting it by hand
+        # is what opens the pivot menu (on the mouseup), and the selection
+        # growing is what the viewer should see. The drag's start and end
+        # points come from the blob's first and last characters on screen.
+        blob = await page.evaluate("""() => {
             const t = [...document.querySelectorAll('.ascii-transcript')].find(e => e.offsetParent && e.textContent.includes('"telemetry": "'));
             const w = document.createTreeWalker(t, NodeFilter.SHOW_TEXT);
             let n;
             while ((n = w.nextNode()) && !n.textContent.includes('"telemetry": "'));
             const from = n.textContent.indexOf('"telemetry": "') + 14;
-            const r = document.createRange();
-            r.setStart(n, from);
-            r.setEnd(n, n.textContent.indexOf('"', from));
-            const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+            const to = n.textContent.indexOf('"', from);
+            n.parentElement.scrollIntoView({ block: 'center' });
+            const rect = (a, b) => { const r = document.createRange(); r.setStart(n, a); r.setEnd(n, b); const rs = r.getClientRects(); return rs[rs.length - 1]; };
+            const first = rect(from, from + 1), last = rect(to - 1, to);
+            return { text: n.textContent.slice(from, to),
+                     x1: first.left + 1, y1: (first.top + first.bottom) / 2,
+                     x2: last.right - 1, y2: (last.top + last.bottom) / 2 };
         }""")
         await page.wait_for_timeout(600)
-        send_selection = page.locator('#cyberChefSelectionBtn')
-        await caption(page, "Select just the blob, and Send selection to CyberChef appears", send_selection)
+        await clear_pointer(page)
+        await page.mouse.move(blob['x1'], blob['y1'])
+        await page.mouse.down()
+        await page.mouse.move(blob['x2'], blob['y2'], steps=40)
+        await page.mouse.up()
+        await page.wait_for_timeout(600)
+        if await page.evaluate('getSelection().toString()') != blob['text']:
+            raise RuntimeError('The drag did not select exactly the telemetry blob')
+        send_selection = page.locator('.pivot-menu .pivot-menu-item', has_text='CyberChef')
+        await caption(page, "Select just the blob, and the pivot menu opens for it - choose CyberChef", send_selection)
         await page.wait_for_timeout(5000)
         await clear_pointer(page)
         await _show_in_cyberchef(context, page, send_selection, (

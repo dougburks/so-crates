@@ -241,7 +241,7 @@ Before cutting a release:
    `docs/videos/cyberchef.mp4` and `docs/videos/cyberchef-poster.jpg`,
    splicing each CyberChef tab's separate Playwright recording into the
    SO-CRATES tab's - see its module docstring. Re-run it when the Send to
-   CyberChef buttons, the transcript selection popup, or the bundled
+   CyberChef buttons, the transcript selection pivot menu, or the bundled
    CyberChef version change.
 4. **Regenerate screenshots.** Run `pip install -r requirements-screenshots.txt
    && python3 scripts/capture_screenshots.py --base-url

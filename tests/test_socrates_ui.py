@@ -7890,37 +7890,80 @@ class TestPivotMenu(unittest.TestCase):
         ''')
         self.assertTrue(result['menuGone'])
 
-    def test_cyberchef_button_opens_base64_encoded_input(self):
+    def test_detail_value_partial_selection_pivots_on_selection(self):
+        """Selecting part of a detail-panel value (a drag or double-click
+        inside it ends in this click) opens the menu for the selected text,
+        without Include/Exclude/Only; a plain click still pivots on the
+        whole value."""
         from tests.jsdom_helper import js_statements
-        result = js_statements(self._row_html() + '''
-            var opened = null;
-            window.open = function(url) { opened = url; };
+        result = js_statements('''
+            var table = document.createElement('table');
+            table.innerHTML = '<tbody><tr data-event-type="http" data-community-id="1:abc="><td></td></tr>'
+                + '<tr class="detail-row visible"><td>' + htmlRowText('URL', '/api/v2/telemetry') + '</td></tr></tbody>';
+            document.body.appendChild(table);
+            var span = table.querySelector('.detail-value-pivot');
+            function clickValue() {
+                span.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+                var m = document.querySelector('.pivot-menu');
+                var out = { label: m.querySelector('.pivot-menu-label').textContent,
+                            items: Array.from(m.querySelectorAll('.pivot-menu-item')).map(function(b) { return b.textContent.trim(); }) };
+                closePivotMenu();
+                return out;
+            }
+            getSelection().removeAllRanges();
+            var whole = clickValue();
+            var r = document.createRange();
+            r.setStart(span.firstChild, 0); r.setEnd(span.firstChild, 5);
+            getSelection().removeAllRanges(); getSelection().addRange(r);
+            var part = clickValue();
+            r.setEnd(span.firstChild, span.firstChild.length);
+            getSelection().removeAllRanges(); getSelection().addRange(r);
+            var all = clickValue();
+            window.__jsdom_result = { whole: whole, part: part, all: all };
+        ''')
+        self.assertEqual(result['whole']['label'], 'URL: /api/v2/telemetry')
+        self.assertIn('Include', result['whole']['items'])
+        self.assertEqual(result['part']['label'], 'URL (selection): /api/')
+        self.assertNotIn('Include', result['part']['items'])
+        self.assertIn('Correlate', result['part']['items'])
+        self.assertIn('CyberChef', result['part']['items'])
+        self.assertEqual(result['all']['label'], 'URL: /api/v2/telemetry',
+                         'selecting the whole value is the same as clicking it')
+
+    def test_cyberchef_button_hands_value_to_bundled_cyberchef(self):
+        """The CyberChef entry hands the value straight to the bundled
+        CyberChef (as input, with Magic) - the same handoff as Send to
+        CyberChef - instead of packing it into a #input= URL."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(TestSendToCyberChef.FAKE_WIN + self._row_html() + '''
             var srcIpCell = tr.children[2];
             srcIpCell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
             var btn = Array.from(document.querySelectorAll('.pivot-menu-item')).find(function(b) {
                 return b.textContent.trim() === 'CyberChef';
             });
             btn.click();
-            window.__jsdom_result = { url: opened };
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { order: calls.order, text: calls.text, recipe: calls.recipe,
+                                      menuGone: !document.querySelector('.pivot-menu') };
         ''')
-        self.assertTrue(result['url'].startswith('/cyberchef/#input='))
-        # 1.1.1.1 base64-encoded and then URL-encoded (the trailing '='
-        # padding becomes %3D).
-        self.assertIn('MS4xLjEuMQ%3D%3D', result['url'])
+        self.assertEqual(result['order'], ['open:/cyberchef/|'])
+        self.assertEqual(result['text'], '1.1.1.1')
+        self.assertEqual(result['recipe'], [{'op': 'Magic', 'args': [3, False, False, '']}])
+        self.assertTrue(result['menuGone'])
 
-    def test_cyberChefUrl_is_utf8_safe(self):
-        """REGRESSION: btoa() alone throws on non-Latin1 characters (e.g. a
-        log field containing non-ASCII text) - cyberChefUrl() must not
-        propagate that as an uncaught error."""
+    def test_cyberchef_button_keeps_non_ascii_text(self):
+        """REGRESSION: the old #input= URL went through btoa(), which
+        throws on non-Latin1 text (e.g. a non-ASCII log field)."""
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            var threw = false;
-            var url = null;
-            try { url = cyberChefUrl('héllo wörld 日本語'); } catch (e) { threw = true; }
-            window.__jsdom_result = { threw: threw, url: url };
+        result = js_statements(TestSendToCyberChef.FAKE_WIN + '''
+            showPivotMenu({ clientX: 10, clientY: 10 }, null, 'Message', 'héllo wörld 日本語', true);
+            Array.from(document.querySelectorAll('.pivot-menu-item')).find(function(b) {
+                return b.textContent.trim() === 'CyberChef';
+            }).click();
+            await new Promise(function(r) { setTimeout(r, 300); });
+            window.__jsdom_result = { text: calls.text };
         ''')
-        self.assertFalse(result['threw'])
-        self.assertTrue(result['url'].startswith('/cyberchef/#input='))
+        self.assertEqual(result['text'], 'héllo wörld 日本語')
 
 
 class TestSendToCyberChef(unittest.TestCase):
@@ -8096,8 +8139,8 @@ class TestSendToCyberChef(unittest.TestCase):
     TRANSCRIPT = """
         // jsdom has no layout, so no Range geometry - stub it (real
         // browsers all implement both).
-        // A small on-screen rect: the button hides for a zero-size rect
-        // (a collapsed row) or one outside the viewport.
+        // A small on-screen rect: no menu for a zero-size rect (a
+        // collapsed row) or one outside the viewport.
         Range.prototype.getClientRects = function() { return []; };
         Range.prototype.getBoundingClientRect = function() { return { left: 10, right: 110, top: 10, bottom: 30, width: 100, height: 20 }; };
         var tr = document.createElement('div');
@@ -8112,38 +8155,49 @@ class TestSendToCyberChef(unittest.TestCase):
             var end = document.getElementById(endId).firstChild;
             r.setEnd(end, end.length);
             var s = getSelection(); s.removeAllRanges(); s.addRange(r);
-            updateCyberChefSelectionButton();
-            var b = document.getElementById('cyberChefSelectionBtn');
-            return !!b && !b.hidden;
+            closePivotMenu();
+            openTranscriptSelectionMenu();
+            return menuLabel();
+        }
+        // The open pivot menu's label, or null when none is open.
+        function menuLabel() {
+            var m = document.querySelector('.pivot-menu');
+            return m ? m.querySelector('.pivot-menu-label').textContent : null;
+        }
+        function menuItems() {
+            return Array.from(document.querySelectorAll('.pivot-menu .pivot-menu-item')).map(function(b) { return b.textContent.trim(); });
         }
     """
 
-    def test_selection_button_only_for_transcript_selections(self):
+    def test_selection_menu_only_for_transcript_selections(self):
         from tests.jsdom_helper import js_statements
         result = js_statements(self.TRANSCRIPT + '''
             var inTranscript = select('l1', 'l2');
+            var items = menuItems();
             var text = getSelection().toString();
             var hexdump = select('hx', 'hx');
             var outside = select('outside', 'outside');
             var spanning = select('l2', 'outside');
-            getSelection().removeAllRanges(); updateCyberChefSelectionButton();
-            var cleared = !document.getElementById('cyberChefSelectionBtn').hidden;
-            window.__jsdom_result = { inTranscript: inTranscript, text: text, hexdump: hexdump,
-                                      outside: outside, spanning: spanning, cleared: cleared };
+            window.__jsdom_result = { inTranscript: inTranscript, items: items, text: text,
+                                      hexdump: hexdump, outside: outside, spanning: spanning };
         ''')
-        self.assertTrue(result['inTranscript'])
-        self.assertIn('GET /x HTTP/1.1', result['text'])
+        self.assertTrue(result['inTranscript'].startswith('Selection: GET /x HTTP/1.1'))
         self.assertIn('X-Data: aGVsbG8=', result['text'])
-        self.assertFalse(result['hexdump'])
-        self.assertFalse(result['outside'])
-        self.assertFalse(result['spanning'], 'a selection running out of the transcript is not offered')
-        self.assertFalse(result['cleared'])
+        self.assertIn('CyberChef', result['items'])
+        self.assertIn('Hunt', result['items'])
+        for item in ('Include', 'Exclude', 'Only'):
+            self.assertNotIn(item, result['items'], 'a transcript fragment is not a column value')
+        self.assertIsNone(result['hexdump'])
+        self.assertIsNone(result['outside'])
+        self.assertIsNone(result['spanning'], 'a selection running out of the transcript is not offered')
 
     def test_selection_sent_as_text_input(self):
         from tests.jsdom_helper import js_statements
         result = js_statements(self.FAKE_WIN + self.TRANSCRIPT + '''
             select('l1', 'l2');
-            document.getElementById('cyberChefSelectionBtn').click();
+            Array.from(document.querySelectorAll('.pivot-menu-item')).find(function(b) {
+                return b.textContent.trim() === 'CyberChef';
+            }).click();
             await new Promise(function(r) { setTimeout(r, 300); });
             window.__jsdom_result = { text: calls.text, files: calls.files, recipe: calls.recipe,
                                       updateUrlAtInput: calls.updateUrlAtInput, order: calls.order };
@@ -8154,16 +8208,36 @@ class TestSendToCyberChef(unittest.TestCase):
         self.assertIs(result['updateUrlAtInput'], False)
         self.assertEqual(result['order'], ['open:/cyberchef/|'], 'no server request for a selection')
 
-    def test_selection_button_keeps_selection_on_mousedown(self):
-        """Pressing the button must not collapse the selection it sends."""
+    def test_selection_menu_correlates_on_its_rows_community_id(self):
         from tests.jsdom_helper import js_statements
         result = js_statements(self.TRANSCRIPT + '''
-            select('l1', 'l2');
-            var ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
-            document.getElementById('cyberChefSelectionBtn').dispatchEvent(ev);
-            window.__jsdom_result = { prevented: ev.defaultPrevented };
+            var table = document.createElement('table');
+            table.innerHTML = '<tbody><tr data-community-id="1:abc="><td></td></tr><tr class="detail-row"><td></td></tr></tbody>';
+            document.body.appendChild(table);
+            table.querySelector('tr.detail-row td').appendChild(tr);
+            select('l1', 'l1');
+            var btn = document.querySelector('[data-pivot-action="correlate"]');
+            window.__jsdom_result = { title: btn ? btn.title : null };
         ''')
-        self.assertTrue(result['prevented'])
+        self.assertIn('1:abc=', result['title'])
+
+    def test_choosing_a_menu_item_does_not_reopen_the_menu(self):
+        """The selection stays in place after an item is chosen, so the
+        mouseup that chose it must not open the menu again."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.TRANSCRIPT + '''
+            window.open = function() { return null; };
+            showToast = function() {};
+            select('l1', 'l2');
+            var item = Array.from(document.querySelectorAll('.pivot-menu-item')).find(function(b) {
+                return b.textContent.trim() === 'Copy to Clipboard';
+            });
+            item.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+            item.click();
+            await new Promise(function(r) { setTimeout(r, 50); });
+            window.__jsdom_result = { menu: menuLabel() };
+        ''')
+        self.assertIsNone(result['menu'])
 
     def test_cyberchef_never_ready_times_out_with_message(self):
         from tests.jsdom_helper import js_statements
@@ -8309,48 +8383,46 @@ class TestTranscriptDragSelection(unittest.TestCase):
         ''')
         self.assertEqual(result, {'doubleClick': False, 'shiftClick': False, 'rightButton': False, 'outside': False})
 
-    def test_selection_button_waits_for_drag_to_end(self):
-        """REGRESSION (real report): the button appeared mid-drag, just
-        past the selection's end, and blocked dragging further right -
-        caret hit-testing under the pointer found the button, not text."""
+    def test_selection_menu_waits_for_drag_to_end(self):
+        """REGRESSION (real report, with the earlier button): anything
+        appearing mid-drag just past the selection's end blocked dragging
+        further right - caret hit-testing under the pointer found it, not
+        text. The menu opens on the mouseup that ends the drag, after that
+        mouseup's click (which would otherwise close it at once)."""
         from tests.jsdom_helper import js_statements
         result = js_statements(self.SETUP + '''
-            function btnShown() { var b = document.getElementById('cyberChefSelectionBtn'); return !!b && !b.hidden; }
             down('l1', 0, 10);
             move(90, 10);
-            updateCyberChefSelectionButton();
-            var during = btnShown();
-            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-            updateCyberChefSelectionButton();
-            window.__jsdom_result = { during: during, after: btnShown(), text: getSelection().toString() };
+            var openedDuring = openTranscriptSelectionMenu();
+            var during = menuLabel();
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+            document.getElementById('l1').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise(function(r) { setTimeout(r, 50); });
+            window.__jsdom_result = { openedDuring: openedDuring, during: during, after: menuLabel(),
+                                      text: getSelection().toString() };
         ''')
-        self.assertFalse(result['during'])
-        self.assertTrue(result['after'])
+        self.assertFalse(result['openedDuring'])
+        self.assertIsNone(result['during'])
+        self.assertEqual(result['after'], 'Selection: GET /x HT')
         self.assertEqual(result['text'], 'GET /x HT')
 
-    def test_selection_button_hides_when_selection_leaves_view(self):
-        """The button used to be pinned to the top edge when its selection
-        scrolled off-screen, and jump to the corner when its row collapsed
-        (a zero-size rect)."""
+    def test_selection_menu_point_needs_selection_on_screen(self):
+        """No menu pinned to the top edge when the selection's end has
+        scrolled off-screen, or in the corner when its row collapsed (a
+        zero-size rect)."""
         from tests.jsdom_helper import js_statements
         result = js_statements(self.SETUP + '''
-            function shownWith(rect) {
+            function pointFor(rect) {
                 Range.prototype.getClientRects = function() { return [rect]; };
-                var r = document.createRange();
-                r.setStart(document.getElementById('l1').firstChild, 0);
-                r.setEnd(document.getElementById('l1').firstChild, 5);
-                var s = getSelection(); s.removeAllRanges(); s.addRange(r);
-                updateCyberChefSelectionButton();
-                var b = document.getElementById('cyberChefSelectionBtn');
-                return !!b && !b.hidden;
+                return selectionMenuPoint(document.createRange());
             }
             window.__jsdom_result = {
-                inView: shownWith({ left: 10, right: 60, top: 100, bottom: 120, width: 50, height: 20 }),
-                scrolledAbove: shownWith({ left: 10, right: 60, top: -80, bottom: -60, width: 50, height: 20 }),
-                collapsed: shownWith({ left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 }),
+                inView: pointFor({ left: 10, right: 60, top: 100, bottom: 120, width: 50, height: 20 }),
+                scrolledAbove: pointFor({ left: 10, right: 60, top: -80, bottom: -60, width: 50, height: 20 }),
+                collapsed: pointFor({ left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 }),
             };
         ''')
-        self.assertEqual(result, {'inView': True, 'scrolledAbove': False, 'collapsed': False})
+        self.assertEqual(result, {'inView': {'clientX': 60, 'clientY': 124}, 'scrolledAbove': None, 'collapsed': None})
 
     def test_drag_ends_on_mouseup(self):
         from tests.jsdom_helper import js_statements

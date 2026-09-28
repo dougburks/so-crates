@@ -1454,13 +1454,6 @@
         .cyberchef-file-btn.keyboard-selected { outline: 2px solid var(--interactive-highlight, var(--accent)); outline-offset: 2px; }
         .cyberchef-send-label { color: var(--text-muted); font-size: 0.75rem; margin: 0 6px 0 16px; }
         .stream-btn + .stream-btn { margin-left: 6px; }
-        /* Floating "Send selection to CyberChef" button just past the end of
-           a finished selection in an ASCII transcript (see
-           updateCyberChefSelectionButton). Fixed
-           positioning, placed from the selection's viewport rect; below the
-           modals (z-index 1001) so an opened modal always covers it. */
-        .cyberchef-selection-btn { position: fixed; z-index: 1000; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--accent); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
-        .cyberchef-selection-btn:hover { background: var(--bg-hover); }
         .ascii-transcript-note { margin-top: 10px; color: var(--text-muted); font-style: italic; user-select: none; }
         .cyberchef-direction-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
         /* The "+ Add Note"/"Edit" link (see rowNoteDetailValueHtml) is otherwise

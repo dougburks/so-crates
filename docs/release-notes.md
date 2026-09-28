@@ -15,9 +15,12 @@ it can now be handed whole payloads, not just a single value:
 - Files Suricata extracted from the traffic have their own **Send to
   CyberChef** button in File Info
 - Select any text in an ASCII transcript - a base64 blob, a header - and
-  a **Send selection to CyberChef** button appears next to it
+  the pivot menu opens for it, including CyberChef
+- Selecting part of a value in a row's detail panel - a domain in an AI
+  Summary, say - opens the pivot menu for just that text
 - Small payloads open with CyberChef's **Magic** operation already
-  applied, to suggest decodings
+  applied, to suggest decodings - now including values sent from the
+  pivot menu
 - CyberChef switches between its light and dark themes to match yours,
   unless you've picked a CyberChef theme yourself
 
