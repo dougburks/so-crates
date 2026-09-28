@@ -50,6 +50,13 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MP4_OUTPUT = os.path.join(REPO_ROOT, 'docs', 'videos', 'cyberchef.mp4')
 POSTER_OUTPUT = os.path.join(REPO_ROOT, 'docs', 'videos', 'cyberchef-poster.jpg')
 UPLOAD_NAME = 'cyberchef-demo.pcap'
+# Cut from the front of the video: the recording starts before the page's
+# first paint, and those first frames are pure white - which X, LinkedIn
+# and the like use as the thumbnail when the MP4 is uploaded directly.
+# Same fix as record_demo.py's MP4_TRIM_START_SECONDS, with more margin
+# (3 white frames, 0.12s, were measured here); nothing happens on screen
+# in the first half second but the intro caption appearing.
+TRIM_START_SECONDS = 0.5
 
 
 def _upload_capture(origin):
@@ -264,7 +271,7 @@ def _stitch(main_video, total, cyberchef_windows, tmp_dir, poster_png):
     ffmpeg = shutil.which('ffmpeg')
     if not ffmpeg:
         sys.exit('ffmpeg is required to stitch the CyberChef tabs into one video')
-    parts, cursor = [], 0.0
+    parts, cursor = [], TRIM_START_SECONDS
     for opened, closed, cc_video in cyberchef_windows:
         parts.append((main_video, cursor, opened))
         parts.append((cc_video, 0.0, closed - opened))
