@@ -1882,16 +1882,6 @@
             themeTileNavSelection = null;
         }
 
-        // Backdrop-click helper: closes exactly when the click landed on
-        // the backdrop div itself (not a child element), i.e. when
-        // target === currentTarget. The static modals now route backdrop
-        // clicks through the delegated 'backdrop' STATIC_ACTIONS entry
-        // instead (same target check), but this helper's logic is still
-        // the reference implementation the tests exercise directly.
-        function handleModalBackdropClick(event, closeFn) {
-            if (event.target === event.currentTarget) closeFn();
-        }
-
         // Applies immediately on toggle, unlike the numeric Settings
         // fields which need a "Save" click - the themes modal has no save
         // step for anything else (theme clicks apply instantly too), so a
@@ -2773,13 +2763,9 @@
         // full-looking menu whose Include/Exclude/Only silently filter on
         // the wrong data, which is worse than the current trimmed menu.
         // 'Timestamp' (used by every renderer via _formatEventCommon) is
-        // deliberately excluded even though every event type's own 'Time'
-        // column exists in getColumnsForType()'s array - extractValue()
-        // has no matching 'Time' case (falls through to its log-analysis-
-        // only default branch), so a table-cell click on the Time column
-        // already offers a silently-nonfunctional Include/Exclude/Only;
-        // mapping 'Timestamp' here would just reproduce that same existing
-        // gap in a second place rather than close it.
+        // deliberately excluded: the Time column is never a filter target
+        // (pivotDataAttrsHtml skips it), so mapping 'Timestamp' to it would
+        // offer an Include/Exclude/Only that matches nothing.
         const DETAIL_LABEL_TO_COLUMN = {
             alert: { 'Signature': 'Alert' },
             protocol_decode: { 'Signature': 'Alert' },
@@ -3839,7 +3825,7 @@
             let html = htmlRowText('Rule', fa.rule_name);
             html += aiSummaryPlaceholderHtml('yara', fa.rule_name);
             // Which file matched - set for an email's message/attachments.
-            html += htmlRowText('Filename', fa.filename, 'mono');
+            if (fa.filename) html += htmlRowText('Filename', fa.filename, 'mono');
             html += htmlRowText('SHA256', fa.sha256, 'mono');
             if (fa.author) {
                 html += htmlRowText('Author', fa.author);
@@ -3859,7 +3845,11 @@
             html += htmlRowText('MD5', e.fileinfo?.md5, 'mono');
             html += htmlRowText('SHA1', e.fileinfo?.sha1, 'mono');
             html += htmlRowText('SHA256', e.fileinfo?.sha256, 'mono');
-            html += htmlRowText('Size', `${(e.fileinfo?.size || 0).toLocaleString()} bytes`);
+            // Shown as "12,345 bytes" but pivoted on the bare number - the
+            // Size column's own value - so Include/Exclude/Only match.
+            const size = e.fileinfo?.size || 0;
+            const sizePivot = encodeURIComponent(JSON.stringify(['Size', String(size)]));
+            html += htmlRow('Size', `<span class="detail-value-pivot" data-detail-pivot="${sizePivot}">${escapeHtml(size.toLocaleString())} bytes</span>`);
             // Only files Suricata actually stored exist in the filestore -
             // it logs a fileinfo event for every transfer it sees.
             if (e.fileinfo?.stored && e.fileinfo?.sha256 && currentMd5) {
@@ -4143,7 +4133,7 @@
                 helpModal.classList.add('wide');
             } else {
                 modalTitle.textContent = 'Analysis Help';
-                const isLogFile = detectFileType(currentFileName) === 'log';
+                const isLogFile = isLogAnalysisMode;
                 const isFileOnly = document.body.classList.contains('file-analysis');
                 let helpText;
                 if (isLogFile) {
@@ -4173,12 +4163,6 @@
                 } else {
                     safeStorageRemove(localStorage, 'socrates_hideHelp');
                 }
-            }
-        }
-
-        function handleHelpBackdropClick(event) {
-            if (event.target === document.getElementById('helpModal')) {
-                closeHelpModal();
             }
         }
 
@@ -9080,10 +9064,12 @@
                 const stats = {};
                 const logEvents = tabDataCache['log'] || [];
                 const sigmaAlerts = tabDataCache['sigmaalert'] || [];
-                let logCount = 0;
-                for (const e of logEvents) {
-                    if (eventMatchesFilters(e)) logCount++;
-                }
+                // getFilteredLogEvents - the table's own filter, through
+                // extractLogValue. eventMatchesFilters goes through
+                // extractValue, whose named cases (URL, Domain, From, ...)
+                // can mean something else entirely for a log field of the
+                // same name, leaving the count and the table disagreeing.
+                const logCount = getFilteredLogEvents(logEvents).length;
                 if (logCount > 0) stats['log'] = logCount;
                 let sigmaCount = 0;
                 for (const a of sigmaAlerts) {
@@ -9165,9 +9151,9 @@
                 // below and dnsHeuristicsCountStale's own comment) - NOT
                 // the raw DNS event count, which would read as "this many
                 // suspicious things" on a card literally labeled DNS
-                // Heuristics. Guarded by !isLogAnalysisMode for parity
-                // with 'all'/'acknowledged' below even though 'dns' can't
-                // actually occur in log-analysis mode in practice.
+                // Heuristics. Guarded by !isLogAnalysisMode even though
+                // 'dns' can't actually occur in log-analysis (or email)
+                // mode in practice.
                 if (type === 'dns' && !isLogAnalysisMode) {
                     stats.push({
                         id: 'dns_heuristics',
@@ -9544,6 +9530,9 @@
         
         function extractValue(e, col, colIndex) {
             switch(col) {
+                // For sorting the tabs sorted in the browser (email mode,
+                // mqtt/ldap) - Time is never aggregated or filtered on.
+                case 'Time': return e.timestamp || '';
                 case 'Protocol': return e.proto || '';
                 case 'Source IP': return e.src_ip || '';
                 case 'Source Port': return String(e.src_port || '');
@@ -10294,7 +10283,8 @@
         // performed server-side - fetchEventsPage picks up the new
         // currentSort and re-fetches just one page in the new order, so no
         // full-batch fetch is needed here. For everything else ('all',
-        // sigmaalert, log, binary), clicking a column header while in
+        // sigmaalert, log, binary, mqtt, ldap, and every tab in email mode),
+        // clicking a column header while in
         // scalable mode must first fetch the full capped batch (a no-op if
         // already cached for aggregations/Sankey) before currentSort takes
         // effect - canUseScalableFetch() becomes false the moment it's set,
@@ -11206,13 +11196,23 @@
 
         // An email analysis: the per-type tabs, opening on the message itself
         // (see isEmailAnalysisMode). Same shape as _renderLogAnalysisView.
-        async function _renderEmailAnalysisView(counts) {
+        // The tab an email analysis opens on: preferredType (the one visible
+        // before a search or filter rebuilt the view) if it still has
+        // results, otherwise the first tab that does.
+        function pickEmailTab(types, filteredCounts, preferredType) {
+            const hasResults = t => (filteredCounts[t] || 0) > 0;
+            return (preferredType && hasResults(preferredType) ? preferredType : null)
+                || types.find(hasResults) || types[0];
+        }
+
+        async function _renderEmailAnalysisView(counts, preferredType) {
             eventStats = counts;
             eventTypes = sortEventTypes(Object.keys(baseEventStats).filter(t => t !== 'stats' && t !== 'all'));
-            buildStats(await computeFilteredStats());
+            const filtered = await computeFilteredStats();
+            buildStats(filtered);
             buildSections();
 
-            const defaultType = eventTypes[0];
+            const defaultType = pickEmailTab(eventTypes, filtered, preferredType);
             if (!defaultType) return;
             document.querySelectorAll('.section').forEach(s => s.classList.add('section-hidden'));
             const defaultSection = document.getElementById('section-' + defaultType);
@@ -11268,6 +11268,9 @@
                 // Use existing file-analysis class set during initial load
                 const isFileOnly = document.body.classList.contains('file-analysis');
                 const isLogFile = isLogAnalysisMode;
+                // Read before the sections are cleared below - see
+                // _renderEmailAnalysisView's preferredType.
+                const emailTabBeforeRefresh = isEmailAnalysisMode ? getVisibleEventType() : null;
 
                 if (isFileOnly) {
                 document.querySelectorAll('.file-info-card').forEach(c => c.remove());
@@ -11299,7 +11302,7 @@
                 } else if (isEmailAnalysisMode) {
                     const statsGrid = document.getElementById('statsGrid');
                     if (statsGrid) statsGrid.style.display = '';
-                    await _renderEmailAnalysisView(eventStats);
+                    await _renderEmailAnalysisView(eventStats, emailTabBeforeRefresh);
                 } else {
                     // Binary file analysis: unified view with search + aggregations + file info + YARA table
                     const statsGrid = document.getElementById('statsGrid');
@@ -11685,6 +11688,9 @@
                     // Fetch analysis metadata for routing (supports ZIP uploads)
                     const statusResp = await fetch('/api/status?md5=' + encodeURIComponent(md5) + '&t=' + Date.now());
                     const analysisStatus = await statusResp.json();
+                    // A newer load started meanwhile - don't let this one set
+                    // the mode flags or render over it.
+                    if (isStaleFetch(gen)) return;
                     const detectedType = analysisStatus.meta?.detected_type || detectFileType(currentFileName);
 
                     const isPcap = detectedType === 'pcap';
@@ -12410,9 +12416,7 @@
             // click anywhere inside the modal bubbles up through the
             // backdrop div (the .modal-content stopPropagation shims are
             // gone), so close only when the click landed on the backdrop
-            // itself - the same event.target === backdrop check the old
-            // handleModalBackdropClick()/handle*BackdropClick() inline
-            // handlers made.
+            // itself.
             'backdrop': (el, e) => {
                 if (e.target !== el) return;
                 const closeFn = STATIC_ACTIONS[el.dataset.arg];

@@ -54,6 +54,22 @@ with open(CSS_PATH, 'r') as f:
     CSS_CONTENT = f.read()
 
 
+
+# Clicks a modal's backdrop, then (reopened) its content, through the real
+# delegated click handling - the modal's data-action="backdrop" and the
+# close action named in its data-arg (STATIC_ACTIONS 'backdrop').
+BACKDROP_CLICK_JS = """
+    function backdropResults(id) {
+        var modal = document.getElementById(id);
+        modal.classList.add('active');
+        modal.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        var closedOnBackdrop = !modal.classList.contains('active');
+        modal.classList.add('active');
+        modal.querySelector('.modal-content').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        return { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: modal.classList.contains('active') };
+    }
+"""
+
 class TestHTMLStructure(unittest.TestCase):
     def test_file_size(self):
         """Verify JS file is complete (not truncated)"""
@@ -579,9 +595,6 @@ class TestJavaScriptFunctions(unittest.TestCase):
             r'<span class="theme-switch">\s*<input type="checkbox" id="helpShowAgain"[^>]*>\s*<span class="theme-switch-slider"></span>\s*</span>',
             'helpShowAgain must be wrapped in the .theme-switch slider component')
 
-    def test_has_handleHelpBackdropClick(self):
-        self.assertIn('function handleHelpBackdropClick', JS_CONTENT)
-
     def test_has_welcomeHelpContent(self):
         self.assertIn('function getWelcomeHelpContent', JS_CONTENT)
 
@@ -929,24 +942,17 @@ class TestUXFeatures(unittest.TestCase):
         self.assertNotIn('stopPropagation', modal_section,
                          'Help modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
-    def test_help_modal_backdrop_handler_closes_modal(self):
-        """handleHelpBackdropClick must close the modal only when the backdrop is clicked."""
-        func_match = re.search(r'function handleHelpBackdropClick\([^)]*\)\s*\{', JS_CONTENT)
-        self.assertIsNotNone(func_match, 'handleHelpBackdropClick function must exist')
-        start = func_match.end()
-        brace_count = 1
-        pos = start
-        while pos < len(JS_CONTENT) and brace_count > 0:
-            if JS_CONTENT[pos] == '{':
-                brace_count += 1
-            elif JS_CONTENT[pos] == '}':
-                brace_count -= 1
-            pos += 1
-        func_body = JS_CONTENT[start:pos]
-        self.assertIn("event.target === document.getElementById('helpModal')", func_body,
-                      'Backdrop handler must only close when the helpModal wrapper is clicked')
-        self.assertIn('closeHelpModal()', func_body,
-                      'Backdrop handler must call closeHelpModal()')
+    def test_help_modal_backdrop_click_closes_modal(self):
+        """A click on the Help modal's backdrop closes it - through the
+        delegated 'backdrop' action (data-action="backdrop" on the modal,
+        its close action in data-arg) - and a click inside its content
+        doesn't."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('helpModal');
+        ''')
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
+
 
     def test_header_has_no_separators(self):
         """Header items must not have any separators (pipes or borders) for clean responsive wrapping."""
@@ -2839,8 +2845,6 @@ class TestThemeAndMenu(unittest.TestCase):
                       'showThemesModal function must exist')
         self.assertIn('function closeThemesModal(', JS_CONTENT,
                       'closeThemesModal function must exist')
-        self.assertIn('function handleModalBackdropClick(', JS_CONTENT,
-                      'handleModalBackdropClick function must exist')
 
     def test_css_theme_variables_exist(self):
         self.assertIn('--bg-primary:', CSS_CONTENT,
@@ -6147,23 +6151,12 @@ class TestFiltering(unittest.TestCase):
         self.assertTrue(result['openBefore'])
         self.assertFalse(result['openAfter'], 'Escape must close the About modal')
 
-    def test_handleModalBackdropClick_closes_only_on_backdrop_for_about(self):
+    def test_backdrop_click_closes_only_on_backdrop_for_about(self):
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            var modal = document.getElementById('aboutModal');
-            modal.classList.add('active');
-            handleModalBackdropClick({ target: modal, currentTarget: modal }, closeAboutModal);
-            var closedOnBackdrop = !modal.classList.contains('active');
-
-            modal.classList.add('active');
-            var inner = document.querySelector('#aboutModal .modal-content');
-            handleModalBackdropClick({ target: inner, currentTarget: modal }, closeAboutModal);
-            var stayedOpenOnContent = modal.classList.contains('active');
-
-            window.__jsdom_result = { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: stayedOpenOnContent };
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('aboutModal');
         ''')
-        self.assertTrue(result['closedOnBackdrop'])
-        self.assertTrue(result['stayedOpenOnContent'])
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
     def test_footer_center_teaser_skeleton_empty_in_html(self):
         """#footerCenterTeaser is empty in the static HTML - its content
@@ -6287,23 +6280,12 @@ class TestFiltering(unittest.TestCase):
         self.assertTrue(result['openBefore'])
         self.assertFalse(result['openAfter'], 'Escape must close the Security Onion modal')
 
-    def test_handleModalBackdropClick_closes_only_on_backdrop_for_security_onion(self):
+    def test_backdrop_click_closes_only_on_backdrop_for_security_onion(self):
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            var modal = document.getElementById('securityOnionModal');
-            modal.classList.add('active');
-            handleModalBackdropClick({ target: modal, currentTarget: modal }, closeSecurityOnionModal);
-            var closedOnBackdrop = !modal.classList.contains('active');
-
-            modal.classList.add('active');
-            var inner = document.querySelector('#securityOnionModal .modal-content');
-            handleModalBackdropClick({ target: inner, currentTarget: modal }, closeSecurityOnionModal);
-            var stayedOpenOnContent = modal.classList.contains('active');
-
-            window.__jsdom_result = { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: stayedOpenOnContent };
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('securityOnionModal');
         ''')
-        self.assertTrue(result['closedOnBackdrop'])
-        self.assertTrue(result['stayedOpenOnContent'])
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
     def test_has_analysis_header(self):
         self.assertIn('id="mainHeader"', HTML_CONTENT)
@@ -10721,7 +10703,7 @@ class TestAnalysisNotes(unittest.TestCase):
         result = js_statements(self._setup_js(initial_notes='original notes') + '''
             showNotesModal();
             var notesModal = document.getElementById('notesModal');
-            handleModalBackdropClick({ target: notesModal, currentTarget: notesModal }, closeNotesModal);
+            notesModal.dispatchEvent(new MouseEvent('click', { bubbles: true }));
             window.__jsdom_result = {
                 modalOpen: document.getElementById('notesModal').classList.contains('active')
             };
@@ -18046,23 +18028,12 @@ class TestUserConfigurableQueryLimit(unittest.TestCase):
         ''')
         self.assertFalse(result['isActive'])
 
-    def test_handleModalBackdropClick_closes_only_on_backdrop_for_settings(self):
+    def test_backdrop_click_closes_only_on_backdrop_for_settings(self):
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            var modal = document.getElementById('settingsModal');
-            modal.classList.add('active');
-            handleModalBackdropClick({ target: modal, currentTarget: modal }, closeSettingsModal);
-            var closedOnBackdrop = !modal.classList.contains('active');
-
-            modal.classList.add('active');
-            var inner = document.querySelector('#settingsModal .modal-content');
-            handleModalBackdropClick({ target: inner, currentTarget: modal }, closeSettingsModal);
-            var stayedOpenOnContent = modal.classList.contains('active');
-
-            window.__jsdom_result = { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: stayedOpenOnContent };
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('settingsModal');
         ''')
-        self.assertTrue(result['closedOnBackdrop'])
-        self.assertTrue(result['stayedOpenOnContent'])
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
     def test_saveSettings_rejects_value_below_floor(self):
         from tests.jsdom_helper import js_statements
@@ -20614,23 +20585,12 @@ class TestRulesModal(unittest.TestCase):
         self.assertTrue(result['openBefore'], 'rules modal must actually be open before pressing Escape')
         self.assertFalse(result['openAfter'], 'Escape must close the rules modal')
 
-    def test_handleModalBackdropClick_closes_only_on_backdrop_for_rules(self):
+    def test_backdrop_click_closes_only_on_backdrop_for_rules(self):
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            var modal = document.getElementById('rulesModal');
-            modal.classList.add('active');
-            handleModalBackdropClick({ target: modal, currentTarget: modal }, closeRulesModal);
-            var closedOnBackdrop = !modal.classList.contains('active');
-
-            modal.classList.add('active');
-            var inner = document.querySelector('#rulesModal .modal-content');
-            handleModalBackdropClick({ target: inner, currentTarget: modal }, closeRulesModal);
-            var stayedOpenOnContent = modal.classList.contains('active');
-
-            window.__jsdom_result = { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: stayedOpenOnContent };
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('rulesModal');
         ''')
-        self.assertTrue(result['closedOnBackdrop'])
-        self.assertTrue(result['stayedOpenOnContent'])
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
 
 class TestAlertRulesetClassification(unittest.TestCase):
@@ -21256,6 +21216,72 @@ class TestEmailAnalysisUI(unittest.TestCase):
         self.assertIn('data-action="load-builtin-sample" data-sample="log"', JS_CONTENT)
         self.assertIn('data-action="load-builtin-sample" data-sample="pcap"', JS_CONTENT)
         self.assertIn("'load-builtin-sample': (el) => loadBuiltInSample(el.dataset.sample)", JS_CONTENT)
+
+    def test_tab_choice_follows_results(self):
+        """REGRESSION (4.4.0 review): a search that matched only links
+        reopened the empty Emails tab instead of Links."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var types = ['email', 'link', 'filealerts', 'fileinfo'];
+            window.__jsdom_result = {
+                stays: pickEmailTab(types, { email: 1, link: 2 }, 'link'),
+                movesOn: pickEmailTab(types, { link: 2 }, 'email'),
+                firstWithResults: pickEmailTab(types, { fileinfo: 1 }, null),
+                nothing: pickEmailTab(types, {}, 'link'),
+            };
+        ''')
+        self.assertEqual(result, {'stays': 'link', 'movesOn': 'link', 'firstWithResults': 'fileinfo', 'nothing': 'email'})
+
+    def test_time_column_sorts(self):
+        """REGRESSION (4.4.0 review): email tabs sort in the browser, and
+        extractValue had no Time case, so sorting by Time did nothing."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var a = { event_type: 'link', timestamp: '2026-02-03T10:00:00', link: {} };
+            var b = { event_type: 'link', timestamp: '2026-01-01T10:00:00', link: {} };
+            var cols = ['Time', 'URL'];
+            window.__jsdom_result = sortItemsByColumn([a, b], cols, extractValue, 0, true).map(function(e) { return e.timestamp; });
+        ''')
+        self.assertEqual(result, ['2026-01-01T10:00:00', '2026-02-03T10:00:00'])
+
+    def test_size_detail_pivots_on_the_column_value(self):
+        """REGRESSION (4.4.0 review): the detail panel's "12,345 bytes"
+        was the pivot value, so Include on it never matched the Size
+        column's "12345"."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            fileEv.fileinfo.size = 12345;
+            var div = document.createElement('div');
+            div.innerHTML = renderFileInfoDetails(fileEv);
+            var span = Array.from(div.querySelectorAll('[data-detail-pivot]')).find(function(s) {
+                return JSON.parse(decodeURIComponent(s.dataset.detailPivot))[0] === 'Size';
+            });
+            isEmailAnalysisMode = true;
+            window.__jsdom_result = { shown: span.textContent, pivot: JSON.parse(decodeURIComponent(span.dataset.detailPivot)),
+                                      column: extractValue(fileEv, 'Size', -1) };
+        ''')
+        self.assertEqual(result['shown'], '12,345 bytes')
+        self.assertEqual(result['pivot'], ['Size', '12345'])
+        self.assertEqual(result['column'], '12345')
+
+    def test_filealert_without_filename_has_no_blank_row(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var div = document.createElement('div');
+            div.innerHTML = renderFileAlertDetails({ event_type: 'filealerts', filealerts: { rule_name: 'R', sha256: 'x' } });
+            window.__jsdom_result = Array.from(div.querySelectorAll('.detail-label')).map(function(l) { return l.textContent; });
+        ''')
+        self.assertNotIn('Filename', result)
+
+    def test_log_stat_counts_use_the_log_tables_own_filter(self):
+        """REGRESSION (4.4.0 review): log-mode stat counts filtered through
+        extractValue, whose named cases (Domain, From, URL, ...) mean
+        something else for a log field of the same name - so a filter on
+        such a field emptied the count while the table still showed rows."""
+        body = JS_CONTENT.split('async function computeFilteredStats()')[1].split('\n        }\n')[0]
+        log_branch = body.split('if (isLogAnalysisMode) {')[1].split('return stats;')[0]
+        self.assertIn('getFilteredLogEvents(logEvents)', log_branch)
+        self.assertNotIn('eventMatchesFilters(e)', log_branch)
 
     def test_detect_file_type_and_tab_order(self):
         from tests.jsdom_helper import js_statements
