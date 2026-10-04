@@ -3100,6 +3100,15 @@ bright_magenta = "#D9B9D9"
             meta = json.load(f)
         self.assertEqual((meta['detected_type'], meta['original']), ('binary', 'eicar.com'))
 
+    def test_load_sample_pcap(self):
+        status, body = self._post('/api/load-sample', {'name': 'pcap'})
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data.get('phase', 'network'), 'network')
+        with open(os.path.join(server.DATA_DIR, data['md5'], '.meta')) as f:
+            meta = json.load(f)
+        self.assertEqual((meta['detected_type'], meta['original']), ('pcap', 'sample-workstation-traffic.pcap'))
+
     def test_load_sample_log(self):
         """Analyzed as a log (Sigma via Zircolite, which this test
         environment may not have - only the routing is checked here)."""

@@ -218,7 +218,7 @@ Before cutting a release:
    theoretical.** `record_demo.py`'s captions are keyed to exact strings
    from the sample's own analysis (e.g. a specific aggregation-row value);
    running `capture_screenshots.py` against the same container first (its
-   own "Sample pcap file" click triggers the identical analysis) left that
+   own Load from URL of the same pcap triggers the identical analysis) left that
    value's own locator un-findable within `record_demo.py`'s wait window
    once run second - `Locator.scroll_into_view_if_needed: Timeout 30000ms
    exceeded` on an `.agg-row` lookup, even though the exact same analysis
@@ -250,11 +250,12 @@ Before cutting a release:
    http://127.0.0.1:<port>/socrates.html` against the same container, now
    that step 3's video is done with it. This refreshes all 8
    `docs/images/so-crates-*.png` (Home page) and all 35
-   `docs/images/themes/*.png` (Themes page) against the app's own default
-   sample pcap (`DEFAULT_SAMPLE_URL` in `static/socrates.js` - a one-click
-   convenience link to an external pcap on malware-traffic-analysis.net, not
-   something bundled with the app) - no local fixture or hardcoded MD5
-   needed. Run this on every release, not just when the UI visibly changes -
+   `docs/images/themes/*.png` (Themes page) against the URL box's default
+   pcap (`DEFAULT_SAMPLE_URL` in `static/socrates.js` - a real infection's
+   traffic on malware-traffic-analysis.net, loaded with the Go button; the
+   Welcome screen's Sample PCAP file card is a smaller built-in one, see
+   `samples.py`) - no local fixture or hardcoded MD5 needed, but it does
+   need internet access. Run this on every release, not just when the UI visibly changes -
    stale screenshots (e.g. showing an old default value in the Welcome
    modal) are easy to miss otherwise. If a new theme was added since the
    last release, make sure it was also added to the separate hardcoded

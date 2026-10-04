@@ -2196,26 +2196,19 @@
             const stored = parseInt(safeStorageGet(localStorage, AGG_PAGE_SIZE_STORAGE_KEY), 10);
             return AGG_PAGE_SIZE_OPTIONS.includes(stored) ? stored : CONFIG.AGGREGATION_TOP_N;
         })();
+        // The URL box's starting value: a real infection's traffic on
+        // malware-traffic-analysis.net. The Sample PCAP file card is built
+        // in instead (see samples.py); this stays as the URL example, and
+        // as what scripts/record_demo.py and capture_screenshots.py load.
         const DEFAULT_SAMPLE_URL = 'https://www.malware-traffic-analysis.net/2026/02/03/2026-02-03-GuLoader-for-AgentTesla-style-infection-with-FTP-data-exfil.pcap.zip';
-        // The hover text for a sample built into SO-CRATES (see samples.py)
-        // rather than downloaded - the counterpart of _sampleCardTitle.
+        // The hover text for the sample cards: every sample is built into
+        // SO-CRATES (see samples.py), none is downloaded.
         const BUILTIN_SAMPLE_TITLE = 'Built into SO-CRATES - works without internet access';
         // A collection of real phishing emails - linked to (More email
         // samples, the 'email samples' command), not bundled: the Sample
         // email file is one built into SO-CRATES instead (see samples.py).
         const EMAIL_SAMPLES_URL = 'https://github.com/rf-peixoto/phishing_pot';
 
-        // Named constants above (not inline string literals in the sample
-        // cards below) so the tooltip's domain is always derived from the
-        // same URL the click actually fetches, rather than a second,
-        // separately-typed copy that could silently drift from it.
-        function _sampleCardTitle(url) {
-            try {
-                return 'Downloads from ' + new URL(url).hostname;
-            } catch (e) {
-                return '';
-            }
-        }
         const FILE_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 4px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>';
         const REFRESH_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>';
         const DELETE_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
@@ -4488,7 +4481,7 @@
                         <div style="background: var(--bg-secondary); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 100%; box-sizing: border-box;">
                             <div style="color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; margin-bottom: 15px; font-weight: 600;">${DOWN_ARROW_ICON_SVG} Select a sample file, import a file from URL, or import a file from your local system</div>
                             <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 15px;">
-                                <div class="sample-card" title="${_sampleCardTitle(DEFAULT_SAMPLE_URL)}" tabindex="0" role="button" aria-label="Analyze the sample PCAP file" data-action="load-sample-url" data-url="${escapeHtml(DEFAULT_SAMPLE_URL)}" data-key-activate="enter-space">
+                                <div class="sample-card" title="${BUILTIN_SAMPLE_TITLE}" tabindex="0" role="button" aria-label="Analyze the sample PCAP file" data-action="load-builtin-sample" data-sample="pcap" data-key-activate="enter-space">
                                      <span class="sample-label">Sample PCAP file</span>
                                  </div>
                                 <div class="sample-card" title="${BUILTIN_SAMPLE_TITLE}" tabindex="0" role="button" aria-label="Analyze the sample log file" data-action="load-builtin-sample" data-sample="log" data-key-activate="enter-space">
@@ -11835,13 +11828,6 @@
             }
         }
         
-        function loadSampleUrl(url) {
-            closeHelpModal();
-            lastSampleUrl = url;
-            document.getElementById('pcapUrl').value = url;
-            loadFromUrl();
-        }
-
         // A sample built into SO-CRATES (POST /api/load-sample - see
         // samples.py), generated server-side, so it works with no internet
         // access. Same response handling as loadFromUrl.
@@ -12456,7 +12442,6 @@
 
             // Welcome screen: sample cards, URL import, upload drop zone,
             // previous-analyses rows.
-            'load-sample-url': (el) => loadSampleUrl(el.dataset.url),
             'load-builtin-sample': (el) => loadBuiltInSample(el.dataset.sample),
             'load-from-url': () => loadFromUrl(),
             'open-upload-picker': () => document.getElementById('pcapUpload').click(),

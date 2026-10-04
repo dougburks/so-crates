@@ -3,9 +3,9 @@
 
 Requires: pip install -r requirements-screenshots.txt, and a running server
 (default http://127.0.0.1:8000/socrates.html - override with --base-url).
-Uses the app's own default "Sample pcap file" (DEFAULT_SAMPLE_URL in
-static/socrates.js - a one-click convenience link to an external pcap on
-malware-traffic-analysis.net, not something bundled with the app) so it
+Loads the URL box's default (DEFAULT_SAMPLE_URL in static/socrates.js - a
+real infection's traffic on malware-traffic-analysis.net, richer than the
+built-in Sample PCAP file) with its Go button, so it
 needs no pre-existing local analysis or hardcoded MD5 - it works on a
 clean checkout with an empty DATA_DIR.
 
@@ -70,8 +70,8 @@ async def main(base_url):
         await page.screenshot(path=os.path.join(IMAGES_DIR, 'so-crates-main.png'))
         print('captured main')
 
-        # 3. Load the app's own default sample pcap (self-contained, no fixture needed)
-        await page.click(".sample-card:has-text('Sample pcap file')")
+        # 3. Load the URL box's default pcap (self-contained, no fixture needed)
+        await page.click("button[data-action='load-from-url']")
         await page.wait_for_selector('#statsGrid .stat-card', timeout=60000)
         await page.wait_for_timeout(1000)
         print('sample pcap loaded')

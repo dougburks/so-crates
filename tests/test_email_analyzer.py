@@ -302,6 +302,37 @@ class TestBuiltInEmailSample(unittest.TestCase):
             addr = ipaddress.ip_address(ip)
             self.assertTrue(addr.is_private or addr in documentation, ip)
 
+    def test_pcap_sample(self):
+        """A valid pcap, deterministic, between the workstation and the
+        documentation-range C2 only, carrying the AgentTesla-style FTP
+        upload and the executable download Suricata's rules fire on.
+        (Which ET rules fire needs Suricata and its ruleset, so that's
+        checked by hand - see build_pcap_sample.)"""
+        import ipaddress
+        import socket
+        import struct
+        import samples
+        import validators
+        filename, build = samples.SAMPLES['pcap']
+        data = build()
+        self.assertEqual(data, build())
+        self.assertTrue(filename.endswith('.pcap'))
+        self.assertTrue(validators.is_pcap_file(data[:4]))
+        ips, offset = set(), 24
+        while offset < len(data):
+            _sec, _usec, caplen, _len = struct.unpack('<IIII', data[offset:offset + 16])
+            frame = data[offset + 16:offset + 16 + caplen]
+            ip_header = frame[14:34]  # after the Ethernet header
+            ips.add(socket.inet_ntoa(ip_header[12:16]))
+            ips.add(socket.inet_ntoa(ip_header[16:20]))
+            offset += 16 + caplen
+        self.assertEqual(offset, len(data), 'records end exactly at the end of the file')
+        self.assertEqual(ips, {'10.20.4.12', '203.0.113.66'})
+        self.assertIn(ipaddress.ip_address('203.0.113.66'), ipaddress.ip_network('203.0.113.0/24'))
+        self.assertIn(b'STOR PW_jordan.lee-FIN-WS-0412_2026_', data)
+        self.assertIn(b'User-Agent: Microsoft-CryptoAPI/10.0', data)
+        self.assertIn(b'MZ', data)
+
     def test_binary_sample_is_the_eicar_file(self):
         import samples
         filename, build = samples.SAMPLES['binary']

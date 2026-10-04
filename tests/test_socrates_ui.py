@@ -3386,7 +3386,7 @@ class TestThemeAndMenu(unittest.TestCase):
     def test_record_demo_prewarm_reads_the_real_default_sample_url(self):
         """record_demo.py's _prewarm_sample_analysis (see AGENTS.md's
         Release Checklist) must pre-warm the exact same sample the
-        recorded 'Sample pcap file' click actually requests - a hardcoded
+        recorded Load from URL ('Go') click actually requests - a hardcoded
         second copy of DEFAULT_SAMPLE_URL in record_demo.py would silently
         drift out of sync with the real one if it ever changed, quietly
         pre-warming the wrong sample (or erroring) while the recorded
@@ -3515,33 +3515,26 @@ class TestThemeAndMenu(unittest.TestCase):
                       'optional --interactive-highlight override for themes (like C64) where '
                       '--accent alone is not visually distinct from --border-color')
 
-    def test_sample_cards_hint_their_source_domain_on_hover(self):
-        """Each sample card fetches from a real third-party domain the
-        moment it's clicked, with no visible indication of that beforehand
-        - a title tooltip surfaces it on hover without changing the card's
-        appearance. Derived from the same URL constant the click uses
-        (_sampleCardTitle()), not a second hardcoded copy of the domain
-        that could drift from it."""
+    def test_sample_cards_say_they_are_built_in(self):
+        """Every sample card loads a sample built into SO-CRATES
+        (samples.py, POST /api/load-sample) - nothing is downloaded, and the
+        hover text says so."""
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             localStorage.setItem('socrates_hideHelp', 'true');
             await new Promise(r => setTimeout(r, 50));
             var cards = document.querySelectorAll('.sample-card');
             window.__jsdom_result = Array.from(cards).map(function(c) {
-                return { label: c.querySelector('.sample-label').textContent, title: c.title };
+                return { label: c.querySelector('.sample-label').textContent, title: c.title,
+                         action: c.dataset.action, sample: c.dataset.sample };
             });
         ''')
-        titles = {r['label']: r['title'] for r in result}
-        self.assertEqual(titles.get('Sample PCAP file'), 'Downloads from www.malware-traffic-analysis.net')
-        # Built in (samples.py) - nothing is downloaded.
-        self.assertEqual(titles.get('Sample log file'), 'Built into SO-CRATES - works without internet access')
-        self.assertEqual(titles.get('Sample binary file'), 'Built into SO-CRATES - works without internet access')
-        self.assertEqual(titles.get('Sample email file'), 'Built into SO-CRATES - works without internet access')
-
-    def test_sampleCardTitle_handles_invalid_url(self):
-        from tests.jsdom_helper import js_expression
-        result = js_expression("_sampleCardTitle('not a url')")
-        self.assertEqual(result, '')
+        self.assertEqual([(r['label'], r['sample']) for r in result],
+                         [('Sample PCAP file', 'pcap'), ('Sample log file', 'log'),
+                          ('Sample binary file', 'binary'), ('Sample email file', 'email')])
+        for r in result:
+            self.assertEqual(r['action'], 'load-builtin-sample')
+            self.assertEqual(r['title'], 'Built into SO-CRATES - works without internet access')
 
     def test_interactive_highlight_consumers_match_documented_list(self):
         """AGENTS.md's --interactive-highlight bullet enumerates the exact
@@ -4168,11 +4161,11 @@ class TestThemeAndMenu(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             var calls = [];
-            window.loadSampleUrl = function(url) { calls.push(url); };
+            window.loadBuiltInSample = function(name) { calls.push(name); };
             document.getElementById('inputBoxes').innerHTML = `
-                <div class="sample-card" data-action="load-sample-url" data-url="pcap-url"><span>Sample pcap file</span></div>
-                <div class="sample-card" data-action="load-sample-url" data-url="log-url"><span>Sample log file</span></div>
-                <div class="sample-card" data-action="load-sample-url" data-url="binary-url"><span>Sample binary file</span></div>
+                <div class="sample-card" data-action="load-builtin-sample" data-sample="pcap"><span>Sample pcap file</span></div>
+                <div class="sample-card" data-action="load-builtin-sample" data-sample="log"><span>Sample log file</span></div>
+                <div class="sample-card" data-action="load-builtin-sample" data-sample="binary"><span>Sample binary file</span></div>
             `;
             document.getElementById('inputBoxes').style.display = 'block';
             var cards = document.querySelectorAll('.sample-card');
@@ -4186,7 +4179,7 @@ class TestThemeAndMenu(unittest.TestCase):
         ''')
         self.assertEqual(result['selectedAfterFirst'], [True, False, False],
                          'first ArrowRight must select (not activate) the first sample card')
-        self.assertEqual(result['calls'], ['pcap-url'], 'Enter must activate the keyboard-selected sample card')
+        self.assertEqual(result['calls'], ['pcap'], 'Enter must activate the keyboard-selected sample card')
 
     def test_arrow_key_navigation_theme_tiles(self):
         """When the Themes modal is open, all four arrow keys must move a
@@ -4248,9 +4241,9 @@ class TestThemeAndMenu(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             var sampleCalls = [];
-            window.loadSampleUrl = function(url) { sampleCalls.push(url); };
+            window.loadBuiltInSample = function(name) { sampleCalls.push(name); };
             document.getElementById('inputBoxes').innerHTML = `
-                <div class="sample-card" data-action="load-sample-url" data-url="pcap-url"><span>Sample pcap file</span></div>
+                <div class="sample-card" data-action="load-builtin-sample" data-sample="pcap"><span>Sample pcap file</span></div>
             `;
             document.getElementById('inputBoxes').style.display = 'block';
             document.getElementById('themesModalBody').innerHTML = `
@@ -4457,7 +4450,7 @@ class TestThemeAndMenu(unittest.TestCase):
         activateKeyboardSelection() must not click that stale, invisible sample
         card when the user later presses Enter on a data-table row - it must
         activate the row instead. (Previously this re-triggered the sample's
-        loadSampleUrl() and looked like the app was re-analyzing the file.)"""
+        sample load and looked like the app was re-analyzing the file.)"""
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             document.getElementById('inputBoxes').innerHTML = '<div class="sample-card">Sample binary file</div>';
@@ -16673,7 +16666,7 @@ class TestErrorHandlingUI(unittest.TestCase):
 
     def test_loadAnalysis_catch_calls_hideLoading_and_showError(self):
         """loadAnalysis catch block must call hideLoading and showError."""
-        func_body = JS_CONTENT.split('function loadAnalysis(md5)')[1].split('function loadSampleUrl(')[0]
+        func_body = JS_CONTENT.split('function loadAnalysis(md5)')[1].split('async function loadBuiltInSample(')[0]
         self.assertIn('} catch(err) {', func_body, 'loadAnalysis must have catch block')
         self.assertIn('hideLoading();', func_body, 'catch must call hideLoading')
         self.assertIn('showError(', func_body, 'catch must call showError')
@@ -17850,7 +17843,7 @@ class TestTruncationIndicator(unittest.TestCase):
                       'refreshAnalysisData must clear truncatedTypes alongside the allEvents/tabDataCache reset it does on search change')
 
     def test_loadAnalysis_clears_truncatedTypes(self):
-        func = JS_CONTENT.split('async function loadAnalysis(')[1].split('function loadSampleUrl(')[0]
+        func = JS_CONTENT.split('async function loadAnalysis(')[1].split('async function loadBuiltInSample(')[0]
         self.assertIn('truncatedTypes.clear()', func,
                       'loadAnalysis must clear truncatedTypes alongside the allEvents/tabDataCache reset it does on a fresh file load')
 
@@ -17862,7 +17855,7 @@ class TestTruncationIndicator(unittest.TestCase):
         newer, correct call already finished. loadAnalysis must bump the
         fetchGeneration counter (the same mechanism updateSankeyDiagram already
         uses) and bail before assigning eventStats if superseded."""
-        func = JS_CONTENT.split('async function loadAnalysis(')[1].split('function loadSampleUrl(')[0]
+        func = JS_CONTENT.split('async function loadAnalysis(')[1].split('async function loadBuiltInSample(')[0]
         self.assertIn('const gen = bumpFetchGeneration();', func,
                       'loadAnalysis must capture a fetch generation at the top')
         gen_pos = func.find('const gen = bumpFetchGeneration();')
@@ -21261,6 +21254,7 @@ class TestEmailAnalysisUI(unittest.TestCase):
         self.assertIn('data-action="load-builtin-sample" data-sample="email"', JS_CONTENT)
         self.assertIn('data-action="load-builtin-sample" data-sample="binary"', JS_CONTENT)
         self.assertIn('data-action="load-builtin-sample" data-sample="log"', JS_CONTENT)
+        self.assertIn('data-action="load-builtin-sample" data-sample="pcap"', JS_CONTENT)
         self.assertIn("'load-builtin-sample': (el) => loadBuiltInSample(el.dataset.sample)", JS_CONTENT)
 
     def test_detect_file_type_and_tab_order(self):
