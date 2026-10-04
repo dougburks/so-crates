@@ -3094,11 +3094,12 @@ bright_magenta = "#D9B9D9"
         status, body = self._post('/api/load-sample', {'name': 'binary'})
         self.assertEqual(status, 200)
         md5 = json.loads(body)['md5']
-        self.assertEqual(md5, '44d88612fea8a8f36de82e1278abb02f')
+        import samples
+        self.assertEqual(md5, hashlib.md5(samples.build_binary_sample()).hexdigest())
         self._wait_ready(md5)
         with open(os.path.join(server.DATA_DIR, md5, '.meta')) as f:
             meta = json.load(f)
-        self.assertEqual((meta['detected_type'], meta['original']), ('binary', 'eicar.com'))
+        self.assertEqual((meta['detected_type'], meta['original']), ('binary', 'update.exe'))
 
     def test_load_sample_pcap(self):
         status, body = self._post('/api/load-sample', {'name': 'pcap'})

@@ -141,6 +141,14 @@ class TestParseEdgeCases(unittest.TestCase):
         events, _ = email_analyzer.parse_message(b'\x00\xff\x00 not an email at all')
         self.assertEqual(_by_type(events, 'email')[0]['email']['from'], '')
 
+    def test_macro_enabled_attachment_warning(self):
+        msg = EmailMessage()
+        msg['From'] = 'a@example.com'
+        msg.set_content('see attached')
+        msg.add_attachment(b'PK\x03\x04', maintype='application', subtype='octet-stream', filename='Form.XLSM')
+        events, _ = email_analyzer.parse_message(msg.as_bytes())
+        self.assertIn('Attachment is a macro-enabled Office document: Form.XLSM', events[0]['email']['warnings'])
+
     def test_url_trailing_punctuation_trimmed(self):
         events, _ = email_analyzer.parse_message(b'From: a@example.com\n\nSee (https://example.com/x).\n')
         self.assertEqual(events[1]['link']['url'], 'https://example.com/x')
@@ -333,13 +341,19 @@ class TestBuiltInEmailSample(unittest.TestCase):
         self.assertIn(b'User-Agent: Microsoft-CryptoAPI/10.0', data)
         self.assertIn(b'MZ', data)
 
-    def test_binary_sample_is_the_eicar_file(self):
+    def test_binary_sample_is_the_pcap_samples_payload(self):
+        """update.exe, byte-for-byte the payload the pcap sample downloads -
+        so its hashes match the pcap analysis's extracted file."""
         import samples
         filename, build = samples.SAMPLES['binary']
-        self.assertEqual(filename, 'eicar.com')
-        # The MD5 of eicar.org's own eicar.com, so an analysis of the old
-        # downloaded sample is reopened rather than duplicated.
-        self.assertEqual(hashlib.md5(build()).hexdigest(), '44d88612fea8a8f36de82e1278abb02f')
+        self.assertEqual(filename, 'update.exe')
+        data = build()
+        self.assertTrue(data.startswith(b'MZ'))
+        self.assertIn(email_analyzer_eicar(), data)
+        # The whole HTTP response fits in one TCP segment, so the payload
+        # appears in the pcap contiguously.
+        self.assertIn(b'Content-Length: %d\r\nConnection: close\r\n\r\n' % len(data) + data,
+                      samples.build_pcap_sample())
 
     def test_deterministic(self):
         import samples
@@ -352,12 +366,15 @@ class TestBuiltInEmailSample(unittest.TestCase):
         top = _by_type(events, 'email')[0]['email']
         warnings = ' | '.join(top['warnings'])
         for expected in ('Reply-To domain', 'Return-Path domain', 'SPF fail', 'DMARC fail',
-                         'text names a different domain', 'executable extension'):
+                         'text names a different domain', 'macro-enabled Office document'):
             self.assertIn(expected, warnings)
         self.assertEqual(top['originating_ip'], '203.0.113.66')
         self.assertTrue(any(e['link']['mismatch'] for e in _by_type(events, 'link')))
         self.assertEqual(len(_by_type(events, 'email')), 2, 'includes a forwarded message')
-        self.assertEqual(attachments[0][2], email_analyzer_eicar())
+        name, _ctype, data, _ts = attachments[0]
+        self.assertEqual(name, 'Payroll_Adjustment_Form.docm')
+        self.assertTrue(data.startswith(b'PK'), 'an Office Open XML zip')
+        self.assertIn(email_analyzer_eicar(), data, 'stored uncompressed, so YARA sees it')
 
     def test_source_never_holds_the_whole_eicar_string(self):
         """No file in the image may contain the full signature - see the

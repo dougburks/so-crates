@@ -43,6 +43,8 @@ _RECEIVED_FROM_RE = re.compile(r'\bfrom\s+(\S+)', re.IGNORECASE)
 _RECEIVED_BY_RE = re.compile(r'\bby\s+(\S+)', re.IGNORECASE)
 _BRACKETED_IP_RE = re.compile(r'\[(?:IPv6:)?([0-9a-fA-F:.]+)\]')
 _FAILING_AUTH = ('fail', 'softfail', 'permerror')
+# Office formats that can carry macros - the classic phishing attachment.
+_MACRO_EXTENSIONS = ('.docm', '.dotm', '.xlsm', '.xltm', '.xlam', '.pptm', '.potm', '.ppam', '.ppsm')
 # Last labels that make 'name.ext' link text a filename, not a domain.
 _FILE_EXTENSIONS = {
     'pdf', 'doc', 'docx', 'docm', 'xls', 'xlsx', 'xlsm', 'ppt', 'pptx', 'txt',
@@ -373,6 +375,8 @@ def _parse_into(msg, depth, fallback_ts, events, attachments, budget):
     for name in names:
         if name.lower().endswith(_EXECUTABLE_EXTENSIONS):
             warnings.append(f'Attachment with an executable extension: {name}')
+        elif name.lower().endswith(_MACRO_EXTENSIONS):
+            warnings.append(f'Attachment is a macro-enabled Office document: {name}')
 
     event = _blank_event('email', ts)
     event['email'] = {
