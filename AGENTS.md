@@ -58,6 +58,7 @@ SO-CRATES's backend is split into domain modules. Do not add new logic directly 
 | `storage.py` | Files on disk for uploads and analyses: the upload scratch directory, ZIP extraction, hashing, an analysis directory's `.meta`/pcap lookup, and the artifact lists reanalyze removes. Takes `data_dir` as a parameter rather than reading `socrates.DATA_DIR`. |
 | `analysis_cache.py` | In-memory caches of unfiltered Sankey/aggregation results per analysis, the lock guarding them, and their eviction. |
 | `cyberchef.py` | The bundled CyberChef: where it lives (`CYBERCHEF_DIR`) and the Content-Security-Policy `/cyberchef/` responses get (`build_csp`/`get_csp`). Serving itself stays in `socrates.py`'s `do_GET`. |
+| `email_analyzer.py` | Email message (`.eml`) analysis: parsing a message (standard library `email`/`html.parser` only) into `email`/`link` events, and storing its attachments in `filestore/` (Suricata's layout, so `/api/extracted-file` works) and YARA-scanning them. Detection is `validators.is_email_file`; dispatch is `socrates.py`'s `_detect_file_type`/`_analyze_by_type`. |
 | `stream_payload.py` | Exact-byte stream payloads for `/api/raw-stream`: building the `tshark` follow command and parsing its raw output per direction. Carving the flow out of the capture first stays in the handler, alongside the other stream endpoints. |
 | `db.py` | SQLite schema changes, new query functions, index optimization, bulk loading logic. |
 | `models.py` | New Suricata event field extraction helpers (parsing JSON fields into typed values). |

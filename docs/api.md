@@ -325,7 +325,7 @@ Returns a TCP/UDP stream's exact payload bytes - nothing decoded, replaced or tr
 
 ### `GET /api/extracted-file`
 
-Returns a file Suricata extracted from the analysis's traffic, by its SHA256 (the `fileinfo.sha256` field of a `fileinfo` event).
+Returns a file Suricata extracted from the analysis's traffic - or, for an email analysis, the message itself or one of its attachments - by its SHA256 (the `fileinfo.sha256` field of a `fileinfo` event).
 
 **Query Parameters:**
 
@@ -514,7 +514,7 @@ no engine-wide fallback - a summary for the wrong rule would be misleading.
 
 Uploads a file for analysis. Accepts multipart form data.
 
-**Request:** Multipart form with a file field. Accepts any file type, detected by content rather than name: PCAPs (by magic bytes, whatever the extension - e.g. `.pcap`, `.pcapng`, `.cap`, `.trace`, or none at all) get full Suricata network analysis; log files (recognized by content, or by a `.evtx`, `.json`, `.jsonl`, `.csv`, `.xml` or `.log` extension) get Zircolite Sigma detection; everything else gets YARA scanning. The same detection applies to each member of an uploaded ZIP.
+**Request:** Multipart form with a file field. Accepts any file type, detected by content rather than name: PCAPs (by magic bytes, whatever the extension - e.g. `.pcap`, `.pcapng`, `.cap`, `.trace`, or none at all) get full Suricata network analysis; log files (recognized by content, or by a `.evtx`, `.json`, `.jsonl`, `.csv`, `.xml` or `.log` extension) get Zircolite Sigma detection; email messages (an `.eml` extension, or content that starts with an email's header block) get email analysis - headers, links and decoded attachments, each YARA-scanned; everything else gets YARA scanning. A known extension decides before content does. The same detection applies to each member of an uploaded ZIP.
 
 **Size limit:** 1000 MB by default (`DEFAULT_UPLOAD_SIZE`). An `X-Max-Upload-Size` header (in bytes) can raise it, up to 5000 MB (`MAX_UPLOAD_SIZE`). A body over the limit is rejected with `400` ("Invalid Content-Length"), and `507` means the server doesn't have the disk space for it. A ZIP with more than 100 members (`MAX_ZIP_MEMBERS`) is rejected with `400`; members whose names start with `.` or `__` (e.g. `__MACOSX/`) are ignored.
 
@@ -535,6 +535,12 @@ or for log files:
 {"status": "processing", "md5": "<hash>", "phase": "logs"}
 ```
 
+or for email messages:
+
+```json
+{"status": "processing", "md5": "<hash>", "phase": "email"}
+```
+
 If the upload was a ZIP archive containing more than one supported file, every extracted file is analyzed, each as its own independent analysis - PCAPs get network analysis, everything else gets log/binary analysis. One exception: hidden non-PCAP members (dotfiles such as `.DS_Store`) are silently ignored - they get no analysis and are not counted anywhere. The response describes the primary file (a PCAP takes priority; otherwise the first non-hidden file) and gains an `additionalMd5s` array with the MD5 of every other file's analysis; a `filesSkipped` field appears only if individual files genuinely failed (hashing, commit, or filename-validation errors), with that count:
 
 ```json
@@ -552,8 +558,9 @@ If the upload was a ZIP archive containing more than one supported file, every e
 3. If already analyzed (`eve.json` for PCAPs, `events.db` for non-PCAPs), returns `ready`
 4. For PCAPs: saves file, spawns Suricata in background thread, returns `processing` with `phase: "network"`
 5. For log files: saves the file and imports it into `events.db` in the background, returns `processing` with `phase: "logs"`
-6. For other files: saves file, runs YARA/EXIF scans in the background, returns `processing` with `phase: "files"`
-7. When analysis finishes, results are available in `events.db` (or `eve.json` for PCAPs)
+6. For email messages: saves the message, then in the background parses it into `email`/`link` events and stores and YARA-scans the message and each decoded attachment (in the analysis's `filestore/`, the same layout Suricata uses), returns `processing` with `phase: "email"`
+7. For other files: saves file, runs YARA/EXIF scans in the background, returns `processing` with `phase: "files"`
+8. When analysis finishes, results are available in `events.db` (or `eve.json` for PCAPs)
 
 **Special handling:** Password-protected zips are auto-decrypted using the common `infected` password; if the filename contains a `YYYY-MM-DD` date, the MTA-style dated password (`infected_YYYYMMDD`) is also tried.
 
@@ -605,7 +612,7 @@ or, if analysis (Suricata/YARA/Zircolite) failed:
 {"status": "error", "message": "<failure reason>"}
 ```
 
-The `phase` field reflects the current analysis stage (`network`, `logs`, `files`, or `importing` - the SQLite build that runs after the YARA scan, just before results are ready), or an empty string if no phase file exists yet. `meta` is present whenever `.meta` exists for the analysis and omitted otherwise (including on the `error` response). Same "no 404 for a well-formed-but-nonexistent MD5" caveat as `GET /api/status` applies here too.
+The `phase` field reflects the current analysis stage (`network`, `logs`, `email`, `files`, or `importing` - the SQLite build that runs after the YARA scan, just before results are ready), or an empty string if no phase file exists yet. `meta` is present whenever `.meta` exists for the analysis and omitted otherwise (including on the `error` response). Same "no 404 for a well-formed-but-nonexistent MD5" caveat as `GET /api/status` applies here too.
 
 **Ready detection:** the same check for every file type - `events.db` exists and no `.phase` file is still present (`events.db` is created the instant ingest starts, well before it finishes, so its existence alone isn't sufficient; `.phase` stays set for exactly that ingest window).
 
@@ -620,7 +627,7 @@ Re-runs the analysis pipeline for an existing MD5 directory. The original upload
 {"md5": "<hash>"}
 ```
 
-Only `md5` is read from the request body - the response's `phase` is determined automatically from what's actually in the analysis's directory (`network` if a PCAP is found, `logs` if a log file is found, otherwise `files`), not accepted as client input.
+Only `md5` is read from the request body - the response's `phase` is determined automatically from what's actually in the analysis's directory (`network` if a PCAP is found, `logs` for a log file, `email` for an email message, otherwise `files`), not accepted as client input.
 
 **Response:**
 ```json

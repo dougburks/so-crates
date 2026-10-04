@@ -1,0 +1,269 @@
+"""Tests for email_analyzer.py - parsing .eml messages into events, and
+storing/scanning their attachments. Messages are built by
+tests/eml_fixtures.py; YARA is replaced by a fake scan function."""
+
+import hashlib
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from email.message import EmailMessage
+from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+
+import config
+import email_analyzer
+from suricata_analyzer import find_extracted_file
+from tests import eml_fixtures
+
+
+def _by_type(events, event_type):
+    return [e for e in events if e['event_type'] == event_type]
+
+
+class TestParseMessage(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.events, cls.attachments = email_analyzer.parse_message(eml_fixtures.phishing_message())
+        cls.emails = _by_type(cls.events, 'email')
+        cls.top = cls.emails[0]['email']
+        cls.links = [e['link'] for e in _by_type(cls.events, 'link')]
+
+    def test_events_have_no_network_fields(self):
+        for e in self.events:
+            self.assertEqual((e['src_ip'], e['src_port'], e['dest_ip'], e['dest_port'], e['proto']), ('', 0, '', 0, ''))
+
+    def test_headers(self):
+        self.assertEqual(self.top['from'], '"Bank, Security Team" <security@bank.example>')
+        self.assertEqual(self.top['to'], ['victim@example.com', 'Other Person <other@example.com>'])
+        self.assertEqual(self.top['subject'], 'Action required: verify your account', 'encoded-word decoded')
+        self.assertEqual(self.top['message_id'], '<abc123@badhost.example>')
+        self.assertEqual(self.top['mailer'], 'TotallyLegitMailer 1.0')
+        self.assertEqual(self.top['return_path'], 'bounce@badhost.example')
+
+    def test_timestamp_comes_from_date_header(self):
+        self.assertEqual(self.emails[0]['timestamp'], '2026-02-03T10:00:00+00:00')
+        # Every event of the upload carries it - the forward's too - so
+        # they sort together.
+        self.assertTrue(all(e['timestamp'] == '2026-02-03T10:00:00+00:00' for e in self.events))
+
+    def test_auth_results(self):
+        self.assertEqual((self.top['spf'], self.top['dkim'], self.top['dmarc']), ('fail', 'none', 'fail'))
+
+    def test_received_chain_oldest_first_and_originating_ip(self):
+        hops = self.top['received']
+        self.assertEqual([h.get('ip') for h in hops], ['1.2.3.4', '10.0.0.5'])
+        self.assertEqual(hops[0]['from'], 'sender.badhost.example')
+        self.assertEqual(hops[0]['by'], 'mail.example.com')
+        self.assertEqual(self.top['originating_ip'], '1.2.3.4', 'first public hop, not the private one')
+
+    def test_warnings(self):
+        warnings = ' | '.join(self.top['warnings'])
+        self.assertIn('Reply-To domain (collector.example) differs from From (bank.example)', warnings)
+        self.assertIn('Return-Path domain (badhost.example)', warnings)
+        self.assertIn('SPF fail', warnings)
+        self.assertIn('DMARC fail', warnings)
+        self.assertNotIn('DKIM', warnings, "'none' is not a failure")
+        self.assertIn('1 link(s)', warnings)
+        self.assertIn('executable extension: invoice.com', warnings)
+
+    def test_links(self):
+        urls = [(l['url'], l['text']) for l in self.links]
+        self.assertIn(('https://bank.example.verify-login.example/start', 'https://www.bank.example/login'), urls)
+        # The anchor's visible URL text is its label, not a second link;
+        # the plain-text copy of the same href isn't repeated either.
+        self.assertNotIn('https://www.bank.example/login', [u for u, _ in urls])
+        self.assertEqual([u for u, _ in urls].count('https://bank.example.verify-login.example/start'), 1)
+        self.assertNotIn('https://not-a-link.example/', [u for u, _ in urls], 'script content is not a link')
+
+    def test_link_mismatch(self):
+        by_url = {l['url']: l for l in self.links}
+        bad = by_url['https://bank.example.verify-login.example/start']
+        self.assertTrue(bad['mismatch'])
+        self.assertEqual(bad['text_domain'], 'www.bank.example')
+        self.assertEqual(bad['domain'], 'bank.example.verify-login.example')
+        self.assertFalse(by_url['https://help.bank.example/faq']['mismatch'], 'plain words claim no domain')
+        self.assertFalse(by_url['https://cdn.example/invoice.pdf']['mismatch'], 'a filename is not a domain')
+
+    def test_forwarded_message_is_its_own_email(self):
+        self.assertEqual(len(self.emails), 2)
+        fwd = self.emails[1]['email']
+        self.assertEqual(fwd['subject'], 'FW: earlier notice')
+        self.assertEqual(fwd['depth'], 1)
+        # The upload's time, so it sorts after the message it was attached
+        # to; its own date is kept.
+        self.assertEqual(self.emails[1]['timestamp'], '2026-02-03T10:00:00+00:00')
+        self.assertEqual(fwd['date'], 'Mon, 02 Feb 2026 09:00:00 +0000')
+        self.assertEqual(fwd['attachments'], ['notes.txt'])
+        self.assertEqual(self.top['attachments'], ['invoice.com'], "the forward's attachment is not the outer message's")
+        self.assertEqual(fwd['link_count'], 1)
+
+    def test_attachments_are_decoded(self):
+        self.assertEqual([(n, d) for n, _c, d, _t in self.attachments],
+                         [('invoice.com', eml_fixtures.EICAR), ('notes.txt', b'just some notes\n')])
+
+    def test_body_prefers_plain_text(self):
+        self.assertTrue(self.top['body'].startswith('Dear customer,'))
+        self.assertNotIn('<p>', self.top['body'])
+        self.assertFalse(self.top['body_truncated'])
+
+
+class TestParseEdgeCases(unittest.TestCase):
+    def test_plain_message_has_no_warnings(self):
+        events, attachments = email_analyzer.parse_message(eml_fixtures.plain_message())
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['email']['warnings'], [])
+        self.assertEqual(events[0]['timestamp'], '2026-02-04T13:30:00+00:00', 'converted to UTC')
+        self.assertEqual(attachments, [])
+
+    def test_html_only_body_becomes_text(self):
+        msg = EmailMessage()
+        msg['From'] = 'a@example.com'
+        msg['Subject'] = 'html'
+        msg.set_content('<p>Hello <b>there</b></p><style>p{}</style>', subtype='html')
+        events, _ = email_analyzer.parse_message(msg.as_bytes())
+        self.assertEqual(events[0]['email']['body'], 'Hello there')
+
+    def test_missing_or_bad_date_falls_back(self):
+        events, _ = email_analyzer.parse_message(b'From: a@example.com\nSubject: x\nDate: not a date\n\nbody\n', now='NOW')
+        self.assertEqual(events[0]['timestamp'], 'NOW')
+
+    def test_unknown_charset_does_not_raise(self):
+        raw = (b'From: a@example.com\nSubject: x\nContent-Type: text/plain; charset="x-no-such-charset"\n\n'
+               b'caf\xe9 https://example.com/a\n')
+        events, _ = email_analyzer.parse_message(raw)
+        self.assertIn('caf', events[0]['email']['body'])
+        self.assertEqual([e['link']['url'] for e in events if e['event_type'] == 'link'], ['https://example.com/a'])
+
+    def test_garbage_does_not_raise(self):
+        events, _ = email_analyzer.parse_message(b'\x00\xff\x00 not an email at all')
+        self.assertEqual(_by_type(events, 'email')[0]['email']['from'], '')
+
+    def test_url_trailing_punctuation_trimmed(self):
+        events, _ = email_analyzer.parse_message(b'From: a@example.com\n\nSee (https://example.com/x).\n')
+        self.assertEqual(events[1]['link']['url'], 'https://example.com/x')
+
+    def test_link_count_is_capped(self):
+        body = ' '.join(f'https://example.com/{i}' for i in range(20)).encode()
+        with mock.patch.object(config, 'MAX_EMAIL_LINKS', 5):
+            events, _ = email_analyzer.parse_message(b'From: a@example.com\n\n' + body)
+        self.assertEqual(len(_by_type(events, 'link')), 5)
+
+    def test_attachment_count_is_capped(self):
+        msg = EmailMessage()
+        msg['From'] = 'a@example.com'
+        msg.set_content('x')
+        for i in range(5):
+            msg.add_attachment(b'data%d' % i, maintype='application', subtype='octet-stream', filename=f'f{i}.bin')
+        with mock.patch.object(config, 'MAX_EMAIL_ATTACHMENTS', 2):
+            _, attachments = email_analyzer.parse_message(msg.as_bytes())
+        self.assertEqual(len(attachments), 2)
+
+    def test_forward_depth_is_capped(self):
+        inner = EmailMessage()
+        inner['Subject'] = 'level 0'
+        inner.set_content('x')
+        for level in range(1, 4):
+            outer = EmailMessage()
+            outer['Subject'] = f'level {level}'
+            outer.set_content('x')
+            outer.add_attachment(inner)
+            inner = outer
+        with mock.patch.object(config, 'MAX_EMAIL_DEPTH', 1):
+            events, _ = email_analyzer.parse_message(inner.as_bytes())
+        self.assertEqual([e['email']['subject'] for e in _by_type(events, 'email')], ['level 3', 'level 2'])
+
+    def test_nested_forwards_are_parsed_once_each(self):
+        inner = EmailMessage()
+        inner['Subject'] = 'inner'
+        inner.set_content('x')
+        middle = EmailMessage()
+        middle['Subject'] = 'middle'
+        middle.set_content('x')
+        middle.add_attachment(inner)
+        outer = EmailMessage()
+        outer['Subject'] = 'outer'
+        outer.set_content('x')
+        outer.add_attachment(middle)
+        events, _ = email_analyzer.parse_message(outer.as_bytes())
+        self.assertEqual([e['email']['subject'] for e in _by_type(events, 'email')], ['outer', 'middle', 'inner'])
+
+
+class TestTextDomain(unittest.TestCase):
+    def test_claims(self):
+        cases = {
+            'https://www.bank.example/login': 'www.bank.example',
+            'www.bank.example': 'www.bank.example',
+            'paypal.com': 'paypal.com',
+            'Click here': '',
+            'invoice.pdf': '',
+            'report.docx': '',
+            'v1.2': '',
+            '': '',
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(email_analyzer._text_domain(text), expected)
+
+    def test_same_site(self):
+        self.assertTrue(email_analyzer._same_site('www.example.com', 'example.com'))
+        self.assertTrue(email_analyzer._same_site('login.example.com', 'example.com'))
+        self.assertFalse(email_analyzer._same_site('example.com.evil.example', 'example.com'))
+        self.assertFalse(email_analyzer._same_site('', 'example.com'))
+
+
+class TestAnalyzeMessage(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.eml = os.path.join(self.tmpdir, 'phish.eml')
+        with open(self.eml, 'wb') as f:
+            f.write(eml_fixtures.phishing_message())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @staticmethod
+    def _fake_scan(path, rules_file):
+        with open(path, 'rb') as f:
+            data = f.read()
+        matches = [{'rule_name': 'EICAR_Test', 'tags': ['test'], 'meta': {'author': 'x'}}] \
+            if data == eml_fixtures.EICAR else []
+        return (matches, hashlib.sha256(data).hexdigest(), hashlib.md5(data).hexdigest(),
+                hashlib.sha1(data).hexdigest(), {'entropy': 1.0})
+
+    def test_attachments_and_message_stored_and_scanned(self):
+        events = email_analyzer.analyze_message(self.tmpdir, self.eml, 'rules.yar', self._fake_scan)
+        infos = {e['fileinfo']['filename']: e['fileinfo'] for e in _by_type(events, 'fileinfo')}
+        self.assertEqual(set(infos), {'phish.eml', 'invoice.com', 'notes.txt'})
+        self.assertEqual(infos['phish.eml']['source'], 'message')
+        self.assertEqual(infos['invoice.com']['source'], 'attachment')
+        eicar_sha = hashlib.sha256(eml_fixtures.EICAR).hexdigest()
+        self.assertEqual(infos['invoice.com']['sha256'], eicar_sha)
+        self.assertTrue(all(i['stored'] for i in infos.values()))
+        # Stored where Send to CyberChef's /api/extracted-file looks.
+        path = find_extracted_file(self.tmpdir, eicar_sha)
+        with open(path, 'rb') as f:
+            self.assertEqual(f.read(), eml_fixtures.EICAR)
+        self.assertEqual(infos['invoice.com']['yara'], [{'rule_name': 'EICAR_Test', 'tags': ['test']}])
+        alerts = [e['filealerts'] for e in _by_type(events, 'filealerts')]
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual((alerts[0]['rule_name'], alerts[0]['filename'], alerts[0]['sha256']),
+                         ('EICAR_Test', 'invoice.com', eicar_sha))
+
+    def test_without_yara_files_are_still_stored_and_hashed(self):
+        events = email_analyzer.analyze_message(self.tmpdir, self.eml, None, None)
+        infos = {e['fileinfo']['filename']: e['fileinfo'] for e in _by_type(events, 'fileinfo')}
+        self.assertEqual(infos['invoice.com']['sha256'], hashlib.sha256(eml_fixtures.EICAR).hexdigest())
+        self.assertEqual(infos['invoice.com']['yara'], [])
+        self.assertEqual(_by_type(events, 'filealerts'), [])
+
+    def test_remove_filestore(self):
+        email_analyzer.analyze_message(self.tmpdir, self.eml, None, None)
+        email_analyzer.remove_filestore(self.tmpdir)
+        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'filestore')))
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -256,6 +256,34 @@ class TestIsLogFile(unittest.TestCase):
         self._assert_not_log(b'\x00' * 100, 'all-zero binary')
 
 
+class TestIsEmailFile(unittest.TestCase):
+    """is_email_file: an email message's header block, by content."""
+
+    def test_messages(self):
+        for data in (
+            b'From: a@example.com\nTo: b@example.com\nSubject: hi\n\nbody\n',
+            b'Received: from mx (mx [192.0.2.1])\n\tby mail; Tue, 3 Feb 2026\nX-Spam: no\n\n',
+            b'Return-Path: <a@example.com>\r\nDelivered-To: b@example.com\r\n\r\n',
+        ):
+            with self.subTest(data=data[:30]):
+                self.assertTrue(validators.is_email_file(data))
+
+    def test_not_messages(self):
+        for data in (
+            b'{"EventID": 1, "Computer": "PC"}\n{"EventID": 3, "User": "x"}\n',
+            b'Host: server1\nPort: 22\nUser: admin\n',
+            b'From: a@example.com\n',
+            b'timestamp,message\n2024-01-01,hello\n',
+            b' From: indented first line\nTo: x\n',
+        ):
+            with self.subTest(data=data[:30]):
+                self.assertFalse(validators.is_email_file(data))
+
+    def test_extension(self):
+        self.assertTrue(validators.is_email_file_by_extension('Invoice.EML'))
+        self.assertFalse(validators.is_email_file_by_extension('invoice.msg'))
+
+
 class TestIsLogFileByExtension(unittest.TestCase):
     """Test is_log_file_by_extension for all known log extensions."""
 

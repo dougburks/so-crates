@@ -89,5 +89,13 @@ MAX_ENTROPY_READ_SIZE = 10 * 1024 * 1024   # 10 MB cap for entropy calculation
 MAX_RAW_STREAM_SIZE = 10 * 1024 * 1024     # 10 MB cap on /api/raw-stream's exact payload bytes - it feeds the browser (CyberChef), which gets sluggish well before MAX_STREAM_DOWNLOAD_SIZE; larger payloads get a 413, never a truncated one
 MAX_EXTRACTED_FILE_SIZE = 25 * 1024 * 1024  # 25 MB cap on /api/extracted-file, for the same reason
 
+# Email (.eml) analysis - see email_analyzer.py. Attachments are decoded
+# from the message itself, so their total can't exceed the upload; these
+# bound the event count and nesting a crafted message can produce.
+MAX_EMAIL_ATTACHMENTS = 100                # attachments decoded and analyzed per message (nested forwards included)
+MAX_EMAIL_LINKS = 1000                     # link events per message
+MAX_EMAIL_DEPTH = 5                        # levels of forwarded messages (message/rfc822 parts) parsed
+MAX_EMAIL_BODY_CHARS = 65536               # characters of body text kept in the email event
+
 # Thresholds
 STALE_THRESHOLD_SECONDS = 600              # 10 minutes

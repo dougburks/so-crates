@@ -345,6 +345,7 @@ def is_file_stale(path, max_age_hours):
 
 
 LOG_EXTENSIONS = ('.evtx', '.json', '.jsonl', '.csv', '.xml', '.log')
+EMAIL_EXTENSIONS = ('.eml',)
 OFFICE_EXTENSIONS = ('.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
                      '.docm', '.xlsm', '.pptm', '.odt', '.ods', '.odp')
 
@@ -365,15 +366,24 @@ def _is_mostly_text(data):
     return text_count / len(data) > 0.7
 
 
-# An RFC 5322 header field: a name of printable ASCII other than ':', then
-# ':' and whitespace ("Date: Tue, 3 Feb 2026 ...").
-_MAIL_HEADER_RE = re.compile(rb'^[!-9;-~]+:[ \t]')
+# A header field: a token-like name (RFC 5322 allows more, but real header
+# names are letters, digits and hyphens - and a JSON line's '{"Key":' must
+# not pass), then ':' and whitespace ("Date: Tue, 3 Feb 2026 ...").
+_MAIL_HEADER_RE = re.compile(rb'^([A-Za-z][A-Za-z0-9-]*):[ \t]')
+# Header names only a mail message has, one of which must appear - so a
+# file of 'Key: value' lines (a config, a plain-text log) isn't an email.
+_MAIL_HEADER_NAMES = {
+    b'from', b'to', b'cc', b'subject', b'date', b'received', b'return-path',
+    b'message-id', b'mime-version', b'delivered-to', b'reply-to',
+    b'x-mailer', b'authentication-results', b'dkim-signature', b'x-received',
+}
 
 
 def _looks_like_mail_headers(data):
     """True if data starts with an email message's header block (.eml):
-    at least two 'Name: value' fields, allowing folded continuation lines
-    (which start with whitespace). Checked ahead of the CSV test in
+    at least two 'Name: value' fields, one of them a mail header (From,
+    Subject, Received, ...), allowing folded continuation lines (which
+    start with whitespace). Checked ahead of the CSV test in
     is_log_file, which a header line with a comma in it - 'Date: Tue, 3
     Feb ...' is a common first one - would otherwise pass, sending the
     message to Sigma as a CSV log and leaving an empty analysis. A CSV
@@ -382,6 +392,7 @@ def _looks_like_mail_headers(data):
     # The last line may be cut off mid-way by the prefix length.
     lines = data[:4096].split(b'\n')[:-1]
     fields = 0
+    mail_header = False
     for line in lines:
         line = line.rstrip(b'\r')
         if not line:
@@ -390,12 +401,25 @@ def _looks_like_mail_headers(data):
             if not fields:
                 return False
             continue
-        if not _MAIL_HEADER_RE.match(line):
+        m = _MAIL_HEADER_RE.match(line)
+        if not m:
             return False
         fields += 1
-        if fields >= 2:
+        mail_header = mail_header or m.group(1).lower() in _MAIL_HEADER_NAMES
+        if fields >= 2 and mail_header:
             return True
     return False
+
+
+def is_email_file(data):
+    """Detect an email message (.eml) by its content - see
+    _looks_like_mail_headers."""
+    return _looks_like_mail_headers(data)
+
+
+def is_email_file_by_extension(filename):
+    """Check if filename has an email message extension (.eml)."""
+    return filename.lower().endswith(EMAIL_EXTENSIONS)
 
 
 def is_log_file(data):

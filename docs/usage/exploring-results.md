@@ -20,6 +20,16 @@ After analysis completes, the UI displays different views depending on the file 
 - **Aggregation Tables** - filterable counts for discovered fields (Channel, EventID, Image, Source IP, etc.), with the same Prev/Next paging and adjustable page size as PCAP mode
 - **Search & Filtering** - same full-text search and pivot-menu filtering as PCAP mode
 
+**For email messages (`.eml`):**
+
+- **Emails** - the message, plus any forwarded message attached to it: From, To, Subject, the SPF/DKIM/DMARC results, and how many attachments and warnings it has. Expand a row for the full headers, the Received chain (oldest hop first, with the first public IP as the **Originating IP**), the body text and its **Warnings** - a Reply-To or Return-Path on a different domain than From, failing SPF/DKIM/DMARC, links whose text names a different domain than they go to, and attachments with an executable extension
+- **Links** - every web link in the message, with its domain and visible text. **Mismatch** marks a link whose text names one domain (`https://www.bank.example/login`) while it actually goes to another, a classic phishing trick
+- **File Info** - the message itself and each attachment, decoded, with hashes, file type and metadata. Each has a **Send to CyberChef** button
+- **File Alerts** - YARA matches on the message or its attachments - which an attachment's base64 encoding hides from a scan of the raw message
+- **Aggregation Tables, Search & Filtering** - the same as PCAP mode. There's no Sankey diagram or All Events view, since an email has no network flows
+
+The message's HTML is read for its links and text but never displayed as a web page.
+
 **For binary files:**
 
 - **File Info** - metadata extracted from the file

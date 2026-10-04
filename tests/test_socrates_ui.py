@@ -21213,5 +21213,147 @@ class TestAcknowledgeAlerts(unittest.TestCase):
         self.assertIn('3', result['label'])
 
 
+
+class TestEmailAnalysisUI(unittest.TestCase):
+    """Email (.eml) analysis mode: networkless per-type tabs for email,
+    link, fileinfo and filealerts events (see isEmailAnalysisMode)."""
+
+    EVENTS = """
+        var emailEv = { id: 1, event_type: 'email', timestamp: '2026-02-03T10:00:00+00:00',
+            src_ip: '', src_port: 0, dest_ip: '', dest_port: 0, proto: '',
+            email: { from: 'Bank <security@bank.example>', to: ['a@example.com', 'b@example.com'], cc: [],
+                     reply_to: ['x@collector.example'], return_path: '', subject: '<script>alert(1)</script>',
+                     date: 'Tue, 03 Feb 2026 10:00:00 +0000', message_id: '', mailer: '',
+                     spf: 'fail', dkim: '', dmarc: 'pass', originating_ip: '1.2.3.4',
+                     received: [{ from: 'sender.example', ip: '1.2.3.4', by: 'mx.example', date: 'Tue' }],
+                     attachments: ['invoice.com'], link_count: 1,
+                     warnings: ['SPF fail', 'Attachment with an executable extension: invoice.com'],
+                     body: 'line one\\nline two', body_truncated: false, depth: 0 } };
+        var linkEv = { id: 2, event_type: 'link', timestamp: '2026-02-03T10:00:00+00:00',
+            link: { url: 'https://evil.example/x', domain: 'evil.example', text: 'https://bank.example',
+                    text_domain: 'bank.example', mismatch: true, source: 'html' } };
+        var fileEv = { id: 3, event_type: 'fileinfo', timestamp: '2026-02-03T10:00:00+00:00',
+            fileinfo: { filename: 'invoice.com', size: 68, sha256: 'a'.repeat(64), magic: 'EICAR virus test files',
+                        stored: true, source: 'attachment', yara: [{ rule_name: 'EICAR_Test', tags: ['test'] }] } };
+    """
+
+    def test_detect_file_type_and_tab_order(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.__jsdom_result = {
+                eml: detectFileType('Phish.EML'),
+                order: sortEventTypes(['fileinfo', 'filealerts', 'link', 'email']),
+            };
+        ''')
+        self.assertEqual(result['eml'], 'email')
+        self.assertEqual(result['order'], ['email', 'link', 'filealerts', 'fileinfo'])
+
+    def test_columns_are_networkless_only_in_email_mode(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var pcapFileinfo = getColumnsForType('fileinfo');
+            isEmailAnalysisMode = true;
+            window.__jsdom_result = {
+                pcapFileinfo: pcapFileinfo,
+                email: getColumnsForType('email'),
+                link: getColumnsForType('link'),
+                fileinfo: getColumnsForType('fileinfo'),
+                filealerts: getColumnsForType('filealerts'),
+                serverAgg: canUseServerAggregation('email'),
+                serverSort: canServerSortEventType('link'),
+            };
+        ''')
+        self.assertIn('Source IP', result['pcapFileinfo'])
+        for key in ('email', 'link', 'fileinfo', 'filealerts'):
+            self.assertEqual(result[key][0], 'Time')
+            self.assertNotIn('Source IP', result[key])
+        self.assertIn('Mismatch', result['link'])
+        self.assertFalse(result['serverAgg'])
+        self.assertFalse(result['serverSort'])
+
+    def test_extract_values(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            window.__jsdom_result = {
+                to: extractValue(emailEv, 'To', -1),
+                subject: extractValue(emailEv, 'Subject', -1),
+                warnings: extractValue(emailEv, 'Warnings', -1),
+                url: extractValue(linkEv, 'URL', -1),
+                mismatch: extractValue(linkEv, 'Mismatch', -1),
+                source: extractValue(fileEv, 'Source', -1),
+                // Other types' same-named columns are unchanged.
+                tlsSubject: extractValue({ event_type: 'tls', tls: { subject: 'CN=x' } }, 'Subject', -1),
+                httpUrl: extractValue({ event_type: 'http', http: { url: '/a' } }, 'URL', -1),
+            };
+        ''')
+        self.assertEqual(result['to'], 'a@example.com, b@example.com')
+        self.assertEqual(result['subject'], '<script>alert(1)</script>')
+        self.assertEqual(result['warnings'], '2')
+        self.assertEqual(result['url'], 'https://evil.example/x')
+        self.assertEqual(result['mismatch'], 'Yes')
+        self.assertEqual(result['source'], 'Attachment')
+        self.assertEqual(result['tlsSubject'], 'CN=x')
+        self.assertEqual(result['httpUrl'], '/a')
+
+    def test_email_row_has_no_network_cells_and_escapes(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            isEmailAnalysisMode = true;
+            var table = document.createElement('table');
+            table.innerHTML = '<tbody>' + buildRowForEvent(emailEv) + '</tbody>';
+            var row = table.querySelector('tr[data-id]');
+            var cells = Array.from(row.children).map(function(td) { return td.textContent; });
+            var detail = table.querySelector('tr.detail-row td');
+            window.__jsdom_result = {
+                cells: cells, colspan: detail.getAttribute('colspan'),
+                scriptTags: table.querySelectorAll('script').length,
+            };
+        ''')
+        # Time + 8 email columns + the note-icon cell.
+        self.assertEqual(len(result['cells']), 10)
+        self.assertEqual(result['cells'][1], 'Bank <security@bank.example>')
+        self.assertEqual(result['cells'][3], '<script>alert(1)</script>')
+        self.assertEqual(result['colspan'], '10')
+        self.assertEqual(result['scriptTags'], 0)
+
+    def test_email_detail_panel(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            var div = document.createElement('div');
+            div.innerHTML = renderEmailDetails(emailEv);
+            var labels = Array.from(div.querySelectorAll('.detail-label')).map(function(l) { return l.textContent; });
+            window.__jsdom_result = { text: div.textContent, labels: labels, scripts: div.querySelectorAll('script').length };
+        ''')
+        self.assertIn('SPF fail', result['text'])
+        self.assertIn('Attachment with an executable extension: invoice.com', result['text'])
+        self.assertIn('Originating IP', result['labels'])
+        self.assertIn('Hop 1', result['labels'])
+        self.assertNotIn('Message-ID', result['labels'], 'missing headers are left out')
+        self.assertNotIn('Cc', result['labels'])
+        self.assertIn('not reported', result['text'], 'DKIM had no result')
+        self.assertEqual(result['scripts'], 0)
+
+    def test_link_and_fileinfo_details(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            currentMd5 = 'abc';
+            var link = document.createElement('div');
+            link.innerHTML = renderLinkDetails(linkEv);
+            var file = document.createElement('div');
+            file.innerHTML = renderFileInfoDetails(fileEv);
+            var pcapFile = document.createElement('div');
+            pcapFile.innerHTML = renderFileInfoDetails({ event_type: 'fileinfo', fileinfo: { filename: 'x.bin', sha256: '' } });
+            window.__jsdom_result = {
+                link: link.textContent, file: file.textContent,
+                cyberchef: file.querySelectorAll('[data-action="send-file-to-cyberchef"]').length,
+                pcapLabels: Array.from(pcapFile.querySelectorAll('.detail-label')).map(function(l) { return l.textContent; }),
+            };
+        ''')
+        self.assertIn('The link text names bank.example, but the link goes to evil.example', result['link'])
+        self.assertIn('EICAR_Test', result['file'], "an email's files carry their own YARA results")
+        self.assertIn('Attachment', result['file'])
+        self.assertEqual(result['cyberchef'], 1)
+        self.assertNotIn('Source', result['pcapLabels'], 'no blank Source row for a pcap file')
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
