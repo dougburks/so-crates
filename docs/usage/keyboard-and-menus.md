@@ -21,7 +21,7 @@ Typing any letter or digit outside a text field opens a command palette, pre-fil
 - Any data-type stat-card tab currently on screen (e.g. `dns`, `http`, `all events`) - switches to that tab, the same as clicking it
 - `help`, `about`, `themes`, `rules`, or `settings` - opens the corresponding modal from the [Gear Menu](#gear-menu) below
 - `advanced features` - opens the Security Onion feature-comparison modal
-- `documentation`, `security onion`, `github repo`, `pcap samples`, `log samples`, or `binary samples` - opens the corresponding external site in a new tab
+- `documentation`, `security onion`, `github repo`, `pcap samples`, `log samples`, `binary samples`, or `email samples` - opens the corresponding external site in a new tab
 - `upload`, `import`, or `previous analyses` (analysis page only) - all three return to the welcome screen, where all three actions live
 - `copy md5 hash to clipboard` (analysis page only) - copies the current analysis's MD5, same as clicking it in the header
 - `rename analysis` (analysis page only) - starts renaming the current analysis, same as clicking its filename in the header

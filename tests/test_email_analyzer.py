@@ -265,5 +265,66 @@ class TestAnalyzeMessage(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'filestore')))
 
 
+
+class TestBuiltInEmailSample(unittest.TestCase):
+    """samples.build_email_sample - the Welcome screen's offline Sample
+    email file."""
+
+    def test_deterministic(self):
+        import samples
+        self.assertEqual(samples.build_email_sample(), samples.build_email_sample(),
+                         'same bytes every time, so loading it twice reopens one analysis')
+
+    def test_exercises_every_warning(self):
+        import samples
+        events, attachments = email_analyzer.parse_message(samples.build_email_sample())
+        top = _by_type(events, 'email')[0]['email']
+        warnings = ' | '.join(top['warnings'])
+        for expected in ('Reply-To domain', 'Return-Path domain', 'SPF fail', 'DMARC fail',
+                         'text names a different domain', 'executable extension'):
+            self.assertIn(expected, warnings)
+        self.assertEqual(top['originating_ip'], '203.0.113.66')
+        self.assertTrue(any(e['link']['mismatch'] for e in _by_type(events, 'link')))
+        self.assertEqual(len(_by_type(events, 'email')), 2, 'includes a forwarded message')
+        self.assertEqual(attachments[0][2], email_analyzer_eicar())
+
+    def test_source_never_holds_the_whole_eicar_string(self):
+        """No file in the image may contain the full signature - see the
+        samples.py docstring."""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'samples.py')
+        with open(path, 'rb') as f:
+            self.assertNotIn(email_analyzer_eicar(), f.read())
+
+    def test_only_reserved_names(self):
+        """Every hostname - addresses, Received hops, links - is under the
+        reserved .example TLD, and every IP is in a documentation or
+        private range, so the sample points at no real organization.
+        Checked on the parsed message: the raw one is quoted-printable,
+        which wraps long lines mid-URL."""
+        import ipaddress
+        import samples
+        from email.utils import getaddresses
+        events, _ = email_analyzer.parse_message(samples.build_email_sample())
+        hosts, ips = set(), set()
+        for e in _by_type(events, 'email'):
+            m = e['email']
+            for _name, addr in getaddresses([m['from'], m['return_path']] + m['to'] + m['reply_to']):
+                if '@' in addr:
+                    hosts.add(addr.rsplit('@', 1)[1])
+            for hop in m['received']:
+                hosts.update(h.rstrip(';') for h in (hop.get('from'), hop.get('by')) if h)
+                ips.add(hop['ip'])
+        hosts.update(e['link']['domain'] for e in _by_type(events, 'link'))
+        self.assertGreater(len(hosts), 5)
+        for host in hosts:
+            self.assertTrue(host.endswith('.example'), host)
+        documentation = [ipaddress.ip_network(n) for n in ('192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24')]
+        for ip in ips:
+            addr = ipaddress.ip_address(ip)
+            self.assertTrue(addr.is_private or any(addr in n for n in documentation), ip)
+
+def email_analyzer_eicar():
+    return eml_fixtures.EICAR
+
 if __name__ == '__main__':
     unittest.main()

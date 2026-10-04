@@ -3,7 +3,7 @@
 Once you've connected to SO-CRATES in your browser, here are some of the things you can do. Start with the tour below, then dig into the details:
 
 - [Analyzing Files](analyzing-files.md) - uploading, loading from a URL, ZIPs, and reanalyzing
-- [Exploring Results](exploring-results.md) - what each tab shows for PCAP, log, and binary analyses, including DNS Heuristics
+- [Exploring Results](exploring-results.md) - what each tab shows for PCAP, log, email, and binary analyses, including DNS Heuristics
 - [Filtering & Drill-Down](filtering-and-drilldown.md) - the pivot menu, AI summaries, playbooks, notes, and stream analysis
 - [Keyboard & Menus](keyboard-and-menus.md) - keyboard navigation, the command palette, and the gear menu
 

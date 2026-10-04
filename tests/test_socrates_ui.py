@@ -21237,6 +21237,28 @@ class TestEmailAnalysisUI(unittest.TestCase):
                         stored: true, source: 'attachment', yara: [{ rule_name: 'EICAR_Test', tags: ['test'] }] } };
     """
 
+    def test_sample_email_card_loads_builtin_sample(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var calls = [];
+            window.fetch = function(url, opts) {
+                calls.push({ url: String(url), method: opts && opts.method, body: opts && opts.body });
+                return Promise.resolve({ ok: true, status: 200, json: function() { return Promise.resolve({ status: 'ready', md5: 'abc' }); } });
+            };
+            var opened = null;
+            loadAnalysis = function(md5) { opened = md5; return Promise.resolve(); };
+            await loadBuiltInSample('email');
+            var post = calls.filter(function(c) { return c.url === '/api/load-sample'; })[0];
+            window.__jsdom_result = { post: post, opened: opened };
+        ''')
+        self.assertEqual(result['post']['method'], 'POST')
+        self.assertEqual(json.loads(result['post']['body']), {'name': 'email'})
+        self.assertEqual(result['opened'], 'abc')
+
+    def test_sample_email_card_markup(self):
+        self.assertIn('data-action="load-builtin-sample" data-sample="email"', JS_CONTENT)
+        self.assertIn("'load-builtin-sample': (el) => loadBuiltInSample(el.dataset.sample)", JS_CONTENT)
+
     def test_detect_file_type_and_tab_order(self):
         from tests.jsdom_helper import js_statements
         result = js_statements('''

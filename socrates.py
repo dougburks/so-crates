@@ -65,6 +65,7 @@ from ohmydebn_colors import (
 )
 from email_analyzer import analyze_message, remove_filestore
 from playbook_lookup import get_playbook
+from samples import SAMPLES
 from ai_summary_lookup import get_ai_summary
 import config
 import cyberchef
@@ -613,6 +614,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     POST_ROUTES = {
         '/api/upload': 'handle_post_upload',
         '/api/load-url': 'handle_post_load_url',
+        '/api/load-sample': 'handle_post_load_sample',
         '/api/check-status': 'handle_post_check_status',
         '/api/reanalyze': 'handle_post_reanalyze',
         '/api/delete-analysis': 'handle_post_delete_analysis',
@@ -2443,6 +2445,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json(result)
         except FileTooLargeError:
             self._send_error(413, 'File too large')
+        except ValueError as exc:
+            self._send_error(400, str(exc))
+        except Exception:
+            self._send_error(500, 'Internal server error')
+
+    def handle_post_load_sample(self):
+        """Analyze one of the samples built into SO-CRATES (samples.SAMPLES)
+        by name - generated here, so it needs no internet access - through
+        the same path as an upload."""
+        data = self._read_json_body(config.MAX_REQUEST_BODY_SIZE)
+        if data is None:
+            return
+        sample = SAMPLES.get(data.get('name'))
+        if not sample:
+            self._send_error(400, 'Unknown sample')
+            return
+        filename, build = sample
+        try:
+            fd, src_path = tempfile.mkstemp(dir=upload_tmp_dir(DATA_DIR), suffix='.sample')
+            with os.fdopen(fd, 'wb') as f:
+                f.write(build())
+            self._send_json(self._process_uploaded_file(src_path, filename))
         except ValueError as exc:
             self._send_error(400, str(exc))
         except Exception:

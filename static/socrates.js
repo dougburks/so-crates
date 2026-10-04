@@ -2199,6 +2199,10 @@
         const DEFAULT_SAMPLE_URL = 'https://www.malware-traffic-analysis.net/2026/02/03/2026-02-03-GuLoader-for-AgentTesla-style-infection-with-FTP-data-exfil.pcap.zip';
         const SAMPLE_LOG_URL = 'https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES/raw/refs/heads/master/Defense%20Evasion/apt10_jjs_sideloading_prochollowing_persist_as_service_sysmon_1_7_8_13.evtx';
         const SAMPLE_BINARY_URL = 'https://secure.eicar.org/eicar.com';
+        // A collection of real phishing emails - linked to (More email
+        // samples, the 'email samples' command), not bundled: the Sample
+        // email file is one built into SO-CRATES instead (see samples.py).
+        const EMAIL_SAMPLES_URL = 'https://github.com/rf-peixoto/phishing_pot';
 
         // Named constants above (not inline string literals in the sample
         // cards below) so the tooltip's domain is always derived from the
@@ -4492,6 +4496,9 @@
                                 <div class="sample-card" title="${_sampleCardTitle(SAMPLE_BINARY_URL)}" tabindex="0" role="button" aria-label="Analyze the sample binary file" data-action="load-sample-url" data-url="${escapeHtml(SAMPLE_BINARY_URL)}" data-key-activate="enter-space">
                                     <span class="sample-label">Sample binary file</span>
                                 </div>
+                                <div class="sample-card" title="Built into SO-CRATES - works without internet access" tabindex="0" role="button" aria-label="Analyze the sample email file" data-action="load-builtin-sample" data-sample="email" data-key-activate="enter-space">
+                                    <span class="sample-label">Sample email file</span>
+                                </div>
                             </div>
                             <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 15px;">
                                 <div style="flex: 1; text-align: center;">
@@ -4502,6 +4509,9 @@
                                 </div>
                                 <div style="flex: 1; text-align: center;">
                                     <a href="https://www.eicar.org/" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none; font-size: 0.85rem;">More binary samples ↗</a>
+                                </div>
+                                <div style="flex: 1; text-align: center;">
+                                    <a href="${EMAIL_SAMPLES_URL}" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none; font-size: 0.85rem;">More email samples ↗</a>
                                 </div>
                             </div>
                             <div style="text-align: center; color: var(--text-muted); font-size: 0.9rem; font-weight: 600; text-transform: uppercase; margin-bottom: 15px;">— OR —</div>
@@ -5525,6 +5535,7 @@
             { code: 'pcap samples', label: 'PCAP samples', action: () => { closeAutocompleteModal(); window.open('https://malware-traffic-analysis.net', '_blank', 'noopener,noreferrer'); } },
             { code: 'log samples', label: 'Log samples', action: () => { closeAutocompleteModal(); window.open('https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES', '_blank', 'noopener,noreferrer'); } },
             { code: 'binary samples', label: 'Binary samples', action: () => { closeAutocompleteModal(); window.open('https://www.eicar.org/', '_blank', 'noopener,noreferrer'); } },
+            { code: 'email samples', label: 'Email samples', action: () => { closeAutocompleteModal(); window.open(EMAIL_SAMPLES_URL, '_blank', 'noopener,noreferrer'); } },
             { code: 'themes', label: 'Themes', action: () => { closeAutocompleteModal(); showThemesModal(); } },
             { code: 'rules', label: 'Rules', action: () => { closeAutocompleteModal(); showRulesModal(); } },
             { code: 'settings', label: 'Settings', action: () => { closeAutocompleteModal(); showSettingsModal(); } },
@@ -11830,6 +11841,34 @@
             loadFromUrl();
         }
 
+        // A sample built into SO-CRATES (POST /api/load-sample - see
+        // samples.py), generated server-side, so it works with no internet
+        // access. Same response handling as loadFromUrl.
+        async function loadBuiltInSample(name) {
+            closeHelpModal();
+            showLoading('Loading sample...');
+            try {
+                const resp = await fetch('/api/load-sample', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: name})
+                });
+                const result = await resp.json();
+                if (result.status === 'processing') {
+                    await checkStatus(result.md5, result.phase || 'files');
+                } else if (result.status === 'ready') {
+                    hideLoading();
+                    await loadAnalysis(result.md5);
+                } else {
+                    hideLoading();
+                    showError(result.error || 'Unknown error');
+                }
+            } catch(err) {
+                hideLoading();
+                showError(err.message);
+            }
+        }
+
         async function loadFromUrl() {
             const urlInput = document.getElementById('pcapUrl');
             const url = urlInput.value.trim();
@@ -12417,6 +12456,7 @@
             // Welcome screen: sample cards, URL import, upload drop zone,
             // previous-analyses rows.
             'load-sample-url': (el) => loadSampleUrl(el.dataset.url),
+            'load-builtin-sample': (el) => loadBuiltInSample(el.dataset.sample),
             'load-from-url': () => loadFromUrl(),
             'open-upload-picker': () => document.getElementById('pcapUpload').click(),
             // Real href (?file=md5) kept for copy-link/middle-click;

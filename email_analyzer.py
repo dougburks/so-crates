@@ -214,12 +214,26 @@ def _received_hops(msg):
     return hops
 
 
+# Addresses that never identify where a message came from: private,
+# carrier-grade NAT, loopback, link-local and their IPv6 counterparts.
+_INTERNAL_NETWORKS = [ipaddress.ip_network(n) for n in (
+    '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10',
+    '127.0.0.0/8', '169.254.0.0/16', '0.0.0.0/8',
+    '::1/128', 'fc00::/7', 'fe80::/10',
+)]
+
+
 def _originating_ip(hops):
-    """The first public IP in the Received chain - the earliest hop that
-    isn't a private, loopback or otherwise internal address."""
+    """The first external IP in the Received chain - the earliest hop that
+    isn't a private, loopback or otherwise internal address. (Not
+    ipaddress's is_global, which also rules out the documentation ranges
+    a sample message has to use.)"""
     for hop in hops:
         ip = hop.get('ip')
-        if ip and ipaddress.ip_address(ip).is_global:
+        if not ip:
+            continue
+        addr = ipaddress.ip_address(ip)
+        if not any(addr in net for net in _INTERNAL_NETWORKS if net.version == addr.version):
             return ip
     return ''
 

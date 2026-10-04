@@ -3075,6 +3075,28 @@ bright_magenta = "#D9B9D9"
         self._wait_ready(md5)
         check()
 
+    def test_load_sample_email(self):
+        """The built-in Sample email file: generated server-side, analyzed
+        as an email, and the same analysis on a second load."""
+        status, body = self._post('/api/load-sample', {'name': 'email'})
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        md5 = data['md5']
+        if data['status'] == 'processing':
+            self.assertEqual(data['phase'], 'email')
+        self._wait_ready(md5)
+        counts = json.loads(self._get(f'/api/stats?md5={md5}')[1])['counts']
+        self.assertEqual(counts['email'], 2)
+        status, body = self._post('/api/load-sample', {'name': 'email'})
+        self.assertEqual(json.loads(body), {'status': 'ready', 'md5': md5})
+
+    def test_load_sample_rejects_unknown_names(self):
+        for name in ('nope', '../etc/passwd', None, 7):
+            with self.subTest(name=name):
+                status, body = self._post('/api/load-sample', {'name': name})
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body)['error'], 'Unknown sample')
+
     def test_upload_eml_detected_by_content(self):
         """No .eml extension needed - a message's header block is enough."""
         from tests import eml_fixtures
