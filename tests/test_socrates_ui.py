@@ -3534,7 +3534,9 @@ class TestThemeAndMenu(unittest.TestCase):
         titles = {r['label']: r['title'] for r in result}
         self.assertEqual(titles.get('Sample PCAP file'), 'Downloads from www.malware-traffic-analysis.net')
         self.assertEqual(titles.get('Sample log file'), 'Downloads from github.com')
-        self.assertEqual(titles.get('Sample binary file'), 'Downloads from secure.eicar.org')
+        # Built in (samples.py) - nothing is downloaded.
+        self.assertEqual(titles.get('Sample binary file'), 'Built into SO-CRATES - works without internet access')
+        self.assertEqual(titles.get('Sample email file'), 'Built into SO-CRATES - works without internet access')
 
     def test_sampleCardTitle_handles_invalid_url(self):
         from tests.jsdom_helper import js_expression
@@ -21257,6 +21259,7 @@ class TestEmailAnalysisUI(unittest.TestCase):
 
     def test_sample_email_card_markup(self):
         self.assertIn('data-action="load-builtin-sample" data-sample="email"', JS_CONTENT)
+        self.assertIn('data-action="load-builtin-sample" data-sample="binary"', JS_CONTENT)
         self.assertIn("'load-builtin-sample': (el) => loadBuiltInSample(el.dataset.sample)", JS_CONTENT)
 
     def test_detect_file_type_and_tab_order(self):

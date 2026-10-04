@@ -268,7 +268,15 @@ class TestAnalyzeMessage(unittest.TestCase):
 
 class TestBuiltInEmailSample(unittest.TestCase):
     """samples.build_email_sample - the Welcome screen's offline Sample
-    email file."""
+    email file - and the Sample binary file beside it."""
+
+    def test_binary_sample_is_the_eicar_file(self):
+        import samples
+        filename, build = samples.SAMPLES['binary']
+        self.assertEqual(filename, 'eicar.com')
+        # The MD5 of eicar.org's own eicar.com, so an analysis of the old
+        # downloaded sample is reopened rather than duplicated.
+        self.assertEqual(hashlib.md5(build()).hexdigest(), '44d88612fea8a8f36de82e1278abb02f')
 
     def test_deterministic(self):
         import samples

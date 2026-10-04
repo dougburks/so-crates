@@ -3090,6 +3090,16 @@ bright_magenta = "#D9B9D9"
         status, body = self._post('/api/load-sample', {'name': 'email'})
         self.assertEqual(json.loads(body), {'status': 'ready', 'md5': md5})
 
+    def test_load_sample_binary(self):
+        status, body = self._post('/api/load-sample', {'name': 'binary'})
+        self.assertEqual(status, 200)
+        md5 = json.loads(body)['md5']
+        self.assertEqual(md5, '44d88612fea8a8f36de82e1278abb02f')
+        self._wait_ready(md5)
+        with open(os.path.join(server.DATA_DIR, md5, '.meta')) as f:
+            meta = json.load(f)
+        self.assertEqual((meta['detected_type'], meta['original']), ('binary', 'eicar.com'))
+
     def test_load_sample_rejects_unknown_names(self):
         for name in ('nope', '../etc/passwd', None, 7):
             with self.subTest(name=name):

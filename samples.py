@@ -1,12 +1,12 @@
 """Sample files built into SO-CRATES, for the Welcome screen's sample
 buttons that work with no internet access (POST /api/load-sample).
 
-Each sample is generated on request, not shipped as a file: the email
-sample carries the EICAR antivirus test string as an attachment, and
-building it here - with the string split in this source - means no file
-in the container image contains the signature for a scanner to flag or
-quarantine. It only exists in full in the analysis directory once someone
-loads the sample, the same as the internet-loaded Sample binary file.
+Each sample is generated on request, not shipped as a file: both carry
+the EICAR antivirus test string (the binary sample is just that file),
+and building them here - with the string split in this source - means no
+file in the container image contains the signature for a scanner to flag
+or quarantine. It only exists in full in an analysis directory once
+someone loads a sample.
 
 Samples are byte-for-byte deterministic, so loading one twice reopens the
 same analysis (same MD5) instead of creating another.
@@ -89,8 +89,16 @@ def build_email_sample():
     return msg.as_bytes(policy=SMTP)
 
 
+def build_binary_sample():
+    """The EICAR test file - byte-for-byte what eicar.org serves as
+    eicar.com, which the Sample binary file used to download (so an
+    existing analysis of it is reopened, not duplicated)."""
+    return EICAR
+
+
 # name -> (filename the analysis is given, builder). The only names
 # POST /api/load-sample accepts.
 SAMPLES = {
+    'binary': ('eicar.com', build_binary_sample),
     'email': ('sample-phishing-email.eml', build_email_sample),
 }
