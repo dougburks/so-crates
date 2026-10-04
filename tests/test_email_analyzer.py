@@ -270,6 +270,38 @@ class TestBuiltInEmailSample(unittest.TestCase):
     """samples.build_email_sample - the Welcome screen's offline Sample
     email file - and the Sample binary file beside it."""
 
+    def test_log_sample(self):
+        """Sysmon JSON lines, deterministic, detected as a log by name and
+        content, with only reserved names. (Which Sigma rules fire needs
+        Zircolite and its ruleset, so that's checked by hand - see
+        build_log_sample.)"""
+        import ipaddress
+        import json
+        import re
+        import samples
+        import validators
+        filename, build = samples.SAMPLES['log']
+        data = build()
+        self.assertEqual(data, build())
+        events = [json.loads(line) for line in data.decode().splitlines()]
+        self.assertEqual({e['EventID'] for e in events}, {1, 3, 13})
+        self.assertTrue(all(e['Channel'] == 'Microsoft-Windows-Sysmon/Operational' for e in events))
+        self.assertTrue(validators.is_log_file(data[:4096]))
+        self.assertTrue(validators.is_log_file_by_extension(filename))
+        text = data.decode()
+        # Every URL goes to a documentation-range IP or a .example host,
+        # and the workstation is a .example name.
+        url_hosts = re.findall(r'https?://([^/\s"]+)', text)
+        self.assertTrue(url_hosts)
+        for host in url_hosts:
+            self.assertTrue(host.endswith('.example') or ipaddress.ip_address(host) in ipaddress.ip_network('203.0.113.0/24'), host)
+        self.assertEqual({e['Computer'] for e in events}, {'FIN-WS-0412.corp.example'})
+        documentation = ipaddress.ip_network('203.0.113.0/24')
+        self.assertIn('203.0.113.66', re.findall(r'\b(\d+\.\d+\.\d+\.\d+)\b', text))
+        for ip in re.findall(r'\b(\d+\.\d+\.\d+\.\d+)\b', text):
+            addr = ipaddress.ip_address(ip)
+            self.assertTrue(addr.is_private or addr in documentation, ip)
+
     def test_binary_sample_is_the_eicar_file(self):
         import samples
         filename, build = samples.SAMPLES['binary']

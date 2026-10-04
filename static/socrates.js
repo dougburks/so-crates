@@ -2197,7 +2197,6 @@
             return AGG_PAGE_SIZE_OPTIONS.includes(stored) ? stored : CONFIG.AGGREGATION_TOP_N;
         })();
         const DEFAULT_SAMPLE_URL = 'https://www.malware-traffic-analysis.net/2026/02/03/2026-02-03-GuLoader-for-AgentTesla-style-infection-with-FTP-data-exfil.pcap.zip';
-        const SAMPLE_LOG_URL = 'https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES/raw/refs/heads/master/Defense%20Evasion/apt10_jjs_sideloading_prochollowing_persist_as_service_sysmon_1_7_8_13.evtx';
         // The hover text for a sample built into SO-CRATES (see samples.py)
         // rather than downloaded - the counterpart of _sampleCardTitle.
         const BUILTIN_SAMPLE_TITLE = 'Built into SO-CRATES - works without internet access';
@@ -4492,7 +4491,7 @@
                                 <div class="sample-card" title="${_sampleCardTitle(DEFAULT_SAMPLE_URL)}" tabindex="0" role="button" aria-label="Analyze the sample PCAP file" data-action="load-sample-url" data-url="${escapeHtml(DEFAULT_SAMPLE_URL)}" data-key-activate="enter-space">
                                      <span class="sample-label">Sample PCAP file</span>
                                  </div>
-                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_LOG_URL)}" tabindex="0" role="button" aria-label="Analyze the sample log file" data-action="load-sample-url" data-url="${escapeHtml(SAMPLE_LOG_URL)}" data-key-activate="enter-space">
+                                <div class="sample-card" title="${BUILTIN_SAMPLE_TITLE}" tabindex="0" role="button" aria-label="Analyze the sample log file" data-action="load-builtin-sample" data-sample="log" data-key-activate="enter-space">
                                     <span class="sample-label">Sample log file</span>
                                 </div>
                                 <div class="sample-card" title="${BUILTIN_SAMPLE_TITLE}" tabindex="0" role="button" aria-label="Analyze the sample binary file" data-action="load-builtin-sample" data-sample="binary" data-key-activate="enter-space">
