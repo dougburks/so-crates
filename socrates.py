@@ -71,7 +71,7 @@ import config
 import cyberchef
 import tomllib
 
-VERSION = '4.3.0'
+VERSION = '4.4.0'
 GITHUB_RELEASES_API = 'https://api.github.com/repos/dougburks/so-crates/releases/latest'
 PORT = int(os.environ.get('PORT', 8000))
 BIND_ADDRESS = os.environ.get('BIND_ADDRESS', '127.0.0.1')
