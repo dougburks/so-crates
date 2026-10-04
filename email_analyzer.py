@@ -14,9 +14,12 @@ A message becomes:
 
 Everything is parsed with the standard library (email, html.parser). The
 message's HTML is only ever read, never rendered, and every value is
-displayed escaped. The counts are bounded by config.MAX_EMAIL_* - the
-attachments are decoded from the message itself, so their total size is
-already bounded by the upload's.
+displayed escaped. Phishing mail is hostile input, so parsing degrades
+rather than fails: a header the strict parser chokes on is read raw, a
+structure it can't parse falls back to the headers alone, and whatever
+the config.MAX_EMAIL_* limits cut off is reported as a warning rather
+than silently dropped. Messages over config.MAX_EMAIL_SIZE never get
+here - they're analyzed as plain files (socrates.py's _detect_file_type).
 """
 
 import hashlib
@@ -64,6 +67,21 @@ _EXECUTABLE_EXTENSIONS = (
 def _text(value, limit=2000):
     """A header value as a bounded plain string."""
     return ' '.join(str(value or '').split())[:limit]
+
+
+def _header_all(msg, name):
+    """Every value of a header, as strings. Reading through policy.default
+    parses the value, and the stdlib's parser raises on some hostile input
+    (a From of a lone '"') - fall back to the header's raw text then."""
+    try:
+        return [str(v) for v in (msg.get_all(name) or [])]
+    except Exception:
+        return [str(v) for k, v in msg.raw_items() if k.lower() == name.lower()]
+
+
+def _header(msg, name):
+    values = _header_all(msg, name)
+    return values[0] if values else ''
 
 
 def _addresses(values):
@@ -165,8 +183,11 @@ def _part_text(part):
     """A text part's content as str, whatever its declared charset."""
     try:
         return part.get_content()
-    except (LookupError, UnicodeError, AssertionError):
-        payload = part.get_payload(decode=True) or b''
+    except Exception:
+        try:
+            payload = part.get_payload(decode=True) or b''
+        except Exception:
+            return ''
         return payload.decode('utf-8', errors='replace')
 
 
@@ -175,12 +196,12 @@ def _auth_results(msg):
     (the one the receiving server added), falling back to Received-SPF for
     SPF."""
     results = {}
-    headers = msg.get_all('Authentication-Results') or []
+    headers = _header_all(msg, 'Authentication-Results')
     if headers:
         for method, result in _AUTH_RE.findall(str(headers[0])):
             results.setdefault(method.lower(), result.lower())
     if 'spf' not in results:
-        received_spf = msg.get('Received-SPF')
+        received_spf = _header(msg, 'Received-SPF')
         if received_spf:
             first = str(received_spf).split(None, 1)
             if first:
@@ -192,7 +213,7 @@ def _received_hops(msg):
     """The Received chain, oldest hop first - the order the message
     travelled in."""
     hops = []
-    for value in reversed(msg.get_all('Received') or []):
+    for value in reversed(_header_all(msg, 'Received')):
         raw = _text(value, 1000)
         route, _, when = raw.rpartition(';')
         if not route:
@@ -241,15 +262,18 @@ def _originating_ip(hops):
 
 
 def _timestamp(msg, fallback):
+    """The Date header as UTC ISO time, or fallback for a missing or
+    unusable one (unparsable, or out of range once converted - year 9999
+    with a negative offset overflows)."""
     try:
-        when = parsedate_to_datetime(str(msg.get('Date')))
-    except (TypeError, ValueError, IndexError):
+        when = parsedate_to_datetime(_header(msg, 'Date'))
+        if when is None:
+            return fallback
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return when.astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError, IndexError, OverflowError):
         return fallback
-    if when is None:
-        return fallback
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return when.astimezone(timezone.utc).isoformat()
 
 
 def _blank_event(event_type, timestamp):
@@ -263,48 +287,92 @@ def _blank_event(event_type, timestamp):
 def parse_message(raw, now=None):
     """Parse raw .eml bytes. Returns (events, attachments): the 'email' and
     'link' events (see the module docstring), and the decoded attachments as
-    (filename, content_type, data, timestamp) for analyze_message to store
-    and scan. Never raises on a malformed message - the email package
-    records defects and carries on."""
+    (filename, data, timestamp) for analyze_message to store and scan.
+
+    Degrades rather than raises: if the message's structure can't be
+    parsed (the stdlib parser recurses per nesting level, so thousands of
+    nested parts raise RecursionError), its headers alone are analyzed,
+    with a warning saying so."""
     now = now or datetime.now(timezone.utc).isoformat()
+    try:
+        return _parse(BytesParser(policy=policy.default).parsebytes(raw), now, headers_only=False)
+    except Exception:
+        events, attachments = _parse(BytesParser(policy=policy.default).parsebytes(raw, headersonly=True),
+                                     now, headers_only=True)
+        events[0]['email']['warnings'].append(
+            "The message's structure could not be parsed - only its headers were analyzed")
+        return events, attachments
+
+
+def _parse(msg, now, headers_only):
     events, attachments = [], []
-    budget = {'links': config.MAX_EMAIL_LINKS, 'attachments': config.MAX_EMAIL_ATTACHMENTS}
-    msg = BytesParser(policy=policy.default).parsebytes(raw)
-    _parse_into(msg, 0, now, events, attachments, budget)
+    budget = {'links': config.MAX_EMAIL_LINKS, 'attachments': config.MAX_EMAIL_ATTACHMENTS,
+              'messages': config.MAX_EMAIL_MESSAGES}
+    skipped = {'attachments': 0, 'links': 0, 'messages': 0, 'unparsable': 0}
+    _parse_into(msg, 0, now, events, attachments, budget, skipped, headers_only)
+    cut = []
+    if skipped['attachments']:
+        cut.append(f"{skipped['attachments']} attachment(s)")
+    if skipped['links']:
+        cut.append(f"{skipped['links']} link(s)")
+    if skipped['messages']:
+        cut.append(f"{skipped['messages']} forwarded message(s)")
+    if cut:
+        # Somewhere for an attacker to hide something - say so.
+        events[0]['email']['warnings'].append(
+            'Beyond the analysis limits, not analyzed: ' + ', '.join(cut))
+    if skipped['unparsable']:
+        events[0]['email']['warnings'].append(
+            f"{skipped['unparsable']} forwarded message(s) could not be parsed")
     return events, attachments
 
 
-def _parse_into(msg, depth, fallback_ts, events, attachments, budget):
+def _own_parts(msg, nested):
+    """The message's own leaf parts, in order. Forwarded messages
+    (message/rfc822 parts) are collected into nested instead of descended
+    into - their parts are theirs, parsed in their own _parse_into call.
+    Iterative, and each part visited once."""
+    stack = [msg]
+    while stack:
+        part = stack.pop()
+        if part is not msg and part.get_content_type() == 'message/rfc822':
+            payload = part.get_payload()
+            nested.extend(m for m in (payload if isinstance(payload, list) else [payload]) if m is not None)
+            continue
+        if part.is_multipart():
+            payload = part.get_payload()
+            if isinstance(payload, list):
+                stack.extend(reversed(payload))
+            continue
+        yield part
+
+
+def _parse_into(msg, depth, fallback_ts, events, attachments, budget, skipped, headers_only=False):
     # Every event of an upload carries the uploaded message's time, so they
     # sort and group together with the message first; a forwarded message's
     # own Date is still in its 'date' field.
     ts = _timestamp(msg, fallback_ts) if depth == 0 else fallback_ts
     plain, html, names, nested = [], [], [], []
 
-    for part in msg.walk():
-        # Parts inside a forwarded message belong to it (parsed below, in
-        # its own call), not to this one - including forwards it contains.
-        if part is not msg and any(_contains(n, part) for n in nested):
-            continue
-        if part is not msg and part.get_content_type() == 'message/rfc822':
-            # Its payload is the forwarded message itself (iter_parts only
-            # covers multipart/*).
-            payload = part.get_payload()
-            nested.extend(m for m in (payload if isinstance(payload, list) else [payload]) if m is not None)
-            continue
-        if part.is_multipart():
-            continue
-        filename = part.get_filename()
+    for part in ([] if headers_only else _own_parts(msg, nested)):
+        try:
+            filename = part.get_filename()
+        except Exception:
+            filename = None
         disposition = (part.get_content_disposition() or '').lower()
         ctype = part.get_content_type()
         if filename or disposition == 'attachment' or not ctype.startswith('text/'):
             if not budget['attachments']:
+                skipped['attachments'] += 1
                 continue
             budget['attachments'] -= 1
-            data = part.get_payload(decode=True) or b''
+            try:
+                data = part.get_payload(decode=True) or b''
+            except Exception:
+                data = b''
             name = _text(filename, 255) or f'attachment-{len(attachments) + 1}'
             names.append(name)
-            attachments.append((name, ctype, data, ts))
+            attachments.append((name, data, ts))
         elif ctype == 'text/html':
             html.append(_part_text(part))
         else:
@@ -331,7 +399,10 @@ def _parse_into(msg, depth, fallback_ts, events, attachments, budget):
 
     link_events = []
     for url, text, source in links:
-        if (url, text) in seen or not budget['links']:
+        if (url, text) in seen:
+            continue
+        if not budget['links']:
+            skipped['links'] += 1
             continue
         seen.add((url, text))
         # A bare URL in text repeats an <a> already seen - keep the one
@@ -354,14 +425,14 @@ def _parse_into(msg, depth, fallback_ts, events, attachments, budget):
         '\n'.join(' '.join(t.split()) for t in html_text if t.strip())
     hops = _received_hops(msg)
     auth = _auth_results(msg)
-    from_header = msg.get('From')
+    from_header = _header(msg, 'From')
     from_domain = _domain_of_address(from_header)
-    reply_to = _addresses(msg.get_all('Reply-To') or [])
-    return_path = _text(msg.get('Return-Path'), 500).strip('<>')
+    reply_to = _addresses(_header_all(msg, 'Reply-To'))
+    return_path = _text(_header(msg, 'Return-Path'), 500).strip('<>')
 
     warnings = []
     reply_domain = _domain_of_address(reply_to[0]) if reply_to else ''
-    if reply_domain and from_domain and reply_domain != from_domain:
+    if reply_domain and from_domain and not _same_site(reply_domain, from_domain):
         warnings.append(f'Reply-To domain ({reply_domain}) differs from From ({from_domain})')
     return_domain = return_path.rsplit('@', 1)[1].lower() if '@' in return_path else ''
     if return_domain and from_domain and not _same_site(return_domain, from_domain):
@@ -381,14 +452,14 @@ def _parse_into(msg, depth, fallback_ts, events, attachments, budget):
     event = _blank_event('email', ts)
     event['email'] = {
         'from': _text(from_header),
-        'to': _addresses(msg.get_all('To') or []),
-        'cc': _addresses(msg.get_all('Cc') or []),
+        'to': _addresses(_header_all(msg, 'To')),
+        'cc': _addresses(_header_all(msg, 'Cc')),
         'reply_to': reply_to,
         'return_path': return_path,
-        'subject': _text(msg.get('Subject'), 1000),
-        'date': _text(msg.get('Date'), 200),
-        'message_id': _text(msg.get('Message-ID'), 500),
-        'mailer': _text(msg.get('X-Mailer') or msg.get('User-Agent'), 500),
+        'subject': _text(_header(msg, 'Subject'), 1000),
+        'date': _text(_header(msg, 'Date'), 200),
+        'message_id': _text(_header(msg, 'Message-ID'), 500),
+        'mailer': _text(_header(msg, 'X-Mailer') or _header(msg, 'User-Agent'), 500),
         'spf': auth.get('spf', ''),
         'dkim': auth.get('dkim', ''),
         'dmarc': auth.get('dmarc', ''),
@@ -404,13 +475,16 @@ def _parse_into(msg, depth, fallback_ts, events, attachments, budget):
     events.append(event)
     events.extend(link_events)
 
-    if depth < config.MAX_EMAIL_DEPTH:
-        for sub in nested:
-            _parse_into(sub, depth + 1, ts, events, attachments, budget)
-
-
-def _contains(container, part):
-    return any(p is part for p in container.walk())
+    for sub in nested:
+        if depth + 1 > config.MAX_EMAIL_DEPTH or not budget['messages']:
+            skipped['messages'] += 1
+            continue
+        budget['messages'] -= 1
+        try:
+            _parse_into(sub, depth + 1, ts, events, attachments, budget, skipped)
+        except Exception:
+            # One broken forward doesn't sink the message it came in.
+            skipped['unparsable'] += 1
 
 
 def _magic(path):
@@ -440,8 +514,13 @@ def store_file(dir_path, data):
 
 
 def _file_events(path, filename, timestamp, source, rules_file, scan):
-    """A stored file's 'fileinfo' event and its 'filealerts' events."""
-    matches, sha256, md5, sha1, metadata = scan(path, rules_file) if scan else ([], '', '', '', {})
+    """A stored file's 'fileinfo' event and its 'filealerts' events. A scan
+    that fails leaves this one file hashed but unscanned, not the whole
+    message's analysis failed."""
+    try:
+        matches, sha256, md5, sha1, metadata = scan(path, rules_file) if scan else ([], '', '', '', {})
+    except Exception:
+        matches, sha256, md5, sha1, metadata = [], '', '', '', {}
     if not sha256:
         with open(path, 'rb') as f:
             data = f.read()
@@ -482,7 +561,7 @@ def analyze_message(dir_path, file_path, rules_file=None, scan=None):
 
     path, _ = store_file(dir_path, raw)
     events.extend(_file_events(path, os.path.basename(file_path), timestamp, 'message', rules_file, scan))
-    for filename, _ctype, data, ts in attachments:
+    for filename, data, ts in attachments:
         path, _ = store_file(dir_path, data)
         events.extend(_file_events(path, filename, ts, 'attachment', rules_file, scan))
     return events

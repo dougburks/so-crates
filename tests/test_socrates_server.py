@@ -459,6 +459,16 @@ class TestDetectFileType(unittest.TestCase):
             with self.subTest(name=name, prefix=prefix[:30]):
                 self.assertEqual(server._detect_file_type(prefix, name), expected)
 
+    def test_oversized_email_is_analyzed_as_a_file(self):
+        """Email parsing holds the whole message in memory - past
+        MAX_EMAIL_SIZE it's a plain file instead."""
+        with tempfile.NamedTemporaryFile(suffix='.eml') as f:
+            f.write(b'From: a@example.com\nSubject: big\n\n' + b'x' * 100)
+            f.flush()
+            self.assertEqual(server._detect_file_type(b'From: a@example.com\nSubject: big\n', f.name), 'email')
+            with unittest.mock.patch.object(config, 'MAX_EMAIL_SIZE', 50):
+                self.assertEqual(server._detect_file_type(b'From: a@example.com\nSubject: big\n', f.name), 'binary')
+
 
 class TestCleanupUploadTmpDir(unittest.TestCase):
     """storage.cleanup_upload_tmp_dir() sweeps orphaned files/dirs left behind in
@@ -3122,11 +3132,39 @@ bright_magenta = "#D9B9D9"
         self.assertEqual((meta['detected_type'], meta['original']), ('log', 'sample-sysmon-log.json'))
 
     def test_load_sample_rejects_unknown_names(self):
-        for name in ('nope', '../etc/passwd', None, 7):
+        for name in ('nope', '../etc/passwd', None, 7, [], {}):
             with self.subTest(name=name):
                 status, body = self._post('/api/load-sample', {'name': name})
                 self.assertEqual(status, 400)
                 self.assertEqual(json.loads(body)['error'], 'Unknown sample')
+
+    def test_reanalyze_repairs_an_old_detected_type(self):
+        """REGRESSION (4.4.0 review): reanalyze restored the old .meta's
+        detected_type, so an .eml 4.3.0 had misread as a CSV log stayed a
+        'log' in the UI even after being reanalyzed as an email."""
+        from tests import eml_fixtures
+        raw = b'X-Test: reanalyze-repairs-detected-type\n' + eml_fixtures.plain_message()
+        md5 = json.loads(self._post_multipart('/api/upload', 'old.eml', raw)[1])['md5']
+        self._wait_ready(md5)
+        meta_path = os.path.join(server.DATA_DIR, md5, '.meta')
+        with open(meta_path) as f:
+            meta = json.load(f)
+        meta['detected_type'] = 'log'
+        with open(meta_path, 'w') as f:
+            json.dump(meta, f)
+        status, body = self._post('/api/reanalyze', {'md5': md5})
+        self.assertEqual(json.loads(body)['phase'], 'email')
+        with open(meta_path) as f:
+            self.assertEqual(json.load(f)['detected_type'], 'email')
+        self._wait_ready(md5)
+
+    def test_non_string_md5_is_a_400(self):
+        """REGRESSION (4.4.0 review): a number or list md5 raised out of
+        the handler, dropping the connection with no response."""
+        for md5 in (1, [], {}):
+            with self.subTest(md5=md5):
+                status, body = self._post('/api/reanalyze', {'md5': md5})
+                self.assertEqual(status, 400)
 
     def test_upload_eml_detected_by_content(self):
         """No .eml extension needed - a message's header block is enough."""
@@ -5572,8 +5610,9 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         self.assertIn('non_pcap_files', reanalyze_section,
                       'reanalyze must look for non-PCAP files')
         # Through the same detection and dispatch every upload path uses.
-        self.assertIn("self._analyze_by_type(_detect_file_type(prefix, file_path)", reanalyze_section,
+        self.assertIn("detected = _detect_file_type(prefix, file_path)", reanalyze_section,
                       'reanalyze must detect the file type the way uploads do')
+        self.assertIn("self._analyze_by_type(detected,", reanalyze_section)
         dispatch = content.split("def _analyze_by_type(self,")[1].split("\n    def ")[0]
         for analyzer in ('self._analyze_email_file', 'self._analyze_log_file', 'self._analyze_standalone_file'):
             self.assertIn(analyzer, dispatch)

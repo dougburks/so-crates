@@ -253,13 +253,19 @@ class _Capture:
 
     def session(self, cport, sport, steps, gap):
         """A TCP connection from the workstation: handshake, each
-        (from_client, payload) step in order in MSS-sized segments, FIN."""
+        (from_client, payload) step in order in MSS-sized segments, FIN. A
+        step can instead be a callable, run at that point - for another
+        connection that happens in the middle of this one."""
         v, c = _VICTIM, _C2
         cs, ss = self.rng.randint(10**8, 4 * 10**9), self.rng.randint(10**8, 4 * 10**9)
         self._tcp(v, c, cport, sport, cs, 0, 0x02, dt=gap); cs += 1
         self._tcp(c, v, sport, cport, ss, cs, 0x12, dt=0.041); ss += 1
         self._tcp(v, c, cport, sport, cs, ss, 0x10, dt=0.0004)
-        for from_client, payload in steps:
+        for step in steps:
+            if callable(step):
+                step()
+                continue
+            from_client, payload = step
             for i in range(0, len(payload), _MSS):
                 seg = payload[i:i + _MSS]
                 if from_client:
@@ -321,10 +327,11 @@ def build_pcap_sample():
         (True, b'TYPE I\r\n'), (False, b'200 Type set to I\r\n'),
         (True, b'PASV\r\n'), (False, b'227 Entering Passive Mode (203,0,113,66,195,80)\r\n'),
         (True, b'STOR ' + filename + b'\r\n'), (False, b'150 Accepted data connection\r\n'),
+        # The upload itself, over the PASV data connection the 227 reply
+        # announced (195*256+80 = 50000), before the server confirms it.
+        lambda: cap.session(51791, 50000, [(True, report)], gap=0.01),
         (False, b'226 File successfully transferred\r\n'), (True, b'QUIT\r\n'), (False, b'221 Goodbye.\r\n'),
     ], gap=99.0)
-    # The PASV data connection the 227 reply announced (195*256+80 = 50000).
-    cap.session(51791, 50000, [(True, report)], gap=0.01)
     return cap.to_bytes()
 
 

@@ -280,15 +280,23 @@ def _detect_file_type(prefix, path):
     log, since a message's header block isn't a log whatever the log
     checks would make of it."""
     if is_email_file_by_extension(path):
-        return 'email'
+        return _email_or_binary(path)
     if is_log_file_by_extension(path):
         return 'log'
     if is_email_file(prefix):
-        return 'email'
+        return _email_or_binary(path)
     if is_log_file(prefix):
         return 'log'
     return 'binary'
 
+
+def _email_or_binary(path):
+    """Email parsing holds the message and its decoded attachments in
+    memory - a message past MAX_EMAIL_SIZE is analyzed as a plain file."""
+    try:
+        return 'binary' if os.path.getsize(path) > config.MAX_EMAIL_SIZE else 'email'
+    except OSError:
+        return 'email'
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     # Set by do_GET for a /cyberchef/ request that passed its path checks -
@@ -458,7 +466,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         """
         if not md5:
             return None, 'MD5 parameter required'
-        if not MD5_RE.match(md5):
+        # A JSON body can carry any type - a number or list here used to
+        # raise out of the handler with no response at all.
+        if not isinstance(md5, str) or not MD5_RE.match(md5):
             return None, 'Invalid MD5'
         dir_path = os.path.join(DATA_DIR, md5)
         if not is_safe_path(DATA_DIR, dir_path):
@@ -1224,8 +1234,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(500, 'Internal server error')
 
     def handle_get_extracted_file(self, params):
-        """One file Suricata extracted from this analysis's traffic, by
-        SHA256 (the fileinfo event's fileinfo.sha256)."""
+        """One file Suricata extracted from this analysis's traffic - or an
+        email analysis's message or attachment - by SHA256 (the fileinfo
+        event's fileinfo.sha256)."""
         dir_path, error = self._resolve_md5_dir(params.get('md5', [''])[0])
         if error:
             self._send_error(400, error)
@@ -2457,15 +2468,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         data = self._read_json_body(config.MAX_REQUEST_BODY_SIZE)
         if data is None:
             return
-        sample = SAMPLES.get(data.get('name'))
+        name = data.get('name')
+        sample = SAMPLES.get(name) if isinstance(name, str) else None
         if not sample:
             self._send_error(400, 'Unknown sample')
             return
         filename, build = sample
         try:
             fd, src_path = tempfile.mkstemp(dir=upload_tmp_dir(DATA_DIR), suffix='.sample')
-            with os.fdopen(fd, 'wb') as f:
-                f.write(build())
+            try:
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(build())
+            except Exception:
+                # _process_uploaded_file removes src_path itself once it has it.
+                os.unlink(src_path)
+                raise
             self._send_json(self._process_uploaded_file(src_path, filename))
         except ValueError as exc:
             self._send_error(400, str(exc))
@@ -2576,8 +2593,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         """Rewrite .meta after a reanalyze cleanup, so the frontend
         retains detected_type across the reanalyze - best-effort, same
         reasoning as _remove_artifacts. Shared by handle_post_reanalyze's
-        pcap and non-pcap branches, which previously each inlined an
-        identical copy of this block.
+        pcap and non-pcap branches.
         """
         if preserved_meta:
             try:
@@ -2664,7 +2680,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._remove_artifacts(dir_path, FILE_ANALYSIS_ARTIFACTS)
                 # An email analysis's stored message and attachments.
                 remove_filestore(dir_path)
-                self._restore_meta(meta_path, preserved_meta)
 
                 # The same test upload used (content or extension), so a log
                 # recognized by its content - JSON/CSV/EVTX without a log
@@ -2674,7 +2689,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         prefix = fh.read(4096)
                 except OSError:
                     prefix = b''
-                phase = self._analyze_by_type(_detect_file_type(prefix, file_path), dir_path, file_path, non_pcap_files[0])
+                detected = _detect_file_type(prefix, file_path)
+                # Detection can change between versions (4.4.0 stopped
+                # reading an email whose first header has a comma as a CSV
+                # log) - record what it is now, so reanalyze also repairs
+                # an analysis the old detection got wrong.
+                if preserved_meta:
+                    preserved_meta['detected_type'] = detected
+                self._restore_meta(meta_path, preserved_meta)
+                phase = self._analyze_by_type(detected, dir_path, file_path, non_pcap_files[0])
                 self._send_json({'status': 'processing', 'md5': md5, 'phase': phase})
             else:
                 self._send_error(404, 'No analysis file found')

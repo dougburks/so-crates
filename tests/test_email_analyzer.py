@@ -101,7 +101,7 @@ class TestParseMessage(unittest.TestCase):
         self.assertEqual(fwd['link_count'], 1)
 
     def test_attachments_are_decoded(self):
-        self.assertEqual([(n, d) for n, _c, d, _t in self.attachments],
+        self.assertEqual([(n, d) for n, d, _t in self.attachments],
                          [('invoice.com', eml_fixtures.EICAR), ('notes.txt', b'just some notes\n')])
 
     def test_body_prefers_plain_text(self):
@@ -197,6 +197,102 @@ class TestParseEdgeCases(unittest.TestCase):
         outer.add_attachment(middle)
         events, _ = email_analyzer.parse_message(outer.as_bytes())
         self.assertEqual([e['email']['subject'] for e in _by_type(events, 'email')], ['outer', 'middle', 'inner'])
+
+
+class TestHostileInput(unittest.TestCase):
+    """REGRESSIONS (4.4.0 review): phishing mail is hostile input - each of
+    these used to fail the whole analysis, run for minutes, or hide an
+    attachment without a word."""
+
+    def _parse(self, raw):
+        events, attachments = email_analyzer.parse_message(raw, now='NOW')
+        return events, attachments, _by_type(events, 'email')[0]['email']
+
+    def test_malformed_address_headers_are_read_raw(self):
+        for header in (b'From', b'To', b'Cc', b'Reply-To'):
+            with self.subTest(header=header):
+                _, _, top = self._parse(header + b': "\r\nSubject: x\r\n\r\nbody\r\n')
+                self.assertEqual(top['subject'], 'x')
+
+    def test_out_of_range_date_falls_back(self):
+        events, _, _ = self._parse(b'From: a@example.com\r\nDate: Fri, 31 Dec 9999 23:59:59 -2359\r\n\r\nx\r\n')
+        self.assertEqual(events[0]['timestamp'], 'NOW')
+
+    def _forwards(self, count):
+        outer = EmailMessage()
+        outer['Subject'] = 'outer'
+        outer.set_content('x')
+        for i in range(count):
+            fwd = EmailMessage()
+            fwd['Subject'] = f'fwd {i}'
+            fwd.set_content('x')
+            outer.add_attachment(fwd)
+        return outer.as_bytes()
+
+    def test_many_forwards_are_capped_quickly_and_reported(self):
+        import time
+        raw = self._forwards(400)
+        start = time.monotonic()
+        events, _, top = self._parse(raw)
+        self.assertLess(time.monotonic() - start, 5, 'one pass over the parts, not one per forward')
+        self.assertEqual(len(_by_type(events, 'email')), 1 + config.MAX_EMAIL_MESSAGES)
+        self.assertIn(f'{400 - config.MAX_EMAIL_MESSAGES} forwarded message(s)', ' '.join(top['warnings']))
+
+    def test_attachments_beyond_the_limit_are_reported(self):
+        msg = EmailMessage()
+        msg['From'] = 'a@example.com'
+        msg.set_content('x')
+        for i in range(5):
+            msg.add_attachment(b'data%d' % i, maintype='application', subtype='octet-stream', filename=f'f{i}.bin')
+        with mock.patch.object(config, 'MAX_EMAIL_ATTACHMENTS', 2):
+            _, attachments, top = self._parse(msg.as_bytes())
+        self.assertEqual(len(attachments), 2)
+        self.assertIn('Beyond the analysis limits, not analyzed: 3 attachment(s)', top['warnings'])
+
+    def test_forwards_beyond_the_depth_limit_are_reported(self):
+        inner = EmailMessage()
+        inner['Subject'] = 'level 0'
+        inner.set_content('x')
+        for level in range(1, 4):
+            outer = EmailMessage()
+            outer['Subject'] = f'level {level}'
+            outer.set_content('x')
+            outer.add_attachment(inner)
+            inner = outer
+        with mock.patch.object(config, 'MAX_EMAIL_DEPTH', 1):
+            _, _, top = self._parse(inner.as_bytes())
+        self.assertIn('1 forwarded message(s)', ' '.join(top['warnings']))
+
+    def test_unparsable_structure_falls_back_to_headers(self):
+        """Thousands of nested multiparts make the stdlib parser recurse
+        past Python's limit."""
+        depth = 3000
+        parts = [b'From: a@example.com\r\nSubject: deep\r\nContent-Type: multipart/mixed; boundary="b0"\r\n\r\n']
+        for i in range(1, depth):
+            parts.append(b'--b%d\r\nContent-Type: multipart/mixed; boundary="b%d"\r\n\r\n' % (i - 1, i))
+        events, attachments, top = self._parse(b''.join(parts))
+        self.assertEqual(top['subject'], 'deep')
+        self.assertIn("The message's structure could not be parsed - only its headers were analyzed", top['warnings'])
+        self.assertEqual(attachments, [])
+
+    def test_reply_to_subdomain_of_from_is_not_a_warning(self):
+        _, _, top = self._parse(b'From: x@example.com\r\nReply-To: support@mail.example.com\r\n\r\nx\r\n')
+        self.assertEqual(top['warnings'], [])
+
+    def test_failing_scan_leaves_the_file_hashed(self):
+        tmpdir = tempfile.mkdtemp()
+        try:
+            path = os.path.join(tmpdir, 'm.eml')
+            with open(path, 'wb') as f:
+                f.write(eml_fixtures.phishing_message())
+            def broken_scan(p, rules):
+                raise RuntimeError('yara crashed')
+            events = email_analyzer.analyze_message(tmpdir, path, 'rules', broken_scan)
+            infos = _by_type(events, 'fileinfo')
+            self.assertEqual(len(infos), 3)
+            self.assertTrue(all(i['fileinfo']['sha256'] for i in infos))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class TestTextDomain(unittest.TestCase):
@@ -371,7 +467,7 @@ class TestBuiltInEmailSample(unittest.TestCase):
         self.assertEqual(top['originating_ip'], '203.0.113.66')
         self.assertTrue(any(e['link']['mismatch'] for e in _by_type(events, 'link')))
         self.assertEqual(len(_by_type(events, 'email')), 2, 'includes a forwarded message')
-        name, _ctype, data, _ts = attachments[0]
+        name, data, _ts = attachments[0]
         self.assertEqual(name, 'Payroll_Adjustment_Form.docm')
         self.assertTrue(data.startswith(b'PK'), 'an Office Open XML zip')
         self.assertIn(email_analyzer_eicar(), data, 'stored uncompressed, so YARA sees it')

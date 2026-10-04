@@ -80,7 +80,7 @@ RESERVED_FILENAMES = {
     # Analyzer output artifacts: an upload with one of these names would be
     # overwritten mid-scan (result spoofing) or deleted by reanalyze's
     # artifact sweep. Keep in sync with PCAP_ANALYSIS_ARTIFACTS /
-    # FILE_ANALYSIS_ARTIFACTS in socrates.py.
+    # FILE_ANALYSIS_ARTIFACTS in storage.py.
     'yara_matches.json', 'sigma_matches.json', 'zircolite.log',
     '.zircolite_events.db', 'file_metadata.json',
     # Suricata's own outputs - an upload named stats.log would be appended
