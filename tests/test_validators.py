@@ -227,6 +227,22 @@ class TestIsLogFile(unittest.TestCase):
         xml += b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
         self._assert_not_log(xml, 'Office Open XML disguised as generic XML')
 
+    # Negative: email messages (.eml) - REGRESSION: a first header with a
+    # comma ("Date: Tue, 3 Feb ...") passed the CSV check, so the message
+    # went to Sigma as a log and the analysis came back empty.
+    def test_eml_starting_with_date_header(self):
+        self._assert_not_log(b'Date: Tue, 3 Feb 2026 10:00:00 +0000\r\n'
+                             b'From: "Billing, Dept" <billing@example.com>\r\n'
+                             b'Subject: Invoice\r\n\r\nbody, with a comma\r\n', '.eml starting with Date:')
+
+    def test_eml_with_folded_header(self):
+        self._assert_not_log(b'Received: from mx.example.com (mx.example.com [192.0.2.1]),\n'
+                             b'\tby mail.example.com; Tue, 3 Feb 2026 10:00:00 +0000\n'
+                             b'Subject: hi\n\nbody\n', '.eml with a folded Received: header')
+
+    def test_csv_whose_header_row_looks_like_a_field(self):
+        self._assert_log(b'Note: first,second\n1,2\n3,4\n', 'CSV with a colon in its first column name')
+
     def test_plain_text_no_commas(self):
         self._assert_not_log(b'hello world\n', 'plain text without commas')
 

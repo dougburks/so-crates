@@ -365,6 +365,39 @@ def _is_mostly_text(data):
     return text_count / len(data) > 0.7
 
 
+# An RFC 5322 header field: a name of printable ASCII other than ':', then
+# ':' and whitespace ("Date: Tue, 3 Feb 2026 ...").
+_MAIL_HEADER_RE = re.compile(rb'^[!-9;-~]+:[ \t]')
+
+
+def _looks_like_mail_headers(data):
+    """True if data starts with an email message's header block (.eml):
+    at least two 'Name: value' fields, allowing folded continuation lines
+    (which start with whitespace). Checked ahead of the CSV test in
+    is_log_file, which a header line with a comma in it - 'Date: Tue, 3
+    Feb ...' is a common first one - would otherwise pass, sending the
+    message to Sigma as a CSV log and leaving an empty analysis. A CSV
+    whose header row happens to look like a field still has data rows
+    that don't, so it isn't caught by this."""
+    # The last line may be cut off mid-way by the prefix length.
+    lines = data[:4096].split(b'\n')[:-1]
+    fields = 0
+    for line in lines:
+        line = line.rstrip(b'\r')
+        if not line:
+            break
+        if line[:1] in (b' ', b'\t'):
+            if not fields:
+                return False
+            continue
+        if not _MAIL_HEADER_RE.match(line):
+            return False
+        fields += 1
+        if fields >= 2:
+            return True
+    return False
+
+
 def is_log_file(data):
     """Detect if file data is a log file by its content (magic bytes and
     structure) - see is_log_file_by_extension for the extension check.
@@ -422,6 +455,9 @@ def is_log_file(data):
         if first_line.startswith('<!doctype html') or first_line.startswith('<html'):
             return False
         return True
+    # An email message (.eml), not a CSV - see _looks_like_mail_headers
+    if _looks_like_mail_headers(data):
+        return False
     # CSV: detectable by commas in first line and newline
     first_line = data.split(b'\n')[0]
     if b',' in first_line and len(first_line) < 4096 and _is_mostly_text(first_line):
