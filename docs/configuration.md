@@ -27,10 +27,10 @@ All analyzed files are stored in `~/socrates-data/`. It holds a set of shared ru
     <original-filename>        # The uploaded file
     .meta                      # Analysis metadata (file type, extracted name, version)
     eve.json                   # Suricata's JSON output (PCAP only)
-    events.db                  # SQLite database (alerts + events + log events + sigma alerts)
+    events.db                  # SQLite database (network/log/email events, Sigma alerts, row notes, acknowledgements)
     name.txt                   # Human-readable display name
     notes.txt                  # Freeform analyst notes (absent unless explicitly added)
-    filestore/                 # Extracted files from Suricata file-store (PCAP only)
+    filestore/                 # Extracted files from Suricata file-store (PCAP), or an email's message and decoded attachments
     yara_matches.json          # YARA scan results (PCAP only; standalone binary uploads write matches straight to events.db)
     sigma_matches.json         # Sigma detection results (log files)
     file_metadata.json         # Type/MIME/entropy/strings/EXIF per extracted filestore file with no YARA match, keyed by SHA256 (PCAP only; standalone uploads keep theirs in events.db)

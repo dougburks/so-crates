@@ -23,7 +23,7 @@ Seventeen test files serve as executable specifications:
 - **test_sigma_analyzer_rules_setup.py** - Sigma rule setup: no-network/force-refresh behavior, baked-in fallback
 - **test_yara_analyzer.py** - YARA rule setup: no-network/force-refresh behavior, baked-in fallback
 - **test_exif_analyzer.py** - File category detection from MIME type/file-type heuristics
-- **test_validators.py** - Input validation: office/log file detection by extension, safe-IP resolution and the SSRF block list, IP/port validation, atomic decompression of baked-in rules
+- **test_validators.py** - Input validation: office/log file detection by extension, email-message detection by content (so a header like `Date: Tue, 3 Feb ...` isn't read as CSV), safe-IP resolution and the SSRF block list, IP/port validation, atomic decompression of baked-in rules
 - **test_ohmydebn_colors.py** - OhMyDebn theme-sync color derivation: `colors.toml`/`alacritty.toml` parsing, contrast-safety adjustments
 - **test_suricata_rule_sources.py** - Multi-ruleset Suricata source support: per-source fetch/enable/disable, baked-in library seeding
 - **test_suricata_sid_ranges.py** - SID-range-to-ruleset classification, and its consistency with `SURICATA_RULE_SOURCES`

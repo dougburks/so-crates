@@ -49,7 +49,7 @@ podman compose -f docker-compose.podman.yml restart
 
 ## Air-Gapped / Offline Deployment for Podman
 
-Our container image bakes in the Emerging Threats Open ruleset, YARA Forge rules, and SigmaHQ/Zircolite rules at build time, so PCAP, binary, and log analysis all work without internet access. To copy to an isolated network, pull and save the container image using an internet-connected machine:
+Our container image bakes in 14 Suricata rule sources (Emerging Threats Open enabled by default), YARA Forge rules, and SigmaHQ/Zircolite rules at build time, so PCAP, log, email and binary analysis - and the built-in sample files - all work without internet access. To copy to an isolated network, pull and save the container image using an internet-connected machine:
 
 ```bash
 podman pull ghcr.io/dougburks/so-crates:main

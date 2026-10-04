@@ -47,6 +47,7 @@ SO-CRATES's backend is split into domain modules. Do not add new logic directly 
 |---|---|
 | `validators.py` | Input validation and the small, focused I/O it depends on (no HTTP framework code). IP/port checks, filename sanitization, URL/SSRF safety (including DNS resolution via `resolve_safe_ips` and TCP reachability via `is_host_reachable`), PCAP magic bytes, ZIP slip prevention, file staleness checks. |
 | `suricata_analyzer.py` | Anything related to Suricata lifecycle: config setup, rule downloads, spawning subprocesses, processing locks, file extraction. |
+| `suricata_sid_ranges.py` | Mapping a Suricata SID to the ruleset it came from - shared by `db.py` and the API. |
 | `yara_analyzer.py` | YARA scanning: executable checks, rules download/setup, scanning extracted files, parsing output. |
 | `sigma_analyzer.py` | Sigma rule conversion/execution via Zircolite, importing log events into the events DB. Querying `sigma_alerts` back out is `db.py`'s job, not this module's. |
 | `file_analyzer.py` | Lightweight file metadata extraction (`file`-command magic/MIME type, Shannon entropy, printable strings). No hashing here - MD5/SHA256 are computed in `socrates.py`/`yara_analyzer.py`. |

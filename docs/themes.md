@@ -70,7 +70,7 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
 
 ## Fun Themes
 
-Every theme on this page (Fun or otherwise) can also be switched to by typing its name anywhere outside a text field and pressing Enter - see [Command Palette](usage/keyboard-and-menus.md#command-palette).
+Every theme on this page (Fun or otherwise) can also be switched to by typing its name anywhere outside a text field and pressing Enter (if what you've typed also matches another theme, arrow to the right one first) - see [Command Palette](usage/keyboard-and-menus.md#command-palette).
 
 - **Amber CRT** - monochrome amber phosphor on black, like a VT100/DEC-style business terminal, with a faint scanline overlay for the CRT effect
   <br><img loading="lazy" src="../images/themes/amber.png" width="360" height="225" alt="Amber CRT theme">

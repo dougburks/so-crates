@@ -8,6 +8,7 @@ Browser ──▶ socrates.py (Python HTTP server, port 8000)
                 ├──▶ Suricata (subprocess, analyzes PCAPs → eve.json)
                 ├──▶ Zircolite (subprocess, analyzes log files → Sigma matches)
                 ├──▶ YARA (scans binary/other files → yara_matches.json)
+                ├──▶ email_analyzer.py (in-process: parses .eml → email/link/fileinfo events, YARA on attachments)
                 ├──▶ exiftool (subprocess, optional EXIF metadata on binary files)
                 ├──▶ SQLite (indexes eve.json/Sigma matches → events.db)
                 ├──▶ tcpdump (carves individual streams & hexdumps)
@@ -51,7 +52,7 @@ A stdlib-only Python HTTP server (`http.server.SimpleHTTPRequestHandler`). Handl
 
 ### Request Flow
 
-1. **Upload/URL load** → validates input → saves file → spawns Suricata (PCAPs), Zircolite (log files), or YARA (everything else) → returns `processing`
+1. **Upload/URL load** → validates input → saves file → spawns Suricata (PCAPs), Zircolite (log files), the email parser + YARA (email messages), or YARA (everything else) → returns `processing`
 2. **Client polls** `/api/check-status` until analysis finishes
 3. **Analysis callback** (background thread) → indexes results into SQLite
 4. **Client loads analysis** → UI fetches events via `/api/events`

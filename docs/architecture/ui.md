@@ -15,6 +15,7 @@ Four files:
 
 ```
 Welcome Screen (no analysis loaded)
+  ├── Sample PCAP/log/binary/email cards (built in - load-builtin-sample → POST /api/load-sample)
   ├── URL input + file upload
   └── Previous analyses list
 
@@ -67,7 +68,7 @@ let tabDataCache = {};       // cached event data per type
 
 Each event type has its own column set. The "All Events" view uses a unified column set.
 
-**Shared columns (every network event type):** Time, Protocol, Source IP, Source Port, Dest IP, Dest Port. Log events and Sigma alerts have their own, data-dependent columns instead.
+**Shared columns (every network event type):** Time, Protocol, Source IP, Source Port, Dest IP, Dest Port. Log events and Sigma alerts have their own, data-dependent columns instead, and an email analysis's tabs (Emails, Links, File Info, File Alerts) have networkless ones (`EMAIL_MODE_COLUMNS`) and no All Events view.
 
 **Per-type columns:** e.g. Alert/Category/Severity (alerts), Query/Type (DNS), Method/Host/URL/Status (HTTP). Every event type on the [Event Types](event-types.md) page has its own set - 30+ types by now - defined in `getColumnsForType()` (`static/socrates.js`), which is the source of truth; this doc intentionally doesn't enumerate all of them; a full list here would just drift out of sync with every new protocol added (the same problem already found and fixed once in `filtering.md`'s old "Column Overlap" table).
 
