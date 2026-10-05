@@ -81,7 +81,7 @@ MP4_TRIM_START_SECONDS = 0.15
 VIEWPORT = {'width': 1920, 'height': 1400}
 
 # Solid on-brand blue (not translucent black) - a black/near-black caption
-# box used to disappear into the app's own near-black UI (welcome screen,
+# box used to disappear into the app's own near-black UI (main screen,
 # dark theme background) since rgba(0,0,0,0.85) barely differs from what's
 # behind it. #1f6feb matches the app's own button/accent blue (see
 # so-crates-welcome.png's "Got it!" button) so it reads as part of the UI's
@@ -364,7 +364,7 @@ async def main(base_url):
             '__CAPTION_TEXT__', json.dumps(welcome_caption))
         await page.add_init_script(caption_init_script)
 
-        # Welcome screen
+        # Main screen
         await page.goto(base_url, wait_until="networkidle")
         await page.wait_for_selector('#helpModal.active .modal-content', timeout=10000)
         welcome_modal = page.locator('#helpModal.active .modal-content')
@@ -726,7 +726,7 @@ async def main(base_url):
 
         # crf 18 (not the more typical 23) plus preset slow - the source is
         # a screen recording dominated by large flat/near-black regions
-        # (welcome screen, dark theme background), and crf 23's coarser
+        # (main screen, dark theme background), and crf 23's coarser
         # quantization on those regions was visible as banding (shade
         # shifting in what should be a single flat black) rather than the
         # blocking/blur crf differences usually show on natural video. This

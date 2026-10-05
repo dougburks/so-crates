@@ -12,7 +12,7 @@ Once you've connected to SO-CRATES in your browser, here are some of the things 
 
 When you first connect to SO-CRATES, a welcome window will appear with an overview of SO-CRATES:
 
-![Welcome screen](../images/so-crates-welcome.png)
+![Welcome window](../images/so-crates-welcome.png)
 
 When you dismiss the welcome window, the main screen allows you to upload a file or load a previous analysis:
 

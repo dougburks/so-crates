@@ -2,7 +2,7 @@
 
 <video controls preload="none" width="100%" src="../../videos/story.mp4" poster="../../videos/story-poster.jpg"></video>
 
-SO-CRATES has four sample files built in - an email, a Sysmon log, a PCAP, and a binary - that you can load from the sample cards on the Welcome screen, with nothing to upload and no internet access needed. Together they tell the story of one phishing incident, seen four ways, which the video above walks through. Try them yourself in the order below.
+SO-CRATES has four sample files built in - an email, a Sysmon log, a PCAP, and a binary - that you can load from the sample cards on the main screen, with nothing to upload and no internet access needed. Together they tell the story of one phishing incident, seen four ways, which the video above walks through. Try them yourself in the order below.
 
 Everything in them is fictional: they use only reserved `.example` domains and IP addresses set aside for documentation, and the "malware" is a fake that carries the [EICAR](https://www.eicar.org/) antivirus test string, so YARA flags it even though it's harmless.
 

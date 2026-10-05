@@ -340,7 +340,7 @@ class TestHTMLStructure(unittest.TestCase):
         self.assertIn('viewport', HTML_CONTENT)
 
     def test_has_title(self):
-        self.assertIn('SO-CRATES - Welcome', HTML_CONTENT)
+        self.assertIn('<title>SO-CRATES</title>', HTML_CONTENT)
 
     def test_has_container(self):
         self.assertIn('class="container"', HTML_CONTENT)

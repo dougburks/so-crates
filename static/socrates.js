@@ -4407,7 +4407,7 @@
         }
 
         async function showWelcome() {
-            document.title = 'SO-CRATES - Welcome';
+            document.title = 'SO-CRATES';
             closeAllModals();
             if (window.location.search.includes('file=') || window.location.search.includes('pcap=')) {
                 history.replaceState({}, '', window.location.pathname);

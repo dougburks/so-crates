@@ -14,7 +14,7 @@ Four files:
 ## UI States
 
 ```
-Welcome Screen (no analysis loaded)
+Main Screen (no analysis loaded)
   ├── Sample PCAP/log/binary/email cards (built in - load-builtin-sample → POST /api/load-sample)
   ├── URL input + file upload
   └── Previous analyses list

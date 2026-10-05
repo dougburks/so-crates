@@ -26,7 +26,7 @@ a web page.
 
 ### Samples that work offline
 
-All four sample cards on the Welcome screen - PCAP, log, binary, and
+All four sample cards on the main screen - PCAP, log, binary, and
 the new **Sample email file** - are now built into SO-CRATES, so they work on a
 network with no internet access. Together they tell one story: a
 phishing email, what its attachment did on the workstation, that

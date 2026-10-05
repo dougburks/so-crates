@@ -254,7 +254,7 @@ Before cutting a release:
    `docs/images/themes/*.png` (Themes page) against the URL box's default
    pcap (`DEFAULT_SAMPLE_URL` in `static/socrates.js` - a real infection's
    traffic on malware-traffic-analysis.net, loaded with the Go button; the
-   Welcome screen's Sample PCAP file card is a smaller built-in one, see
+   main screen's Sample PCAP file card is a smaller built-in one, see
    `samples.py`) - no local fixture or hardcoded MD5 needed, but it does
    need internet access. Run this on every release, not just when the UI visibly changes -
    stale screenshots (e.g. showing an old default value in the Welcome

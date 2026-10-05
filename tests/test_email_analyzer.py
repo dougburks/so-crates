@@ -443,7 +443,7 @@ class TestAnalyzeMessage(unittest.TestCase):
 
 
 class TestBuiltInEmailSample(unittest.TestCase):
-    """samples.build_email_sample - the Welcome screen's offline Sample
+    """samples.build_email_sample - the main screen's offline Sample
     email file - and the Sample binary file beside it."""
 
     def test_log_sample(self):

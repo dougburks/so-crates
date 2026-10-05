@@ -2,7 +2,7 @@
 """Record docs/videos/story.mp4 - the Home page's "Follow an investigation"
 video - against a locally running SO-CRATES server.
 
-Walks through the Welcome screen's four built-in samples (samples.py) in
+Walks through the main screen's four built-in samples (samples.py) in
 the order of the story they tell (docs/usage/sample-story.md): the
 phishing email, the workstation's Sysmon log, its network traffic, and
 the payload itself - showing email analysis, Sigma, Suricata with a
@@ -79,7 +79,7 @@ def _prewarm_samples(origin):
 
 
 async def _open_sample(page, label, hint):
-    """From the Welcome screen, click one of the Sample cards."""
+    """From the main screen, click one of the Sample cards."""
     card = page.locator('.sample-card', has_text=label)
     await caption(page, hint, card)
     await page.wait_for_timeout(3500)
@@ -91,7 +91,7 @@ async def _open_sample(page, label, hint):
 
 
 async def _back_to_welcome(page, hint):
-    """Escape returns to the Welcome screen once nothing else is open."""
+    """Escape returns to the main screen once nothing else is open."""
     await caption(page, hint)
     await page.wait_for_timeout(1800)
     await page.keyboard.press('Escape')
@@ -211,7 +211,7 @@ async def main(base_url):
             await page.goto(base_url, wait_until='networkidle')
             await page.wait_for_selector('#helpModal.active .modal-content', timeout=10000)
             await page.evaluate('closeHelpModal()')
-            # Returning to the Welcome screen between samples shouldn't reopen
+            # Returning to the main screen between samples shouldn't reopen
             # the Welcome window each time.
             await page.evaluate("localStorage.setItem('socrates_hideHelp', 'true')")
             await caption(page, intro)
@@ -301,7 +301,7 @@ async def main(base_url):
             await clear_pointer(page)
 
             await caption(page, "All four samples are built in and work offline -\n"
-                              "try them from the Welcome screen.\n\nhttps://so-crates.org")
+                              "try them from the main screen.\n\nhttps://so-crates.org")
             await page.wait_for_timeout(5000)
             await page.evaluate(CAPTION_REMOVE_JS)
             await page.wait_for_timeout(800)
