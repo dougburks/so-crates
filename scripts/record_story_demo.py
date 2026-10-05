@@ -294,7 +294,7 @@ async def main(base_url):
 
             # 4. The binary.
             await _back_to_welcome(page, 'Finally, the payload itself')
-            await _open_sample(page, 'Sample binary file', 'update.exe - the Sample binary file')
+            await _open_sample(page, 'Sample binary file', 'sample-update.exe - the Sample binary file')
             sha = page.locator('.file-info-card .label', has_text='SHA256').first
             await caption(page, "The same SHA256 as the file Suricata extracted - and YARA flags it", sha)
             await page.wait_for_timeout(5500)

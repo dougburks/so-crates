@@ -3109,7 +3109,7 @@ bright_magenta = "#D9B9D9"
         self._wait_ready(md5)
         with open(os.path.join(server.DATA_DIR, md5, '.meta')) as f:
             meta = json.load(f)
-        self.assertEqual((meta['detected_type'], meta['original']), ('binary', 'update.exe'))
+        self.assertEqual((meta['detected_type'], meta['original']), ('binary', 'sample-update.exe'))
 
     def test_load_sample_pcap(self):
         status, body = self._post('/api/load-sample', {'name': 'pcap'})

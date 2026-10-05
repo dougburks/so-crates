@@ -531,11 +531,12 @@ class TestBuiltInEmailSample(unittest.TestCase):
         self.assertIn(b'MZ', data)
 
     def test_binary_sample_is_the_pcap_samples_payload(self):
-        """update.exe, byte-for-byte the payload the pcap sample downloads -
-        so its hashes match the pcap analysis's extracted file."""
+        """sample-update.exe, byte-for-byte the update.exe payload the pcap
+        sample downloads - so its hashes match the pcap analysis's
+        extracted file. Named sample-* like the other three samples."""
         import samples
         filename, build = samples.SAMPLES['binary']
-        self.assertEqual(filename, 'update.exe')
+        self.assertEqual(filename, 'sample-update.exe')
         data = build()
         self.assertTrue(data.startswith(b'MZ'))
         self.assertIn(email_analyzer_eicar(), data)

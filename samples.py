@@ -354,7 +354,7 @@ def build_pcap_sample():
 # POST /api/load-sample accepts.
 SAMPLES = {
     'pcap': ('sample-workstation-traffic.pcap', build_pcap_sample),
-    'binary': ('update.exe', build_binary_sample),
+    'binary': ('sample-update.exe', build_binary_sample),
     'log': ('sample-sysmon-log.json', build_log_sample),
     'email': ('sample-phishing-email.eml', build_email_sample),
 }

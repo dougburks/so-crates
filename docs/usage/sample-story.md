@@ -18,5 +18,5 @@ Everything in them is fictional: they use only reserved `.example` domains and I
     - The same workstation (`10.20.4.12`) on the wire: the certutil download (same source port, same second as in the log), then the FTP upload of `PW_jordan.lee-FIN-WS-0412_….html` - a file of Jordan's harvested passwords, named the way the AgentTesla infostealer names them.
     - Suricata raises the AgentTesla alert, with its playbook, and extracts the payload. SO-CRATES automatically scans what Suricata extracts with YARA, so the payload's matches are already in the **File Alerts** tab.
 4. **Sample binary file**
-    - `update.exe` itself: byte-for-byte identical to the payload Suricata extracted from the PCAP, so the hashes match.
+    - `sample-update.exe` - the same `update.exe`, byte-for-byte identical to the payload Suricata extracted from the PCAP, so the hashes match.
     - YARA flags it on its own, without the PCAP - its **File Alerts** tab shows the same matches as the PCAP's.
