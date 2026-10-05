@@ -26,13 +26,13 @@ a web page.
 
 ### Samples that work offline
 
-All four sample cards on the main screen - PCAP, log, binary, and
-the new **Sample email file** - are now built into SO-CRATES, so they work on a
-network with no internet access. Together they tell one story: a
+All four sample cards on the main screen - PCAP, log, binary, and the
+new **Sample email file** - are now built into SO-CRATES, so they work
+on a network with no internet access. Together they tell one story: a
 phishing email, what its attachment did on the workstation, that
-workstation's traffic, and the payload itself - see [The sample
-story](usage/sample-story.md). The "malware" is a
-harmless fake carrying the EICAR antivirus test string.
+workstation's traffic, and the payload itself - see [The Sample
+Story](usage/sample-story.md). The "malware" is a harmless fake
+carrying the EICAR antivirus test string.
 
 The PCAP sample used to download real infection traffic from
 malware-traffic-analysis.net. That capture is still one click away:
