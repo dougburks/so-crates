@@ -598,6 +598,15 @@ class TestJavaScriptFunctions(unittest.TestCase):
     def test_has_welcomeHelpContent(self):
         self.assertIn('function getWelcomeHelpContent', JS_CONTENT)
 
+    def test_welcome_file_types_engine_column_fits_email_parser_yara(self):
+        """REGRESSION: at 18%, the Engine column wrapped "Email parser + YARA"
+        onto two lines in the Welcome window's fixed 808px table, making the
+        Email row twice as tall. File Extensions (whose longest value, the
+        log extensions, fits in 34%) gives the Engine column 6%."""
+        widths = dict((name, int(w)) for w, name in re.findall(
+            r'width: (\d+)%;">(File Type|File Extensions|Engine|Ruleset)</th>', JS_CONTENT))
+        self.assertEqual(widths, {'File Type': 18, 'File Extensions': 34, 'Engine': 24, 'Ruleset': 24})
+
     def test_has_showAnalysisUI(self):
         self.assertIn('function showAnalysisUI', JS_CONTENT)
 

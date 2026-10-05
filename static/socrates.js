@@ -2231,8 +2231,8 @@
                 <thead>
                     <tr style="border-bottom: 1px solid var(--border-color);">
                         <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 18%;">File Type</th>
-                        <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 40%;">File Extensions</th>
-                        <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 18%;">Engine</th>
+                        <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 34%;">File Extensions</th>
+                        <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 24%;">Engine</th>
                         <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 24%;">Ruleset</th>
                     </tr>
                 </thead>
