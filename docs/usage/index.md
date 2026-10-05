@@ -2,6 +2,7 @@
 
 Once you've connected to SO-CRATES in your browser, here are some of the things you can do. Start with the tour below, then dig into the details:
 
+- [The Sample Story](sample-story.md) - one phishing incident, followed through the four built-in samples
 - [Analyzing Files](analyzing-files.md) - uploading, loading from a URL, ZIPs, and reanalyzing
 - [Exploring Results](exploring-results.md) - what each tab shows for PCAP, log, email, and binary analyses, including DNS Heuristics
 - [Filtering & Drill-Down](filtering-and-drilldown.md) - the pivot menu, AI summaries, playbooks, notes, and stream analysis

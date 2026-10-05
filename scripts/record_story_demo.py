@@ -3,11 +3,11 @@
 video - against a locally running SO-CRATES server.
 
 Walks through the Welcome screen's four built-in samples (samples.py) in
-the order of the story they tell (docs/usage/analyzing-files.md, "The
-sample story"): the phishing email, the workstation's Sysmon log, its
-network traffic, and the payload itself - showing email analysis, Sigma,
-Suricata with a playbook, YARA, and CyberChef decoding values from the
-email and the log along the way.
+the order of the story they tell (docs/usage/sample-story.md): the
+phishing email, the workstation's Sysmon log, its network traffic, and
+the payload itself - showing email analysis, Sigma, Suricata with a
+playbook, YARA, and CyberChef decoding values from the email and the log
+along the way.
 
 Everything comes from the built-in samples, so recording needs no
 internet access. Same requirements as scripts/record_demo.py (whose

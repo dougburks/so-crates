@@ -240,7 +240,7 @@ Before cutting a release:
    http://127.0.0.1:<port>/socrates.html`, against its **own** fresh
    container (it loads the four built-in samples, which would show up in
    the screenshots' Previous Analyses list). It walks the sample story
-   (`samples.py`, docs/usage/analyzing-files.md) and publishes
+   (`samples.py`, docs/usage/sample-story.md) and publishes
    `docs/videos/story.mp4` and `docs/videos/story-poster.jpg`, splicing
    each CyberChef tab's separate Playwright recording into the SO-CRATES
    tab's - see its module docstring. It needs no internet access. Re-run
