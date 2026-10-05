@@ -275,6 +275,78 @@ class TestHostileInput(unittest.TestCase):
         self.assertIn("The message's structure could not be parsed - only its headers were analyzed", top['warnings'])
         self.assertEqual(attachments, [])
 
+    def test_unparsable_header_falls_back_to_raw_headers(self):
+        """REGRESSION: thousands of nested comments in Content-Type made the
+        header parser recurse past the limit - in the headers-only retry
+        too - so the whole analysis failed with no events. compat32 leaves
+        headers as raw text and still reads the body."""
+        raw = (b'From: a@example.com\r\nSubject: hi\r\nContent-Type: text/plain; charset=utf-8 '
+               + b'(' * 5000 + b'\r\n\r\nsee http://x.example/a\r\n')
+        events, _, top = self._parse(raw)
+        self.assertEqual(top['subject'], 'hi')
+        self.assertIn('see http://x.example/a', top['body'])
+        self.assertEqual(len(_by_type(events, 'link')), 1)
+        self.assertIn("Some of the message's headers could not be decoded - they are shown as raw text",
+                      top['warnings'])
+
+    def test_message_that_cannot_be_parsed_at_all_still_gets_an_event(self):
+        with mock.patch.object(email_analyzer.BytesParser, 'parsebytes', side_effect=RecursionError):
+            events, attachments, top = self._parse(b'From: a@example.com\r\n\r\nx\r\n')
+        self.assertEqual(len(events), 1)
+        self.assertEqual(attachments, [])
+        self.assertEqual(top['warnings'], ['The message could not be parsed'])
+
+    def test_hostile_content_disposition_does_not_hide_the_other_attachments(self):
+        """REGRESSION: get_content_disposition() raised on one part's
+        deeply nested comments, dropping the whole message to headers-only
+        - so an executable in another part was never stored or scanned."""
+        raw = (b'From: a@example.com\r\nSubject: s\r\n'
+               b'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+               b'--B\r\nContent-Type: text/plain\r\n\r\nbody\r\n'
+               b'--B\r\nContent-Type: application/octet-stream\r\n'
+               b'Content-Disposition: attachment; filename="good.exe"\r\n\r\nMZpayload\r\n'
+               b'--B\r\nContent-Type: application/octet-stream\r\n'
+               b'Content-Disposition: attachment ' + b'(' * 3000 + b'\r\n\r\nother\r\n'
+               b'--B--\r\n')
+        _, attachments, top = self._parse(raw)
+        self.assertIn('good.exe', [a[0] for a in attachments])
+        self.assertEqual(len(attachments), 2)
+        self.assertNotIn("The message's structure could not be parsed - only its headers were analyzed",
+                         top['warnings'])
+
+    def test_broken_forward_leaves_no_orphan_attachment(self):
+        """A forward that fails to parse is reported - and its attachments,
+        which no email event would list, are dropped and don't use up the
+        attachment budget."""
+        fwd = EmailMessage()
+        fwd['Subject'] = 'broken'
+        fwd.set_content('x')
+        fwd.add_attachment(b'MZ', maintype='application', subtype='octet-stream', filename='inner.exe')
+        outer = EmailMessage()
+        outer['Subject'] = 'outer'
+        outer.set_content('x')
+        outer.add_attachment(fwd)
+        real = email_analyzer._auth_results
+        def auth(msg):
+            if email_analyzer._header(msg, 'Subject') == 'broken':
+                raise ValueError('boom')
+            return real(msg)
+        with mock.patch.object(email_analyzer, '_auth_results', side_effect=auth):
+            events, attachments, top = self._parse(outer.as_bytes())
+        self.assertEqual(len(_by_type(events, 'email')), 1)
+        self.assertEqual(attachments, [])
+        self.assertIn('1 forwarded message(s) could not be parsed', top['warnings'])
+
+    def test_skipped_links_are_counted_once_each(self):
+        """REGRESSION: past the link limit, repeats of one URL - and a bare
+        URL that only repeats an <a> - were each counted as skipped."""
+        raw = (b'From: a@example.com\r\nContent-Type: text/html\r\n\r\n'
+               b'<a href="http://a.example/">a</a> <a href="http://z.example/">z</a>'
+               b'<a href="http://z.example/">z</a><a href="http://z.example/">z</a> http://a.example/\r\n')
+        with mock.patch.object(config, 'MAX_EMAIL_LINKS', 1):
+            _, _, top = self._parse(raw)
+        self.assertIn('Beyond the analysis limits, not analyzed: 1 link(s)', top['warnings'])
+
     def test_reply_to_subdomain_of_from_is_not_a_warning(self):
         _, _, top = self._parse(b'From: x@example.com\r\nReply-To: support@mail.example.com\r\n\r\nx\r\n')
         self.assertEqual(top['warnings'], [])

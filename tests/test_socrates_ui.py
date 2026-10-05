@@ -15653,6 +15653,15 @@ class TestMaybeLinkifyValueSecurity(unittest.TestCase):
 
 
 class TestLogAnalysisUI(unittest.TestCase):
+    def test_log_table_cells_wrap_long_unbroken_values(self):
+        """REGRESSION: a long CommandLine (a base64 PowerShell stager) has no
+        spaces, so with only overflow-wrap: break-word it set the column's
+        min-content width and pushed the log table to ~3,700px - the expanded
+        detail panel ran off-screen. Log and Sigma cells must wrap anywhere."""
+        m = re.search(r'#section-log td,\s*#section-sigmaalert td\s*\{([^}]*)\}', CSS_CONTENT)
+        self.assertIsNotNone(m, 'log/Sigma table cells need their own wrapping rule')
+        self.assertIn('overflow-wrap: anywhere', m.group(1))
+
     def test_discoverLogColumns_prioritizes_known_fields(self):
         """discoverLogColumns must return base fields first, then dynamic fields, max 8 total."""
         from tests.jsdom_helper import js_statements

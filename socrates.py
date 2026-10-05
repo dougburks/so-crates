@@ -298,6 +298,7 @@ def _email_or_binary(path):
     except OSError:
         return 'email'
 
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     # Set by do_GET for a /cyberchef/ request that passed its path checks -
     # switches translate_path() to CYBERCHEF_DIR and _add_security_headers()

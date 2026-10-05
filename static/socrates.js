@@ -9151,7 +9151,7 @@
                 // below and dnsHeuristicsCountStale's own comment) - NOT
                 // the raw DNS event count, which would read as "this many
                 // suspicious things" on a card literally labeled DNS
-                // Heuristics. Guarded by !isLogAnalysisMode even though
+                // Heuristics. The !isLogAnalysisMode guard is defensive:
                 // 'dns' can't actually occur in log-analysis (or email)
                 // mode in practice.
                 if (type === 'dns' && !isLogAnalysisMode) {
@@ -9530,7 +9530,7 @@
         
         function extractValue(e, col, colIndex) {
             switch(col) {
-                // For sorting the tabs sorted in the browser (email mode,
+                // Used to sort the tabs that sort client-side (email mode,
                 // mqtt/ldap) - Time is never aggregated or filtered on.
                 case 'Time': return e.timestamp || '';
                 case 'Protocol': return e.proto || '';
@@ -10284,9 +10284,9 @@
         // currentSort and re-fetches just one page in the new order, so no
         // full-batch fetch is needed here. For everything else ('all',
         // sigmaalert, log, binary, mqtt, ldap, and every tab in email mode),
-        // clicking a column header while in
-        // scalable mode must first fetch the full capped batch (a no-op if
-        // already cached for aggregations/Sankey) before currentSort takes
+        // clicking a column header while in scalable mode must first fetch
+        // the full capped batch (a no-op if already cached for
+        // aggregations/Sankey) before currentSort takes
         // effect - canUseScalableFetch() becomes false the moment it's set,
         // so the next rerender() naturally takes the fallback (full-batch,
         // client-side sort) path through the same top-level build function.

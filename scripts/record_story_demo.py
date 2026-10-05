@@ -186,132 +186,134 @@ async def _show_in_cyberchef(context, page, captions, cyberchef_windows, start):
 
 
 async def main(base_url):
-    origin = base_url.rsplit('/socrates.html', 1)[0]
+    origin = base_url.rsplit('/socrates.html', 1)[0].rstrip('/')
     _prewarm_samples(origin)
     os.makedirs(os.path.dirname(MP4_OUTPUT), exist_ok=True)
     tmp_video_dir = tempfile.mkdtemp(prefix='so-crates-story-video-')
     poster_png = os.path.join(tmp_video_dir, 'poster.png')
     cyberchef_windows = []  # (opened, closed, video path), seconds from the main tab's start
 
-    async with async_playwright() as p:
-        launch_kwargs = {'headless': True}
-        chromium_path = find_chromium()
-        if chromium_path:
-            launch_kwargs['executable_path'] = chromium_path
-        browser = await p.chromium.launch(**launch_kwargs)
-        context = await browser.new_context(viewport=VIEWPORT, record_video_dir=tmp_video_dir,
-                                            record_video_size=VIEWPORT)
-        page = await context.new_page()
-        start = time.monotonic()
+    try:
+        async with async_playwright() as p:
+            launch_kwargs = {'headless': True}
+            chromium_path = find_chromium()
+            if chromium_path:
+                launch_kwargs['executable_path'] = chromium_path
+            browser = await p.chromium.launch(**launch_kwargs)
+            context = await browser.new_context(viewport=VIEWPORT, record_video_dir=tmp_video_dir,
+                                                record_video_size=VIEWPORT)
+            page = await context.new_page()
+            start = time.monotonic()
 
-        intro = ("Follow an investigation\n\n"
-                 "One phishing email, seen four ways - with SO-CRATES's four built-in samples")
-        await page.add_init_script(CAPTION_INIT_JS_TEMPLATE.replace('__CAPTION_TEXT__', json.dumps(intro)))
-        await page.goto(base_url, wait_until='networkidle')
-        await page.wait_for_selector('#helpModal.active .modal-content', timeout=10000)
-        await page.evaluate('closeHelpModal()')
-        # Returning to the Welcome screen between samples shouldn't reopen
-        # the Welcome window each time.
-        await page.evaluate("localStorage.setItem('socrates_hideHelp', 'true')")
-        await caption(page, intro)
-        await page.wait_for_timeout(4500)
+            intro = ("Follow an investigation\n\n"
+                     "One phishing email, seen four ways - with SO-CRATES's four built-in samples")
+            await page.add_init_script(CAPTION_INIT_JS_TEMPLATE.replace('__CAPTION_TEXT__', json.dumps(intro)))
+            await page.goto(base_url, wait_until='networkidle')
+            await page.wait_for_selector('#helpModal.active .modal-content', timeout=10000)
+            await page.evaluate('closeHelpModal()')
+            # Returning to the Welcome screen between samples shouldn't reopen
+            # the Welcome window each time.
+            await page.evaluate("localStorage.setItem('socrates_hideHelp', 'true')")
+            await caption(page, intro)
+            await page.wait_for_timeout(4500)
 
-        # 1. The email.
-        await _open_sample(page, 'Sample email file', 'It starts with an email - the Sample email file')
-        detail = await _expand_row(page, 'Emails', 'ACTION REQUIRED')
-        warnings = detail.locator('.detail-label', has_text='From').first
-        await detail.locator('span', has_text='Warnings').first.scroll_into_view_if_needed()
-        await page.evaluate('window.scrollBy(0, -120)')
-        await page.wait_for_timeout(500)
-        await caption(page, "\"Northbridge Payroll\" wants Jordan to confirm a direct deposit -\n"
-                            "SO-CRATES lists the warning signs", warnings)
-        await page.wait_for_timeout(2500)
-        await page.evaluate(CAPTION_REMOVE_JS)
-        await page.screenshot(path=poster_png)
-        await caption(page, "Spoofed sender, failing SPF and DMARC, replies to a look-alike domain,\n"
-                            "a link that lies, and a macro-enabled attachment")
-        await page.wait_for_timeout(5500)
+            # 1. The email.
+            await _open_sample(page, 'Sample email file', 'It starts with an email - the Sample email file')
+            detail = await _expand_row(page, 'Emails', 'ACTION REQUIRED')
+            from_label = detail.locator('.detail-label', has_text='From').first
+            await detail.locator('span', has_text='Warnings').first.scroll_into_view_if_needed()
+            await page.evaluate('window.scrollBy(0, -120)')
+            await page.wait_for_timeout(500)
+            await caption(page, "\"Northbridge Payroll\" wants Jordan to confirm a direct deposit -\n"
+                                "SO-CRATES lists the warning signs", from_label)
+            await page.wait_for_timeout(2500)
+            await page.evaluate(CAPTION_REMOVE_JS)
+            await page.screenshot(path=poster_png)
+            await caption(page, "Spoofed sender, failing SPF and DMARC, replies to a look-alike domain,\n"
+                                "a link that lies, and a macro-enabled attachment")
+            await page.wait_for_timeout(5500)
 
-        detail = await _expand_row(page, 'Links', 'account-verify')
-        await caption(page, "The \"portal\" link's text says portal.northbridgepay.example -\n"
-                            "it really goes somewhere else, and carries a token", detail.locator('.detail-value-pivot').first)
-        await page.wait_for_timeout(5000)
-        await clear_pointer(page)
-        await _drag_select(page, detail, 'Select the token after ?u= ...', '?u=')
-        await _show_in_cyberchef(context, page, (
-            "Magic recognizes base64", "Jordan's own address - the sender knows exactly who clicked"),
-            cyberchef_windows, start)
+            detail = await _expand_row(page, 'Links', 'account-verify')
+            await caption(page, "The \"portal\" link's text says portal.northbridgepay.example -\n"
+                                "it really goes somewhere else, and carries a token", detail.locator('.detail-value-pivot').first)
+            await page.wait_for_timeout(5000)
+            await clear_pointer(page)
+            await _drag_select(page, detail, 'Select the token after ?u= ...', '?u=')
+            await _show_in_cyberchef(context, page, (
+                "Magic recognizes base64", "Jordan's own address - the sender knows exactly who clicked"),
+                cyberchef_windows, start)
 
-        await caption(page, "Next: the attachment")
-        await page.locator('.stat-card', has_text='File Alerts').first.click()
-        await page.wait_for_timeout(1500)
-        await caption(page, "YARA flags the macro document, Payroll_Adjustment_Form.docm",
-                      page.locator('.section:not(.section-hidden) tbody tr[data-id]').first)
-        await page.wait_for_timeout(4500)
-        await clear_pointer(page)
+            await caption(page, "Next: the attachment")
+            await page.locator('.stat-card', has_text='File Alerts').first.click()
+            await page.wait_for_timeout(1500)
+            await caption(page, "YARA flags the macro document, Payroll_Adjustment_Form.docm",
+                          page.locator('.section:not(.section-hidden) tbody tr[data-id]').first)
+            await page.wait_for_timeout(4500)
+            await clear_pointer(page)
 
-        # 2. The log.
-        await _back_to_welcome(page, 'Jordan opened it. What happened on the workstation?')
-        await _open_sample(page, 'Sample log file', "The workstation's Sysmon log - the Sample log file")
-        await caption(page, "20 Sigma alerts: Word starting PowerShell, a download from the email's IP,\n"
-                            "persistence, credential hunting", page.locator('.section:not(.section-hidden) tbody tr[data-id]').first)
-        await page.wait_for_timeout(5500)
-        await clear_pointer(page)
-        # Through the alert's own matched event, not the Log Events tab:
-        # that table is wider than the window, so the command line runs
-        # off-screen there.
-        await caption(page, "One alert - Base64 Encoded PowerShell. What did it run?")
-        detail = await _expand_row(page, 'Sigma Alerts', 'Base64 Encoded PowerShell')
-        await _drag_select(page, detail, 'Select the base64 it decodes ...', "FromBase64String('", "'")
-        await _show_in_cyberchef(context, page, (
-            "Magic decodes it", "certutil fetching update.bin from the email's sending IP - then running it"),
-            cyberchef_windows, start)
+            # 2. The log.
+            await _back_to_welcome(page, 'Jordan opened it. What happened on the workstation?')
+            await _open_sample(page, 'Sample log file', "The workstation's Sysmon log - the Sample log file")
+            await caption(page, "Sigma flags each step: Word starting PowerShell, a download from the email's IP,\n"
+                                "persistence, credential hunting", page.locator('.section:not(.section-hidden) tbody tr[data-id]').first)
+            await page.wait_for_timeout(5500)
+            await clear_pointer(page)
+            # Through the alert's own matched event, not the Log Events tab:
+            # that table is wider than the window, so the command line runs
+            # off-screen there.
+            await caption(page, "One alert - Base64 Encoded PowerShell. What did it run?")
+            detail = await _expand_row(page, 'Sigma Alerts', 'Base64 Encoded PowerShell')
+            await _drag_select(page, detail, 'Select the base64 it decodes ...', "FromBase64String('", "'")
+            await _show_in_cyberchef(context, page, (
+                "Magic decodes it", "certutil fetching update.bin from the email's sending IP - then running it"),
+                cyberchef_windows, start)
 
-        # 3. The pcap.
-        await _back_to_welcome(page, 'And on the wire?')
-        await _open_sample(page, 'Sample PCAP file', "The workstation's traffic - the Sample PCAP file")
-        detail = await _expand_row(page, 'Network Alerts', 'AgentTesla')
-        playbook = detail.locator('span', has_text='Playbook').first
-        await playbook.wait_for(timeout=15000)
-        await playbook.scroll_into_view_if_needed()
-        await caption(page, "Suricata catches AgentTesla exfiltrating over FTP -\n"
-                            "with an AI summary and a playbook to guide the investigation", playbook)
-        await page.wait_for_timeout(6000)
-        await clear_pointer(page)
-        stor = detail.locator('.ascii-transcript div', has_text='STOR PW_').last
-        await stor.wait_for(timeout=15000)
-        await stor.scroll_into_view_if_needed()
-        await caption(page, "The transcript shows what left: Jordan's harvested passwords", stor)
-        await page.wait_for_timeout(5000)
-        await clear_pointer(page)
-        detail = await _expand_row(page, 'File Info', 'update.bin')
-        sha = detail.locator('.detail-label', has_text='SHA256').first
-        await sha.scroll_into_view_if_needed()
-        await caption(page, "Suricata also extracted the payload, update.bin - note its SHA256", sha)
-        await page.wait_for_timeout(5000)
-        await clear_pointer(page)
+            # 3. The pcap.
+            await _back_to_welcome(page, 'And on the wire?')
+            await _open_sample(page, 'Sample PCAP file', "The workstation's traffic - the Sample PCAP file")
+            detail = await _expand_row(page, 'Network Alerts', 'AgentTesla')
+            playbook = detail.locator('span', has_text='Playbook').first
+            await playbook.wait_for(timeout=15000)
+            await playbook.scroll_into_view_if_needed()
+            await caption(page, "Suricata catches AgentTesla exfiltrating over FTP -\n"
+                                "with an AI summary and a playbook to guide the investigation", playbook)
+            await page.wait_for_timeout(6000)
+            await clear_pointer(page)
+            stor = detail.locator('.ascii-transcript div', has_text='STOR PW_').last
+            await stor.wait_for(timeout=15000)
+            await stor.scroll_into_view_if_needed()
+            await caption(page, "The transcript shows what left: Jordan's harvested passwords", stor)
+            await page.wait_for_timeout(5000)
+            await clear_pointer(page)
+            detail = await _expand_row(page, 'File Info', 'update.bin')
+            sha = detail.locator('.detail-label', has_text='SHA256').first
+            await sha.scroll_into_view_if_needed()
+            await caption(page, "Suricata also extracted the payload, update.bin - note its SHA256", sha)
+            await page.wait_for_timeout(5000)
+            await clear_pointer(page)
 
-        # 4. The binary.
-        await _back_to_welcome(page, 'Finally, the payload itself')
-        await _open_sample(page, 'Sample binary file', 'update.exe - the Sample binary file')
-        sha = page.locator('.file-info-card .label', has_text='SHA256').first
-        await caption(page, "The same SHA256 as the file Suricata extracted - and YARA flags it", sha)
-        await page.wait_for_timeout(5500)
-        await clear_pointer(page)
+            # 4. The binary.
+            await _back_to_welcome(page, 'Finally, the payload itself')
+            await _open_sample(page, 'Sample binary file', 'update.exe - the Sample binary file')
+            sha = page.locator('.file-info-card .label', has_text='SHA256').first
+            await caption(page, "The same SHA256 as the file Suricata extracted - and YARA flags it", sha)
+            await page.wait_for_timeout(5500)
+            await clear_pointer(page)
 
-        await caption(page, "All four samples are built in and work offline -\n"
-                          "try them from the Welcome screen.\n\nhttps://so-crates.org")
-        await page.wait_for_timeout(5000)
-        await page.evaluate(CAPTION_REMOVE_JS)
-        await page.wait_for_timeout(800)
-        total = time.monotonic() - start
-        video = page.video
-        await context.close()
-        main_video = await video.path()
-        await browser.close()
+            await caption(page, "All four samples are built in and work offline -\n"
+                              "try them from the Welcome screen.\n\nhttps://so-crates.org")
+            await page.wait_for_timeout(5000)
+            await page.evaluate(CAPTION_REMOVE_JS)
+            await page.wait_for_timeout(800)
+            total = time.monotonic() - start
+            video = page.video
+            await context.close()
+            main_video = await video.path()
+            await browser.close()
 
-    _stitch(main_video, total, cyberchef_windows, tmp_video_dir, poster_png)
-    shutil.rmtree(tmp_video_dir, ignore_errors=True)
+        _stitch(main_video, total, cyberchef_windows, tmp_video_dir, poster_png)
+    finally:
+        shutil.rmtree(tmp_video_dir, ignore_errors=True)
 
 
 def _stitch(main_video, total, cyberchef_windows, tmp_dir, poster_png):

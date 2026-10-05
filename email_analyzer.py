@@ -16,7 +16,8 @@ Everything is parsed with the standard library (email, html.parser). The
 message's HTML is only ever read, never rendered, and every value is
 displayed escaped. Phishing mail is hostile input, so parsing degrades
 rather than fails: a header the strict parser chokes on is read raw, a
-structure it can't parse falls back to the headers alone, and whatever
+structure it can't parse falls back to raw headers or to the headers
+alone, and whatever
 the config.MAX_EMAIL_* limits cut off is reported as a warning rather
 than silently dropped. Messages over config.MAX_EMAIL_SIZE never get
 here - they're analyzed as plain files (socrates.py's _detect_file_type).
@@ -30,6 +31,7 @@ import shutil
 import subprocess
 from datetime import datetime, timezone
 from email import policy
+from email.message import Message
 from email.parser import BytesParser
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
@@ -289,19 +291,31 @@ def parse_message(raw, now=None):
     'link' events (see the module docstring), and the decoded attachments as
     (filename, data, timestamp) for analyze_message to store and scan.
 
-    Degrades rather than raises: if the message's structure can't be
-    parsed (the stdlib parser recurses per nesting level, so thousands of
-    nested parts raise RecursionError), its headers alone are analyzed,
-    with a warning saying so."""
+    Degrades rather than raises. The stdlib parser recurses per nesting
+    level, both in a message's structure (thousands of nested parts) and
+    in a structured header (thousands of nested comments), raising
+    RecursionError. So a message policy.default can't parse is retried
+    with policy.compat32, which leaves headers as raw text; failing that,
+    its headers alone are analyzed; failing that, an email event carries
+    only a warning. Each step down says so in a warning."""
     now = now or datetime.now(timezone.utc).isoformat()
-    try:
-        return _parse(BytesParser(policy=policy.default).parsebytes(raw), now, headers_only=False)
-    except Exception:
-        events, attachments = _parse(BytesParser(policy=policy.default).parsebytes(raw, headersonly=True),
-                                     now, headers_only=True)
-        events[0]['email']['warnings'].append(
-            "The message's structure could not be parsed - only its headers were analyzed")
+    attempts = (
+        (policy.default, False, None),
+        (policy.compat32, False, "Some of the message's headers could not be decoded - they are shown as raw text"),
+        (policy.compat32, True, "The message's structure could not be parsed - only its headers were analyzed"),
+    )
+    for msg_policy, headers_only, warning in attempts:
+        try:
+            msg = BytesParser(policy=msg_policy).parsebytes(raw, headersonly=headers_only)
+            events, attachments = _parse(msg, now, headers_only)
+        except Exception:
+            continue
+        if warning:
+            events[0]['email']['warnings'].append(warning)
         return events, attachments
+    events, attachments = _parse(Message(), now, headers_only=True)
+    events[0]['email']['warnings'].append("The message could not be parsed")
+    return events, attachments
 
 
 def _parse(msg, now, headers_only):
@@ -316,7 +330,7 @@ def _parse(msg, now, headers_only):
     if skipped['links']:
         cut.append(f"{skipped['links']} link(s)")
     if skipped['messages']:
-        cut.append(f"{skipped['messages']} forwarded message(s)")
+        cut.append(f"{skipped['messages']} forwarded message(s) (and anything inside them)")
     if cut:
         # Somewhere for an attacker to hide something - say so.
         events[0]['email']['warnings'].append(
@@ -355,12 +369,20 @@ def _parse_into(msg, depth, fallback_ts, events, attachments, budget, skipped, h
     plain, html, names, nested = [], [], [], []
 
     for part in ([] if headers_only else _own_parts(msg, nested)):
+        # Reading these parses the header, which can raise on hostile input;
+        # a part that won't say what it is gets stored and scanned.
         try:
             filename = part.get_filename()
         except Exception:
             filename = None
-        disposition = (part.get_content_disposition() or '').lower()
-        ctype = part.get_content_type()
+        try:
+            disposition = (part.get_content_disposition() or '').lower()
+        except Exception:
+            disposition = 'attachment'
+        try:
+            ctype = part.get_content_type()
+        except Exception:
+            ctype = 'application/octet-stream'
         if filename or disposition == 'attachment' or not ctype.startswith('text/'):
             if not budget['attachments']:
                 skipped['attachments'] += 1
@@ -401,13 +423,13 @@ def _parse_into(msg, depth, fallback_ts, events, attachments, budget, skipped, h
     for url, text, source in links:
         if (url, text) in seen:
             continue
-        if not budget['links']:
-            skipped['links'] += 1
-            continue
         seen.add((url, text))
         # A bare URL in text repeats an <a> already seen - keep the one
         # that has visible text to compare against.
         if not text and any(u == url for u, t in seen if t):
+            continue
+        if not budget['links']:
+            skipped['links'] += 1
             continue
         budget['links'] -= 1
         host = _host_of(url)
@@ -480,11 +502,20 @@ def _parse_into(msg, depth, fallback_ts, events, attachments, budget, skipped, h
             skipped['messages'] += 1
             continue
         budget['messages'] -= 1
+        # One broken forward doesn't sink the message it came in. Collect
+        # its results apart and keep them only if it parses, so a forward
+        # that fails leaves no attachment behind that no email lists.
+        saved_budget, saved_skipped = dict(budget), dict(skipped)
+        sub_events, sub_attachments = [], []
         try:
-            _parse_into(sub, depth + 1, ts, events, attachments, budget, skipped)
+            _parse_into(sub, depth + 1, ts, sub_events, sub_attachments, budget, skipped)
         except Exception:
-            # One broken forward doesn't sink the message it came in.
+            budget.update(saved_budget)
+            skipped.update(saved_skipped)
             skipped['unparsable'] += 1
+            continue
+        events.extend(sub_events)
+        attachments.extend(sub_attachments)
 
 
 def _magic(path):

@@ -10,38 +10,42 @@ starts with an email's headers), directly or inside a ZIP:
 - **Emails** - the message and any forwarded message attached to it:
   sender and recipients, the SPF, DKIM and DMARC results, the Received
   chain with the originating IP, and the body text
-- **Warnings** for the classic phishing signs - a Reply-To or
+- **Warnings** - the classic phishing signs: a Reply-To or
   Return-Path on a different domain than the sender, failing SPF, DKIM or
   DMARC, links that lie about where they go, and attachments that are
   executables or macro-enabled Office documents
 - **Links** - every web link, flagged when its visible text names a
-  different domain than it actually goes to (`https://www.bank.example`
-  that really leads somewhere else)
-- **Attachments** are decoded and YARA-scanned - malware that hides from
-  a scan of the raw message in its base64 encoding no longer does - and
-  each has a **Send to CyberChef** button
+  different domain than it actually goes to (link text reading
+  `https://www.bank.example` that leads somewhere else)
+- **Attachments** - decoded and YARA-scanned, so malware hidden by
+  base64 encoding no longer slips past a scan of the raw message. Each
+  has a **Send to CyberChef** button
 
 The message's HTML is read for its links and text but never displayed as
 a web page.
 
 ### Samples that work offline
 
-All four sample buttons on the Welcome screen - PCAP, log, binary and
-the new email sample - are now built into SO-CRATES, so they work on a
+All four sample cards on the Welcome screen - PCAP, log, binary, and
+the new **Sample email file** - are now built into SO-CRATES, so they work on a
 network with no internet access. Together they tell one story: a
 phishing email, what its attachment did on the workstation, that
 workstation's traffic, and the payload itself - see [The sample
 story](usage/analyzing-files.md#the-sample-story). The "malware" is a
 harmless fake carrying the EICAR antivirus test string.
 
-The real infection traffic the PCAP sample used to download is still
-one click away: it's the default in the Load from URL box.
+The PCAP sample used to download real infection traffic from
+malware-traffic-analysis.net. That capture is still one click away:
+it's the default URL in the Load from URL box - click **Go**.
 
 ### Fixes
 
-- An email message whose first header contained a comma (such as
-  `Date: Tue, 3 Feb 2026 ...`) was mistaken for a CSV log and came back
-  as an empty analysis
+- An email message whose first header contains a comma (such as
+  `Date: Tue, 3 Feb 2026 ...`) is no longer mistaken for a CSV log
+  (which produced an empty analysis)
+- A long value in a log or Sigma alert table, such as a command line
+  with a base64 string, now wraps instead of pushing the table - and an
+  expanded event's details - off the side of the page
 
 ## 4.3.0
 
