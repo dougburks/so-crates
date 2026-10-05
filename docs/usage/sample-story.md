@@ -8,7 +8,7 @@ Everything in them is fictional: they use only reserved `.example` domains and I
 
 1. **Sample email file**
     - At 08:41 on 3 February 2026, Jordan Lee gets an urgent "confirm your direct deposit" email that appears to come from Northbridge Payroll.
-    - It was sent from `203.0.113.66`, fails SPF and DMARC, sends replies to a look-alike domain, has a "portal" link that goes somewhere else entirely, and attaches a macro-enabled Word document, `Payroll_Adjustment_Form.docm`.
+    - It was sent from `203.0.113.66`, fails SPF and DMARC, sends replies to a look-alike domain, has a "portal" link that goes somewhere else entirely, and attaches a macro-enabled Word document, `Payroll_Adjustment_Form.docm`. SO-CRATES decodes the attachment and scans it with YARA, so its matches are in the **File Alerts** tab.
     - In the **Links** tab, select the value after `?u=` in the mismatched link and choose CyberChef from the pivot menu - the value decodes to `jordan.lee@corp.example`, so the sender knows exactly who clicked.
 2. **Sample log file**
     - Sysmon logs from Jordan's workstation, `FIN-WS-0412`. At 08:44 Word opens the form and launches a hidden PowerShell window running a base64-encoded command. certutil then downloads `update.bin` from the email's sending IP and saves it as `update.exe`.
