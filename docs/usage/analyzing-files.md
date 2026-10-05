@@ -1,5 +1,9 @@
 # Analyzing Files
 
+Every analysis starts on the Welcome screen, which has the sample cards, the Load from URL box, the upload area and, below them, your previous analyses:
+
+![Main screen](../images/so-crates-main.png)
+
 1. **Upload a file** - click **Choose file or drag and drop here** (or drop a file on it) and select a `.pcap`, `.pcapng`, `.cap`, `.trace`, `.evtx`, `.json`, `.jsonl`, `.csv`, `.xml`, `.log`, `.eml`, or any other file type (or a `.zip` containing one). File types are auto-detected:
     - **PCAP** files → Suricata network analysis
     - **Log files** (`.evtx`, `.json`, `.jsonl`, `.csv`, `.xml`, `.log`) → Zircolite Sigma rule detection
