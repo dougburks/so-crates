@@ -2,7 +2,7 @@
 
 Base URL: `http://localhost:8000`
 
-All endpoints return `Content-Type: application/json` unless noted. Errors return `{"error": "<message>"}` with the appropriate HTTP status code.
+All endpoints return `Content-Type: application/json` unless noted. Errors return `{"error": "<message>"}` with the appropriate HTTP status code - except `501` for an unsupported method, which is the HTTP server's own HTML error page.
 
 ## Request Requirements
 
@@ -37,7 +37,7 @@ Redirects to `/socrates.html`.
 
 Returns the running SO-CRATES version.
 
-**Response:** `{"version": "4.3.0"}`
+**Response:** `{"version": "4.4.0"}`
 
 ---
 
@@ -74,7 +74,7 @@ Returns event data from Suricata's eve.json (via SQLite index or direct JSON par
 | Parameter | Required | Default | Description |
 |---|---|---|---|
 | `md5` | Yes | - | MD5 hash of a historical analysis (`400` if omitted) |
-| `type` | No | all | Filter by event type - any `event_type` Suricata's eve.json can produce (see [Event Types](architecture/event-types.md)), plus the app's own synthetic types (`filealerts`, `log`, `protocol_decode`). Sigma alerts live in their own table and are served by `GET /api/sigma-alerts`, not here. |
+| `type` | No | all | Filter by event type - any `event_type` Suricata's eve.json can produce (see [Event Types](architecture/event-types.md)), plus the app's own synthetic types (`filealerts`, `log`, `protocol_decode`, and `email`/`link` in an email analysis). Sigma alerts live in their own table and are served by `GET /api/sigma-alerts`, not here. |
 | `q` | No | none | Full-text search query (searches all event JSON). Multiple `q` params AND together. |
 | `offset` | No | `0` | Pagination offset. A non-integer `offset` or `limit` returns an empty list (`200`), not an error |
 | `limit` | No | `1000` | Max events to return (capped at `MAX_QUERY_LIMIT`, 100,000 by default - see `GET /api/limits`) |
@@ -205,7 +205,7 @@ Returns per-column frequency tables (one page of values by count, 10 per page by
 | Parameter | Required | Default | Description |
 |---|---|---|---|
 | `md5` | Yes | - | MD5 hash of the analysis |
-| `type` | No | all (merged view) | Event type (see [Event Types](architecture/event-types.md)), or omitted for the merged "All Events" view. Not supported for event types whose fields have no static JSON path to aggregate on server-side - currently `log`/`sigmaalert`/`binary` (dynamic/untrusted columns) and `mqtt`/`ldap` (dynamically keyed by message/operation subtype) - these fall back to client-side computation instead; see `AGGREGATION_JSON_PATHS` in `db.py` for the authoritative, current list. |
+| `type` | No | all (merged view) | Event type (see [Event Types](architecture/event-types.md)), or omitted for the merged "All Events" view. Not supported for event types whose fields have no static JSON path to aggregate on server-side - currently `log`/`sigmaalert`/`binary` (dynamic/untrusted columns), `mqtt`/`ldap` (dynamically keyed by message/operation subtype) and `email`/`link`. These fall back to client-side computation instead (the UI also computes every tab of an email analysis client-side); see `AGGREGATION_JSON_PATHS` in `db.py` for the authoritative, current list. |
 | `q` | No | none | Full-text search query. Multiple `q` params AND together. |
 | `column` | No | none (all columns) | Restrict the response to a single column label, for paginating one column at a time |
 | `page` | No | `1` | Page number for Prev/Next pagination; non-numeric values fall back to `1` |
@@ -241,6 +241,8 @@ Returns the distinct-value count per aggregation column, matching the same colum
 Unfiltered (no `q`) responses are cached server-side per `(md5, type)`, same as `/api/sankey-data`.
 
 ---
+
+The four stream endpoints below (`download-stream`, `ascii-stream`, `hexdump-stream`, `raw-stream`) share their parameter checks: `400` for an invalid IP, port or MD5, `404` if the analysis has no PCAP, and `500` if the packet tool times out - in addition to each one's own errors.
 
 ### `GET /api/download-stream`
 
@@ -325,7 +327,7 @@ Returns a TCP/UDP stream's exact payload bytes - nothing decoded, replaced or tr
 
 ### `GET /api/extracted-file`
 
-Returns a file Suricata extracted from the analysis's traffic, by its SHA256 (the `fileinfo.sha256` field of a `fileinfo` event).
+Returns a file Suricata extracted from the analysis's traffic - or, for an email analysis, the message itself or one of its attachments - by its SHA256 (the `fileinfo.sha256` field of a `fileinfo` event).
 
 **Query Parameters:**
 
@@ -377,7 +379,7 @@ Returns the filename (not the full filesystem path) of the PCAP file within an a
 |---|---|---|
 | `md5` | Yes | MD5 hash of the analysis |
 
-**Response:** Plain text path. `404` if no PCAP found.
+**Response:** Plain text - the PCAP's filename only. `404` if no PCAP found.
 
 ---
 
@@ -399,14 +401,14 @@ or
 ```json
 {"status": "processing", "phase": "network", "meta": {...}, "hasRowNotes": false}
 ```
-or, if analysis (Suricata/YARA/Zircolite) failed:
+or, if analysis (Suricata/YARA/Zircolite/email parsing) failed:
 ```json
-{"status": "error", "message": "<failure reason>"}
+{"status": "error", "message": "<failure reason>", "hasRowNotes": false}
 ```
 
 `meta` is present whenever `.meta` exists for the analysis (written after the file type is detected) and is omitted otherwise; it's absent entirely from the `error` response.
 
-`hasRowNotes` is `true` if the analysis has at least one row-level note (see `POST /api/row-note`) - used by the reanalyze confirmation dialog to conditionally warn that reanalyzing deletes them. This field is added only on this GET route, not on the identically-shaped `POST /api/check-status` response below - that endpoint is polled every 2 seconds during active processing, and the extra lookup has no reason to run that often.
+`hasRowNotes` is `true` if the analysis has at least one row-level note, and always `false` while it isn't ready (see `POST /api/row-note`) - used by the reanalyze confirmation dialog to conditionally warn that reanalyzing deletes them. This field is added only on this GET route, not on the identically-shaped `POST /api/check-status` response below - that endpoint is polled every 2 seconds during active processing, and the extra lookup has no reason to run that often.
 
 **Errors:** `400` for invalid or malformed MD5. There is no `404` for a well-formed MD5 that doesn't correspond to an existing analysis directory - the directory's absence just reads the same as "not ready yet" (`{"status": "processing", "phase": ""}`), since this endpoint never separately checks for the directory's existence.
 
@@ -514,9 +516,9 @@ no engine-wide fallback - a summary for the wrong rule would be misleading.
 
 Uploads a file for analysis. Accepts multipart form data.
 
-**Request:** Multipart form with a file field. Accepts any file type, detected by content rather than name: PCAPs (by magic bytes, whatever the extension - e.g. `.pcap`, `.pcapng`, `.cap`, `.trace`, or none at all) get full Suricata network analysis; log files (recognized by content, or by a `.evtx`, `.json`, `.jsonl`, `.csv`, `.xml` or `.log` extension) get Zircolite Sigma detection; everything else gets YARA scanning. The same detection applies to each member of an uploaded ZIP.
+**Request:** Multipart form with a file field. Accepts any file type, detected by content rather than name: PCAPs (by magic bytes, whatever the extension - e.g. `.pcap`, `.pcapng`, `.cap`, `.trace`, or none at all) get full Suricata network analysis; log files (recognized by content, or by a `.evtx`, `.json`, `.jsonl`, `.csv`, `.xml` or `.log` extension) get Zircolite Sigma detection; email messages (an `.eml` extension, or content that starts with an email's header block) get email analysis - headers, links and decoded attachments, each YARA-scanned - unless over 100 MB (`MAX_EMAIL_SIZE`), when they're scanned as a plain file; everything else gets YARA scanning. A known extension decides before content does. The same detection applies to each member of an uploaded ZIP.
 
-**Size limit:** 1000 MB by default (`DEFAULT_UPLOAD_SIZE`). An `X-Max-Upload-Size` header (in bytes) can raise it, up to 5000 MB (`MAX_UPLOAD_SIZE`). A body over the limit is rejected with `400` ("Invalid Content-Length"), and `507` means the server doesn't have the disk space for it. A ZIP with more than 100 members (`MAX_ZIP_MEMBERS`) is rejected with `400`; members whose names start with `.` or `__` (e.g. `__MACOSX/`) are ignored.
+**Size limit:** 1000 MB by default (`DEFAULT_UPLOAD_SIZE`). An `X-Max-Upload-Size` header (in bytes) can raise it, up to 5000 MB (`MAX_UPLOAD_SIZE`). A body over the limit is rejected with `400` ("Invalid Content-Length"), and `507` means the server doesn't have the disk space for it. A ZIP with more than 100 members (`MAX_ZIP_MEMBERS`) is rejected with `400`; files whose own names start with `.` or `__` (e.g. `.DS_Store`, or anything under `__MACOSX/`) are ignored, whatever their type, but still count toward that limit.
 
 **Response (new file):**
 ```json
@@ -535,7 +537,13 @@ or for log files:
 {"status": "processing", "md5": "<hash>", "phase": "logs"}
 ```
 
-If the upload was a ZIP archive containing more than one supported file, every extracted file is analyzed, each as its own independent analysis - PCAPs get network analysis, everything else gets log/binary analysis. One exception: hidden non-PCAP members (dotfiles such as `.DS_Store`) are silently ignored - they get no analysis and are not counted anywhere. The response describes the primary file (a PCAP takes priority; otherwise the first non-hidden file) and gains an `additionalMd5s` array with the MD5 of every other file's analysis; a `filesSkipped` field appears only if individual files genuinely failed (hashing, commit, or filename-validation errors), with that count:
+or for email messages:
+
+```json
+{"status": "processing", "md5": "<hash>", "phase": "email"}
+```
+
+If the upload was a ZIP archive containing more than one supported file, every extracted file is analyzed, each as its own independent analysis - PCAPs get network analysis, everything else gets log, email, or binary analysis. One exception: hidden members (see the size-limit note above) are silently ignored - they get no analysis and aren't counted in `filesSkipped`. The response describes the primary file (a PCAP takes priority; otherwise the first non-hidden file) and gains an `additionalMd5s` array with the MD5 of every other file's analysis; a `filesSkipped` field appears only if individual files genuinely failed (hashing, commit, or filename-validation errors), with that count:
 
 ```json
 {"status": "processing", "md5": "<hash>", "phase": "network", "additionalMd5s": ["<hash>", "<hash>"], "filesSkipped": 1}
@@ -552,12 +560,28 @@ If the upload was a ZIP archive containing more than one supported file, every e
 3. If already analyzed (`eve.json` for PCAPs, `events.db` for non-PCAPs), returns `ready`
 4. For PCAPs: saves file, spawns Suricata in background thread, returns `processing` with `phase: "network"`
 5. For log files: saves the file and imports it into `events.db` in the background, returns `processing` with `phase: "logs"`
-6. For other files: saves file, runs YARA/EXIF scans in the background, returns `processing` with `phase: "files"`
-7. When analysis finishes, results are available in `events.db` (or `eve.json` for PCAPs)
+6. For email messages: saves the message, then in the background parses it into `email`/`link` events and stores and YARA-scans the message and each decoded attachment (in the analysis's `filestore/`, the same layout Suricata uses), returns `processing` with `phase: "email"`
+7. For other files: saves file, runs YARA/EXIF scans in the background, returns `processing` with `phase: "files"`
+8. When analysis finishes, results are available in `events.db` (or `eve.json` for PCAPs)
 
 **Special handling:** Password-protected zips are auto-decrypted using the common `infected` password; if the filename contains a `YYYY-MM-DD` date, the MTA-style dated password (`infected_YYYYMMDD`) is also tried.
 
 **Client should poll** `POST /api/check-status` with the returned MD5 to know when analysis is complete.
+
+---
+
+### `POST /api/load-sample`
+
+Analyzes one of the sample files built into SO-CRATES - the main screen's **Sample PCAP file** (`pcap`), **Sample log file** (`log`, a Sysmon JSON log), **Sample binary file** (`binary`, the payload from the sample story) and **Sample email file** (`email`). The sample is generated by the server (see `samples.py`), so this needs no internet access, and it is processed the same way as an upload. The sample is identical every time, so a second request returns `ready` for the existing analysis.
+
+**Request Body:**
+```json
+{"name": "email"}
+```
+
+**Response:** the same as `POST /api/upload` - e.g. `{"status": "processing", "md5": "<hash>", "phase": "email"}`, or `{"status": "ready", "md5": "<hash>"}` once it has been analyzed.
+
+**Errors:** `400` (`Unknown sample`) for any other name.
 
 ---
 
@@ -579,7 +603,7 @@ An optional `maxUploadSize` field (in bytes) raises the download size limit the 
 - URL safety validation blocks localhost, private IPs, link-local, and non-HTTP schemes
 - Hostname is resolved to verify the resolved IP is not private
 
-**Errors:** `400` for invalid URL or SSRF attempt. `413` if file exceeds upload size limit.
+**Errors:** `400` for invalid URL or SSRF attempt. `413` if file exceeds upload size limit. `507` if the server doesn't have the disk space.
 
 ---
 
@@ -605,7 +629,7 @@ or, if analysis (Suricata/YARA/Zircolite) failed:
 {"status": "error", "message": "<failure reason>"}
 ```
 
-The `phase` field reflects the current analysis stage (`network`, `logs`, `files`, or `importing` - the SQLite build that runs after the YARA scan, just before results are ready), or an empty string if no phase file exists yet. `meta` is present whenever `.meta` exists for the analysis and omitted otherwise (including on the `error` response). Same "no 404 for a well-formed-but-nonexistent MD5" caveat as `GET /api/status` applies here too.
+The `phase` field reflects the current analysis stage (`network`, `logs`, `email`, `files`, or `importing` - the SQLite build that runs after the YARA scan, just before results are ready), or an empty string if no phase file exists yet. `meta` is present whenever `.meta` exists for the analysis and omitted otherwise (including on the `error` response). Same "no 404 for a well-formed-but-nonexistent MD5" caveat as `GET /api/status` applies here too.
 
 **Ready detection:** the same check for every file type - `events.db` exists and no `.phase` file is still present (`events.db` is created the instant ingest starts, well before it finishes, so its existence alone isn't sufficient; `.phase` stays set for exactly that ingest window).
 
@@ -620,14 +644,14 @@ Re-runs the analysis pipeline for an existing MD5 directory. The original upload
 {"md5": "<hash>"}
 ```
 
-Only `md5` is read from the request body - the response's `phase` is determined automatically from what's actually in the analysis's directory (`network` if a PCAP is found, `logs` if a log file is found, otherwise `files`), not accepted as client input.
+Only `md5` is read from the request body - the response's `phase` is determined automatically from what's actually in the analysis's directory (`network` if a PCAP is found, `logs` for a log file, `email` for an email message, otherwise `files`), not accepted as client input.
 
 **Response:**
 ```json
 {"status": "processing", "md5": "<hash>", "phase": "network"}
 ```
 
-**Errors:** `400` for invalid MD5 or unsafe path. `404` if analysis not found. `409` if analysis is already in progress. `500` if Suricata fails to start (the failure reason from the analysis's `.error` file, e.g. Suricata missing or a permissions problem - distinguished from the `409` case by whether `.error` was written).
+**Errors:** `400` for invalid MD5 or unsafe path. `404` if the analysis doesn't exist or contains no analyzable file. `409` if analysis is already in progress. `500` if Suricata fails to start (the failure reason from the analysis's `.error` file, e.g. Suricata missing or a permissions problem - distinguished from the `409` case by whether `.error` was written).
 
 ---
 
@@ -800,7 +824,7 @@ Deletes all historical analyses (every MD5-shaped directory under the data root)
 
 Sink for Content-Security-Policy violation reports - every response's CSP names it as its `report-uri`, so browsers POST here when they block something. Accepts any `Content-Type` (browsers send `application/csp-report`), reads at most 64 KB, and logs each distinct violation (by directive, blocked URI, source file and line) once to the server's console. The one violation the bundled CyberChef causes on every load - `frame-src`, from its loading animation - is expected and not logged.
 
-**Response:** always `204`, no body - even for a malformed report.
+**Response:** `204`, no body - even for a malformed report. A missing, invalid or over-64 KB `Content-Length` gets `400`.
 
 ---
 

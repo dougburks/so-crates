@@ -926,8 +926,10 @@ _SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
 
 def find_extracted_file(dir_path, sha256):
     """Path of the file Suricata extracted with this SHA256 in the analysis
-    at dir_path, or None. Suricata's file-store (v2) names every file by
-    its SHA256 under a two-hex-character subdirectory:
+    at dir_path - or an email analysis's message or attachment, stored the
+    same way (email_analyzer.store_file) - or None. Suricata's file-store
+    (v2) names every file by its SHA256 under a two-hex-character
+    subdirectory:
     filestore/<sha256[:2]>/<sha256>. sha256 is validated before it touches
     the filesystem, and the resolved real path must still be a regular
     file inside filestore/ - so neither a crafted hash nor a symlink

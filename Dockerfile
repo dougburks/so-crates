@@ -234,7 +234,7 @@ ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY config.py db.py models.py validators.py url_fetch.py storage.py analysis_cache.py suricata_analyzer.py suricata_sid_ranges.py yara_analyzer.py sigma_analyzer.py file_analyzer.py exif_analyzer.py ohmydebn_colors.py playbook_lookup.py ai_summary_lookup.py cyberchef.py stream_payload.py socrates.py socrates.html ./
+COPY config.py db.py models.py validators.py url_fetch.py storage.py analysis_cache.py email_analyzer.py samples.py suricata_analyzer.py suricata_sid_ranges.py yara_analyzer.py sigma_analyzer.py file_analyzer.py exif_analyzer.py ohmydebn_colors.py playbook_lookup.py ai_summary_lookup.py cyberchef.py stream_payload.py socrates.py socrates.html ./
 COPY static/ static/
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

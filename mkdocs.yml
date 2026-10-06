@@ -47,6 +47,7 @@ nav:
     - OhMyDebn: installation/ohmydebn.md
   - Usage:
     - Usage Overview: usage/index.md
+    - The Sample Story: usage/sample-story.md
     - Analyzing Files: usage/analyzing-files.md
     - Exploring Results: usage/exploring-results.md
     - Filtering & Drill-Down: usage/filtering-and-drilldown.md

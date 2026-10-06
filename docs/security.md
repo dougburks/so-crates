@@ -11,9 +11,9 @@ potentially malicious files. What's built in by default (see
 - **Strict Content Security Policy** - `script-src 'self'` with no inline-script carve-out (all handlers are wired via delegated listeners; the theme bootstrap is an external file), so injected markup renders as inert text instead of executing; the policy's `report-uri` logs any violation server-side via `/api/csp-report`
 - **Bundled CyberChef** - the one exception to that policy: the built-in CyberChef at `/cyberchef/` gets its own, looser one (it needs `eval`, WebAssembly and `blob:` workers to run), applied to CyberChef's own responses only, never to SO-CRATES's pages. CyberChef shares SO-CRATES's origin, so the image ships only an unmodified official release, pinned by version and SHA-256 checksum
 - **Input validation** - on all endpoints (IP, port, MD5, path traversal)
-- **File-type routing** - PCAPs, log files, and everything else each only ever reach their own analyzer (Suricata, Zircolite/Sigma, YARA)
+- **File-type routing** - PCAPs, log files, email messages, and everything else each only ever reach their own analyzer (Suricata, Zircolite/Sigma, the email parser + YARA, YARA)
 - **SSRF protection** - on "Load from URL", including a DNS-rebinding-safe resolve-then-connect
-- **Extracted files** - files Suricata carved from traffic are served only by exact SHA256 from that analysis's own `filestore/` (no client-supplied path, symlinks out of it refused), as `application/octet-stream` downloads a browser never renders, capped at 25 MB
+- **Extracted files** - files Suricata carved from traffic, and an email's message and attachments, are served only by exact SHA256 from that analysis's own `filestore/` (no client-supplied path, symlinks out of it refused), as `application/octet-stream` downloads a browser never renders, capped at 25 MB
 - **Zip safety** - zip-slip and zip-bomb (decompressed-size) protection on archive extraction
 - **Upload limits** - a hard size ceiling plus an upfront disk-space check before accepting an upload
 - **Generic error messages** - no internal details or stack traces leaked

@@ -21,7 +21,7 @@ import threading
 
 from db import (
     get_event_count_sqlite, get_event_types_sqlite, query_events_sqlite_json,
-    create_file_analysis_db, insert_sigma_alerts, init_empty_db,
+    create_file_analysis_db, create_email_analysis_db, insert_sigma_alerts, init_empty_db,
     query_sigma_alerts_sqlite, get_sigma_stats_sqlite,
     get_sigma_alert_count_sqlite, get_event_date_range_sqlite,
     get_sankey_data_sqlite, get_aggregation_data_sqlite, get_aggregation_totals_sqlite,
@@ -32,7 +32,7 @@ from db import (
 from validators import (
     validate_ip, validate_port, sanitize_filename, is_safe_path,
     is_log_file, is_log_file_by_extension, is_office_file_by_extension,
-    is_pcap_file,
+    is_email_file, is_email_file_by_extension, is_pcap_file,
 )
 from url_fetch import FileTooLargeError, fetch_url_safely
 from storage import (
@@ -63,13 +63,15 @@ from sigma_analyzer import (
 from ohmydebn_colors import (
     derive_theme_colors, derive_theme_colors_from_alacritty, derive_theme_colors_from_named_palette,
 )
+from email_analyzer import analyze_message, remove_filestore
 from playbook_lookup import get_playbook
+from samples import SAMPLES
 from ai_summary_lookup import get_ai_summary
 import config
 import cyberchef
 import tomllib
 
-VERSION = '4.3.0'
+VERSION = '4.4.0'
 GITHUB_RELEASES_API = 'https://api.github.com/repos/dougburks/so-crates/releases/latest'
 PORT = int(os.environ.get('PORT', 8000))
 BIND_ADDRESS = os.environ.get('BIND_ADDRESS', '127.0.0.1')
@@ -264,6 +266,39 @@ def _get_ohmydebn_custom_colors():
     return None
 
 
+# The phase a non-pcap analysis starts in, by detected type - what
+# /api/upload and /api/reanalyze report, and what the frontend's loading
+# message keys on.
+_ANALYSIS_PHASES = {'log': 'logs', 'email': 'email', 'binary': 'files'}
+
+
+def _detect_file_type(prefix, path):
+    """'log', 'email' or 'binary' for a non-pcap file, by extension or
+    content (its first bytes, prefix) - the one test every upload path and
+    reanalyze share. A known extension decides first, so a .log of
+    'Key: value' lines stays a log; by content, email is checked before
+    log, since a message's header block isn't a log whatever the log
+    checks would make of it."""
+    if is_email_file_by_extension(path):
+        return _email_or_binary(path)
+    if is_log_file_by_extension(path):
+        return 'log'
+    if is_email_file(prefix):
+        return _email_or_binary(path)
+    if is_log_file(prefix):
+        return 'log'
+    return 'binary'
+
+
+def _email_or_binary(path):
+    """Email parsing holds the message and its decoded attachments in
+    memory - a message past MAX_EMAIL_SIZE is analyzed as a plain file."""
+    try:
+        return 'binary' if os.path.getsize(path) > config.MAX_EMAIL_SIZE else 'email'
+    except OSError:
+        return 'email'
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     # Set by do_GET for a /cyberchef/ request that passed its path checks -
     # switches translate_path() to CYBERCHEF_DIR and _add_security_headers()
@@ -432,7 +467,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         """
         if not md5:
             return None, 'MD5 parameter required'
-        if not MD5_RE.match(md5):
+        # A JSON body can carry any type - a number or list here used to
+        # raise out of the handler with no response at all.
+        if not isinstance(md5, str) or not MD5_RE.match(md5):
             return None, 'Invalid MD5'
         dir_path = os.path.join(DATA_DIR, md5)
         if not is_safe_path(DATA_DIR, dir_path):
@@ -494,11 +531,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not os.path.exists(dir_path):
             return []
         exact_artifacts = set(PCAP_ANALYSIS_ARTIFACTS) | set(FILE_ANALYSIS_ARTIFACTS) | {'name.txt', 'notes.txt'}
+        # Regular files only: filestore/ (Suricata's extracted files, or an
+        # email's attachments) is a directory, and could otherwise win the
+        # listing and be "reanalyzed".
         return [f for f in os.listdir(dir_path)
                 if f != pcap_file
                 and not f.lower().endswith(PCAP_EXTENSIONS + ('.zip',))
                 and not f.startswith('.')
-                and f not in exact_artifacts]
+                and f not in exact_artifacts
+                and os.path.isfile(os.path.join(dir_path, f))]
 
     def _resolve_display_name(self, dir_path, md5):
         """Resolve the human-readable display name for an analysis directory.
@@ -584,6 +625,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     POST_ROUTES = {
         '/api/upload': 'handle_post_upload',
         '/api/load-url': 'handle_post_load_url',
+        '/api/load-sample': 'handle_post_load_sample',
         '/api/check-status': 'handle_post_check_status',
         '/api/reanalyze': 'handle_post_reanalyze',
         '/api/delete-analysis': 'handle_post_delete_analysis',
@@ -1193,8 +1235,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(500, 'Internal server error')
 
     def handle_get_extracted_file(self, params):
-        """One file Suricata extracted from this analysis's traffic, by
-        SHA256 (the fileinfo event's fileinfo.sha256)."""
+        """One file Suricata extracted from this analysis's traffic - or an
+        email analysis's message or attachment - by SHA256 (the fileinfo
+        event's fileinfo.sha256)."""
         dir_path, error = self._resolve_md5_dir(params.get('md5', [''])[0])
         if error:
             self._send_error(400, error)
@@ -1958,7 +2001,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         within-zip duplicate content can be recognized before ever
         touching disk (see _process_uploaded_file's within-batch dedup).
 
-        Returns (md5_hash, deduped: bool, detected_type: 'log'|'binary').
+        Returns (md5_hash, deduped: bool, detected_type: 'log'|'email'|'binary').
         """
         dir_path = os.path.join(DATA_DIR, md5_hash)
         dest_filename = sanitize_filename(os.path.basename(extracted_path))
@@ -1968,13 +2011,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             dir_path, md5_hash, ('events.db',),
             lambda: shutil.move(extracted_path, dest_path)
         )
-        detected = 'log' if (is_log_file(prefix) or is_log_file_by_extension(dest_path)) else 'binary'
+        detected = _detect_file_type(prefix, dest_path)
         if not deduped:
             write_meta(dir_path, safe_filename, dest_filename, detected)
-            if detected == 'log':
-                self._analyze_log_file(dir_path, dest_path, dest_filename)
-            else:
-                self._analyze_standalone_file(dir_path, dest_path, dest_filename)
+            self._analyze_by_type(detected, dir_path, dest_path, dest_filename)
         return md5_hash, bool(deduped), detected
 
     def _process_uploaded_file(self, src_path, original_filename, passwords=None, effective_max=None):
@@ -2036,7 +2076,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         first_md5, first_prefix = hash_file_with_prefix(non_pcap_files[0])
                         primary_md5, primary_deduped, primary_detected = self._commit_and_analyze_standalone_file(
                             non_pcap_files[0], safe_filename, first_md5, first_prefix)
-                        primary_phase = 'logs' if primary_detected == 'log' else 'files'
+                        primary_phase = _ANALYSIS_PHASES[primary_detected]
                         remaining_pcaps = []
                         remaining_non_pcaps = non_pcap_files[1:]
 
@@ -2116,14 +2156,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     detected = 'pcap'
                     spawn_suricata(dir_path, dest_path, os.path.join(SURICATA_DIR, 'suricata.yaml'), data_dir=DATA_DIR)
                     phase = 'network'
-                elif is_log_file(prefix) or is_log_file_by_extension(dest_path):
-                    detected = 'log'
-                    self._analyze_log_file(dir_path, dest_path, dest_filename)
-                    phase = 'logs'
                 else:
-                    detected = 'binary'
-                    self._analyze_standalone_file(dir_path, dest_path, dest_filename)
-                    phase = 'files'
+                    detected = _detect_file_type(prefix, dest_path)
+                    phase = self._analyze_by_type(detected, dir_path, dest_path, dest_filename)
                 write_meta(dir_path, dest_filename, dest_filename, detected)
                 return {'status': 'processing', 'md5': md5_hash, 'phase': phase}
         finally:
@@ -2159,6 +2194,43 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     f.write(safe_filename)
             except Exception as e:
                 _set_error(dir_path, f'Analysis failed: {e}')
+            finally:
+                _clear_phase(dir_path)
+
+        threading.Thread(target=run_analysis, daemon=True).start()
+
+    def _analyze_by_type(self, detected, dir_path, file_path, safe_filename):
+        """Start the background analysis for a non-pcap file's detected type
+        (see _detect_file_type). Returns its phase."""
+        if detected == 'email':
+            self._analyze_email_file(dir_path, file_path, safe_filename)
+        elif detected == 'log':
+            self._analyze_log_file(dir_path, file_path, safe_filename)
+        else:
+            self._analyze_standalone_file(dir_path, file_path, safe_filename)
+        return _ANALYSIS_PHASES[detected]
+
+    def _analyze_email_file(self, dir_path, file_path, safe_filename):
+        """Parse an email message (.eml) in the background - its headers,
+        links and attachments become events, and the attachments are
+        stored and YARA-scanned (see email_analyzer.py)."""
+        def run_analysis():
+            _set_phase(dir_path, 'email')
+            try:
+                db_file = os.path.join(dir_path, 'events.db')
+                # network_allowed=False - see _analyze_standalone_file.
+                rules_file = setup_yara_rules(DATA_DIR, network_allowed=False)
+                scan = scan_single_file if (rules_file and check_yara_executable()) else None
+                try:
+                    events = analyze_message(dir_path, file_path, rules_file, scan)
+                except Exception as e:
+                    _set_error(dir_path, f'Email analysis failed: {e}')
+                    events = []
+                create_email_analysis_db(db_file, events)
+                with open(os.path.join(dir_path, 'name.txt'), 'w') as f:
+                    f.write(safe_filename)
+            except Exception as e:
+                _set_error(dir_path, f'Email analysis failed: {e}')
             finally:
                 _clear_phase(dir_path)
 
@@ -2390,6 +2462,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             self._send_error(500, 'Internal server error')
 
+    def handle_post_load_sample(self):
+        """Analyze one of the samples built into SO-CRATES (samples.SAMPLES)
+        by name - generated here, so it needs no internet access - through
+        the same path as an upload."""
+        data = self._read_json_body(config.MAX_REQUEST_BODY_SIZE)
+        if data is None:
+            return
+        name = data.get('name')
+        sample = SAMPLES.get(name) if isinstance(name, str) else None
+        if not sample:
+            self._send_error(400, 'Unknown sample')
+            return
+        filename, build = sample
+        try:
+            fd, src_path = tempfile.mkstemp(dir=upload_tmp_dir(DATA_DIR), suffix='.sample')
+            try:
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(build())
+            except Exception:
+                # _process_uploaded_file removes src_path itself once it has it.
+                os.unlink(src_path)
+                raise
+            self._send_json(self._process_uploaded_file(src_path, filename))
+        except ValueError as exc:
+            self._send_error(400, str(exc))
+        except Exception:
+            self._send_error(500, 'Internal server error')
+
     def _build_status_response(self, dir_path):
         """Shared status-check logic for both GET /api/status and POST /api/check-status."""
         db_file = os.path.join(dir_path, 'events.db')
@@ -2494,8 +2594,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         """Rewrite .meta after a reanalyze cleanup, so the frontend
         retains detected_type across the reanalyze - best-effort, same
         reasoning as _remove_artifacts. Shared by handle_post_reanalyze's
-        pcap and non-pcap branches, which previously each inlined an
-        identical copy of this block.
+        pcap and non-pcap branches.
         """
         if preserved_meta:
             try:
@@ -2580,7 +2679,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             elif non_pcap_files:
                 file_path = os.path.join(dir_path, non_pcap_files[0])
                 self._remove_artifacts(dir_path, FILE_ANALYSIS_ARTIFACTS)
-                self._restore_meta(meta_path, preserved_meta)
+                # An email analysis's stored message and attachments.
+                remove_filestore(dir_path)
 
                 # The same test upload used (content or extension), so a log
                 # recognized by its content - JSON/CSV/EVTX without a log
@@ -2590,12 +2690,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         prefix = fh.read(4096)
                 except OSError:
                     prefix = b''
-                if is_log_file(prefix) or is_log_file_by_extension(file_path):
-                    self._analyze_log_file(dir_path, file_path, non_pcap_files[0])
-                    self._send_json({'status': 'processing', 'md5': md5, 'phase': 'logs'})
-                else:
-                    self._analyze_standalone_file(dir_path, file_path, non_pcap_files[0])
-                    self._send_json({'status': 'processing', 'md5': md5, 'phase': 'files'})
+                detected = _detect_file_type(prefix, file_path)
+                # Detection can change between versions (4.4.0 stopped
+                # reading an email whose first header has a comma as a CSV
+                # log) - record what it is now, so reanalyze also repairs
+                # an analysis the old detection got wrong.
+                if preserved_meta:
+                    preserved_meta['detected_type'] = detected
+                self._restore_meta(meta_path, preserved_meta)
+                phase = self._analyze_by_type(detected, dir_path, file_path, non_pcap_files[0])
+                self._send_json({'status': 'processing', 'md5': md5, 'phase': phase})
             else:
                 self._send_error(404, 'No analysis file found')
 

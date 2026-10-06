@@ -27,7 +27,7 @@
     events.db              # SQLite index (auto-created after analysis)
     name.txt               # Human-readable display name
     notes.txt              # Freeform per-analysis notes (optional, written by POST /api/analysis-notes)
-    filestore/             # Extracted files from Suricata file-store (PCAP only)
+    filestore/             # Extracted files from Suricata file-store (PCAP), or an email's message and decoded attachments (email)
     yara_matches.json      # YARA scan results (auto-created after analysis, PCAP only)
     sigma_matches.json     # Sigma detection results (log files only)
     file_metadata.json     # Type/MIME/entropy/strings/EXIF per extracted filestore file with no YARA match, keyed by SHA256 (PCAP only - standalone uploads keep theirs in events.db)

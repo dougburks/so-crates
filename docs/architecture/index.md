@@ -8,6 +8,7 @@ Browser ──▶ socrates.py (Python HTTP server, port 8000)
                 ├──▶ Suricata (subprocess, analyzes PCAPs → eve.json)
                 ├──▶ Zircolite (subprocess, analyzes log files → Sigma matches)
                 ├──▶ YARA (scans binary/other files → yara_matches.json)
+                ├──▶ email_analyzer.py (in-process: parses .eml → email/link/fileinfo events, YARA on attachments)
                 ├──▶ exiftool (subprocess, optional EXIF metadata on binary files)
                 ├──▶ SQLite (indexes eve.json/Sigma matches → events.db)
                 ├──▶ tcpdump (carves individual streams & hexdumps)
@@ -45,11 +46,13 @@ A stdlib-only Python HTTP server (`http.server.SimpleHTTPRequestHandler`). Handl
 | `ohmydebn_colors.py` | Derives a full SO-CRATES theme from an OhMyDebn/Aether color palette (`colors.toml` or `alacritty.toml`), for the theme-sync feature |
 | `cyberchef.py` | The bundled CyberChef: where it lives (`CYBERCHEF_DIR`) and the Content-Security-Policy its responses get |
 | `stream_payload.py` | Exact-byte stream payloads for `/api/raw-stream`, via `tshark`'s follow mode |
+| `samples.py` | Sample files built into SO-CRATES (the main screen's offline Sample PCAP, log, binary and email files), generated on request for `POST /api/load-sample` |
+| `email_analyzer.py` | Email message (`.eml`) analysis: parsing headers, links and forwarded messages into events, and storing and YARA-scanning the message and its attachments |
 | `config.py` | Centralized application constants: size limits, timeouts, thresholds |
 
 ### Request Flow
 
-1. **Upload/URL load** → validates input → saves file → spawns Suricata (PCAPs), Zircolite (log files), or YARA (everything else) → returns `processing`
+1. **Upload/URL load** → validates input → saves file → spawns Suricata (PCAPs), Zircolite (log files), the email parser + YARA (email messages), or YARA (everything else) → returns `processing`
 2. **Client polls** `/api/check-status` until analysis finishes
 3. **Analysis callback** (background thread) → indexes results into SQLite
 4. **Client loads analysis** → UI fetches events via `/api/events`

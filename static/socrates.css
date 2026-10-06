@@ -1408,6 +1408,8 @@
         th { text-align: left; padding: 12px; background: var(--bg-tertiary); color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.5px; border-bottom: 1px solid var(--border-color); cursor: pointer; position: sticky; top: 0; z-index: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         th:hover { background: var(--bg-hover); }
         td { padding: 12px; border-bottom: 1px solid var(--border-color); overflow-wrap: break-word; vertical-align: top; }
+        /* Log values (e.g. a long CommandLine) have no spaces to break at; let them wrap so the table fits the page */
+        #section-log td, #section-sigmaalert td { overflow-wrap: anywhere; }
         tr { cursor: pointer; }
         tr:hover { background: var(--bg-tertiary); }
         /* Arrow-key (Up/Down) row navigation highlight - an inset outline

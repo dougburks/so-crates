@@ -447,7 +447,7 @@
       <h1 class="sx-title">SO&#8209;CRATES</h1>
       <p class="sx-tagline"><span id="sx-typed"></span><span class="cursor">&#9608;</span></p>
       <p class="sx-sub">
-        Drop in a pcap, log, or binary. Get alerts, metadata, transcripts,
+        Drop in a pcap, log, email, or binary. Get alerts, metadata, transcripts,
         hexdumps, and AI&#8209;guided playbooks &mdash; all in one page.
       </p>
       <div class="sx-ctas">
@@ -483,7 +483,7 @@
         <div class="sx-card reveal">
           <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.2"/><circle cx="19" cy="5" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M7 11l9.5-5.2M7 13l9.5 5.2"/></svg>
           <h3>Suricata Network Analysis</h3>
-          <p>Replay pcaps through Suricata for alerts, protocol metadata, flow records, and extracted files.</p>
+          <p>Replay pcaps through Suricata for alerts, protocol metadata, flow records, and extracted files &mdash; then drill into any stream's transcript or hexdump.</p>
         </div>
         <div class="sx-card reveal">
           <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 15h6M9 18h4"/></svg>
@@ -496,6 +496,11 @@
           <p>Run log files through Sigma rules to surface suspicious events across your evidence.</p>
         </div>
         <div class="sx-card reveal">
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5l8.5 6.5 8.5-6.5"/></svg>
+          <h3>Email Analysis</h3>
+          <p>Parse .eml headers, links, and attachments to spot spoofed senders, deceptive links, and malware hiding in base64.</p>
+        </div>
+        <div class="sx-card reveal">
           <svg viewBox="0 0 24 24"><path d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>
           <h3>AI Summaries &amp; Playbooks</h3>
           <p>Alerts come with an AI summary of what the rule detects, plus a plain&#8209;English investigation playbook.</p>
@@ -504,11 +509,6 @@
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></svg>
           <h3>Pivot, Hunt &amp; Correlate</h3>
           <p>Click any value to include, exclude, hunt, or correlate every log sharing its community ID.</p>
-        </div>
-        <div class="sx-card reveal">
-          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h2M11 9h2M15 9h2M7 13h2M11 13h2M15 13h2M7 17h6"/></svg>
-          <h3>Transcripts &amp; Hexdumps</h3>
-          <p>Drill from an alert straight into the ASCII transcript or hexdump without leaving the page.</p>
         </div>
       </div>
     </div>
@@ -526,14 +526,17 @@
     </div>
   </section>
 
-  <!-- ======================= CYBERCHEF ======================= -->
+  <!-- ======================= STORY VIDEO ======================= -->
   <section class="sx-section">
     <div class="sx-wrap">
-      <h2 class="sx-section-title reveal">CyberChef, built in</h2>
-      <p class="sx-section-sub reveal">SO-CRATES ships its own copy of CyberChef, so it works offline. Send a stream's exact bytes, a file Suricata extracted, or just a selection from a transcript straight to it &mdash; small payloads arrive with Magic already working out how they're encoded.</p>
+      <h2 class="sx-section-title reveal">Follow an investigation</h2>
+      <p class="sx-section-sub reveal">Follow one phishing email through the four sample files built into SO-CRATES &mdash; no internet needed. Spot the spoofed sender, decode a tracking token and a PowerShell stager in the built-in CyberChef, catch the credential theft on the wire, and match the payload by its hash.</p>
       <div class="sx-frame reveal">
-        <div class="sx-frame-bar"><span class="sx-frame-menu">&#9776;</span><em>so-crates &mdash; cyberchef.pcap</em><span class="sx-frame-btns"><i>&ndash;</i><i>&#9633;</i><i>&#10005;</i></span></div>
-        <video controls preload="none" width="100%" src="videos/cyberchef.mp4" poster="videos/cyberchef-poster.jpg"></video>
+        <div class="sx-frame-bar"><span class="sx-frame-menu">&#9776;</span><em>so-crates &mdash; the sample story</em><span class="sx-frame-btns"><i>&ndash;</i><i>&#9633;</i><i>&#10005;</i></span></div>
+        <video controls preload="none" width="100%" src="videos/story.mp4" poster="videos/story-poster.jpg"></video>
+      </div>
+      <div class="sx-ctas reveal">
+        <a class="sx-btn sx-btn-ghost" href="usage/sample-story/">Walk through it yourself</a>
       </div>
     </div>
   </section>
@@ -546,7 +549,7 @@
       <div class="sx-row reveal">
         <div class="sx-row-text">
           <h3><span>01</span>Analyze anything</h3>
-          <p>Upload a pcap, log, or binary &mdash; or reload a previous analysis. Network alerts, file alerts, metadata, and extracted streams land on a single page.</p>
+          <p>Upload a pcap, log, email, or binary &mdash; or reload a previous analysis. Network alerts, file alerts, metadata, and extracted streams land on a single page.</p>
         </div>
         <div class="sx-frame"><div class="sx-frame-bar"><span class="sx-frame-menu">&#9776;</span><em>analysis</em><span class="sx-frame-btns"><i>&ndash;</i><i>&#9633;</i><i>&#10005;</i></span></div><a class="glightbox" href="images/so-crates-analysis.png" data-gallery="tour" aria-label="View full-size: Analysis screen"><img src="images/so-crates-analysis.png" alt="Analysis screen" loading="lazy"></a></div>
       </div>
@@ -554,7 +557,7 @@
       <div class="sx-row flip reveal">
         <div class="sx-row-text">
           <h3><span>02</span>Know what it means</h3>
-          <p>Each Suricata, Sigma, or YARA alert ships with an AI&#8209;generated summary and a Playbook of investigation questions specific to that detection.</p>
+          <p>Suricata, Sigma, and YARA alerts come with an AI&#8209;generated summary of the rule, where one exists. Suricata and Sigma alerts also get a playbook of investigation questions specific to that detection.</p>
         </div>
         <div class="sx-frame"><div class="sx-frame-bar"><span class="sx-frame-menu">&#9776;</span><em>playbook</em><span class="sx-frame-btns"><i>&ndash;</i><i>&#9633;</i><i>&#10005;</i></span></div><a class="glightbox" href="images/so-crates-playbook.png" data-gallery="tour" aria-label="View full-size: Playbook view"><img src="images/so-crates-playbook.png" alt="Playbook view" loading="lazy"></a></div>
       </div>

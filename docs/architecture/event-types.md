@@ -9,8 +9,8 @@
 | `flow` | Network flow summaries | `flow.pkts_toserver`, `flow.pkts_toclient`, `flow.bytes_toserver`, `flow.bytes_toclient`, `flow.state` |
 | `ftp` | FTP commands | `ftp.command`, `ftp.command_data`, `ftp.completion_code`, `ftp.reply` |
 | `anomaly` | Protocol anomalies | `anomaly.event`, `anomaly.type`, `anomaly.layer`, `anomaly.app_proto` |
-| `fileinfo` | File transfers | `fileinfo.filename`, `fileinfo.magic` |
-| `filealerts` | YARA matches on extracted files | `filealerts.rule_name`, `filealerts.sha256`, `filealerts.tags` |
+| `fileinfo` | File transfers (PCAP), or an email message and its attachments (`fileinfo.source`) | `fileinfo.filename`, `fileinfo.magic` |
+| `filealerts` | YARA matches on extracted files or an email's message and attachments | `filealerts.rule_name`, `filealerts.sha256`, `filealerts.tags` |
 | `dnp3` | DNP3 industrial-control events | `dnp3.src`, `dnp3.dst`, `dnp3.type` |
 | `modbus` | Modbus industrial-control events | `modbus.request.function_code`, `modbus.request.unit_id` |
 | `pgsql` | PostgreSQL protocol events | `pgsql.request.simple_query`, `pgsql.response.command_completed` |
@@ -39,6 +39,8 @@
 | `smtp` | SMTP transactions | `smtp.helo`, `smtp.mail_from`, `smtp.rcpt_to` |
 | `arp` | ARP requests/replies (decode-layer, not app-layer - disabled by default, see note below) | `arp.opcode`, `arp.src_mac`, `arp.dest_mac` |
 | `log` | Imported log events (EVTX, JSON, CSV, XML, generic logs) | parsed dynamic fields (one column per log field) |
+| `email` | An email message (`.eml`) and each forwarded message attached to it (synthetic - see `email_analyzer.py`) | `email.from`, `email.to`, `email.subject`, `email.spf`/`dkim`/`dmarc`, `email.received[]`, `email.originating_ip`, `email.attachments[]`, `email.warnings[]`, `email.body` |
+| `link` | A web link in an email message (synthetic) | `link.url`, `link.domain`, `link.text`, `link.mismatch`, `link.text_domain` |
 | `sigmaalert` | Sigma rule matches on imported logs | `rule_title`, `severity`, `level`, `original_log` |
 | `protocol_decode` | Suricata's built-in protocol-command-decode alerts, reclassified out of `alert` - labeled "Decoder Alerts" in the UI (synthetic - see note below) | `alert.signature`, `alert.severity`, `alert.category`, `alert.rule` |
 | `stats` | Suricata internal stats | (excluded from display) |

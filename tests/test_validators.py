@@ -227,6 +227,22 @@ class TestIsLogFile(unittest.TestCase):
         xml += b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
         self._assert_not_log(xml, 'Office Open XML disguised as generic XML')
 
+    # Negative: email messages (.eml) - REGRESSION: a first header with a
+    # comma ("Date: Tue, 3 Feb ...") passed the CSV check, so the message
+    # went to Sigma as a log and the analysis came back empty.
+    def test_eml_starting_with_date_header(self):
+        self._assert_not_log(b'Date: Tue, 3 Feb 2026 10:00:00 +0000\r\n'
+                             b'From: "Billing, Dept" <billing@example.com>\r\n'
+                             b'Subject: Invoice\r\n\r\nbody, with a comma\r\n', '.eml starting with Date:')
+
+    def test_eml_with_folded_header(self):
+        self._assert_not_log(b'Received: from mx.example.com (mx.example.com [192.0.2.1]),\n'
+                             b'\tby mail.example.com; Tue, 3 Feb 2026 10:00:00 +0000\n'
+                             b'Subject: hi\n\nbody\n', '.eml with a folded Received: header')
+
+    def test_csv_whose_header_row_looks_like_a_field(self):
+        self._assert_log(b'Note: first,second\n1,2\n3,4\n', 'CSV with a colon in its first column name')
+
     def test_plain_text_no_commas(self):
         self._assert_not_log(b'hello world\n', 'plain text without commas')
 
@@ -238,6 +254,34 @@ class TestIsLogFile(unittest.TestCase):
 
     def test_binary_all_zeros(self):
         self._assert_not_log(b'\x00' * 100, 'all-zero binary')
+
+
+class TestIsEmailFile(unittest.TestCase):
+    """is_email_file: an email message's header block, by content."""
+
+    def test_messages(self):
+        for data in (
+            b'From: a@example.com\nTo: b@example.com\nSubject: hi\n\nbody\n',
+            b'Received: from mx (mx [192.0.2.1])\n\tby mail; Tue, 3 Feb 2026\nX-Spam: no\n\n',
+            b'Return-Path: <a@example.com>\r\nDelivered-To: b@example.com\r\n\r\n',
+        ):
+            with self.subTest(data=data[:30]):
+                self.assertTrue(validators.is_email_file(data))
+
+    def test_not_messages(self):
+        for data in (
+            b'{"EventID": 1, "Computer": "PC"}\n{"EventID": 3, "User": "x"}\n',
+            b'Host: server1\nPort: 22\nUser: admin\n',
+            b'From: a@example.com\n',
+            b'timestamp,message\n2024-01-01,hello\n',
+            b' From: indented first line\nTo: x\n',
+        ):
+            with self.subTest(data=data[:30]):
+                self.assertFalse(validators.is_email_file(data))
+
+    def test_extension(self):
+        self.assertTrue(validators.is_email_file_by_extension('Invoice.EML'))
+        self.assertFalse(validators.is_email_file_by_extension('invoice.msg'))
 
 
 class TestIsLogFileByExtension(unittest.TestCase):

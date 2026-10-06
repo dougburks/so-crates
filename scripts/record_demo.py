@@ -5,14 +5,14 @@ Requires: pip install -r requirements-screenshots.txt, plus a one-time
 `playwright install ffmpeg` (Playwright's video muxing needs its own bundled
 ffmpeg, separate from any system ffmpeg). Also needs a running server
 (default http://127.0.0.1:8000/socrates.html - override with --base-url).
-Uses the app's own default "Sample pcap file" (DEFAULT_SAMPLE_URL in
-static/socrates.js - a one-click convenience link to an external pcap on
-malware-traffic-analysis.net, not something bundled with the app), same as
+Loads the URL box's default (DEFAULT_SAMPLE_URL in static/socrates.js - a
+real infection's traffic on malware-traffic-analysis.net, richer than the
+built-in Sample PCAP file) with its Go button, same as
 scripts/capture_screenshots.py, so it needs no pre-existing local analysis
 or hardcoded MD5 - it works on a clean checkout with an empty DATA_DIR.
 Before recording starts, main() pre-warms that exact sample via a plain
 /api/load-url POST (see _prewarm_sample_analysis) and blocks until it's
-ready - so the recorded click hits _commit_file_or_return_ready's dedup
+ready - so the recorded Go click hits _commit_file_or_return_ready's dedup
 fast path (see socrates.py) instead of waiting through a real Suricata/
 YARA/Sigma run on camera. Running against a container's fresh volume (see
 AGENTS.md's Release Checklist) is also the only way to get real Playbook/
@@ -81,7 +81,7 @@ MP4_TRIM_START_SECONDS = 0.15
 VIEWPORT = {'width': 1920, 'height': 1400}
 
 # Solid on-brand blue (not translucent black) - a black/near-black caption
-# box used to disappear into the app's own near-black UI (welcome screen,
+# box used to disappear into the app's own near-black UI (main screen,
 # dark theme background) since rgba(0,0,0,0.85) barely differs from what's
 # behind it. #1f6feb matches the app's own button/accent blue (see
 # so-crates-welcome.png's "Got it!" button) so it reads as part of the UI's
@@ -132,7 +132,7 @@ CAPTION_JS = """
 # The arrowhead lands inside the target (its horizontal center, a quarter
 # of the way down) rather than at the nearest edge point - REGRESSION: an
 # earlier version pointed at the nearest edge, which for tightly-packed
-# neighbors (e.g. the three "Sample ... file" cards sitting side by side)
+# neighbors (e.g. the four "Sample ... file" cards sitting side by side)
 # put the arrowhead right on the shared border between two cards, reading
 # as ambiguous or pointing at the wrong one. Landing inside the target's
 # own body instead of on any edge it might share with a neighbor is
@@ -364,7 +364,7 @@ async def main(base_url):
             '__CAPTION_TEXT__', json.dumps(welcome_caption))
         await page.add_init_script(caption_init_script)
 
-        # Welcome screen
+        # Main screen
         await page.goto(base_url, wait_until="networkidle")
         await page.wait_for_selector('#helpModal.active .modal-content', timeout=10000)
         welcome_modal = page.locator('#helpModal.active .modal-content')
@@ -377,11 +377,12 @@ async def main(base_url):
                             "where you can upload a new file or re-open a previous analysis")
         await page.wait_for_timeout(5800)
 
-        # Select the sample pcap file
-        sample_card = page.locator(".sample-card:has-text('Sample pcap file')")
-        await caption(page, "Selecting the default sample pcap file", sample_card)
-        await page.wait_for_timeout(2200)
-        await sample_card.click()
+        # Load the URL box's default pcap - a real infection's traffic, which
+        # makes a richer demo than the built-in Sample PCAP file.
+        go_button = page.locator("button[data-action='load-from-url']")
+        await caption(page, "Loading a real infection's traffic from malware-traffic-analysis.net", go_button)
+        await page.wait_for_timeout(2600)
+        await go_button.click()
         await page.wait_for_selector('#statsGrid .stat-card', timeout=60000)
         # No single target - "Analysis complete" is a general status, not a
         # reference to one specific element.
@@ -725,7 +726,7 @@ async def main(base_url):
 
         # crf 18 (not the more typical 23) plus preset slow - the source is
         # a screen recording dominated by large flat/near-black regions
-        # (welcome screen, dark theme background), and crf 23's coarser
+        # (main screen, dark theme background), and crf 23's coarser
         # quantization on those regions was visible as banding (shade
         # shifting in what should be a single flat black) rather than the
         # blocking/blur crf differences usually show on natural video. This

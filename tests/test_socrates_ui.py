@@ -54,6 +54,22 @@ with open(CSS_PATH, 'r') as f:
     CSS_CONTENT = f.read()
 
 
+
+# Clicks a modal's backdrop, then (reopened) its content, through the real
+# delegated click handling - the modal's data-action="backdrop" and the
+# close action named in its data-arg (STATIC_ACTIONS 'backdrop').
+BACKDROP_CLICK_JS = """
+    function backdropResults(id) {
+        var modal = document.getElementById(id);
+        modal.classList.add('active');
+        modal.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        var closedOnBackdrop = !modal.classList.contains('active');
+        modal.classList.add('active');
+        modal.querySelector('.modal-content').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        return { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: modal.classList.contains('active') };
+    }
+"""
+
 class TestHTMLStructure(unittest.TestCase):
     def test_file_size(self):
         """Verify JS file is complete (not truncated)"""
@@ -324,7 +340,7 @@ class TestHTMLStructure(unittest.TestCase):
         self.assertIn('viewport', HTML_CONTENT)
 
     def test_has_title(self):
-        self.assertIn('SO-CRATES - Welcome', HTML_CONTENT)
+        self.assertIn('<title>SO-CRATES</title>', HTML_CONTENT)
 
     def test_has_container(self):
         self.assertIn('class="container"', HTML_CONTENT)
@@ -579,11 +595,17 @@ class TestJavaScriptFunctions(unittest.TestCase):
             r'<span class="theme-switch">\s*<input type="checkbox" id="helpShowAgain"[^>]*>\s*<span class="theme-switch-slider"></span>\s*</span>',
             'helpShowAgain must be wrapped in the .theme-switch slider component')
 
-    def test_has_handleHelpBackdropClick(self):
-        self.assertIn('function handleHelpBackdropClick', JS_CONTENT)
-
     def test_has_welcomeHelpContent(self):
         self.assertIn('function getWelcomeHelpContent', JS_CONTENT)
+
+    def test_welcome_file_types_engine_column_fits_email_parser_yara(self):
+        """REGRESSION: at 18%, the Engine column wrapped "Email parser + YARA"
+        onto two lines in the Welcome window's fixed 808px table, making the
+        Email row twice as tall. File Extensions (whose longest value, the
+        log extensions, fits in 34%) gives the Engine column 6%."""
+        widths = dict((name, int(w)) for w, name in re.findall(
+            r'width: (\d+)%;">(File Type|File Extensions|Engine|Ruleset)</th>', JS_CONTENT))
+        self.assertEqual(widths, {'File Type': 18, 'File Extensions': 34, 'Engine': 24, 'Ruleset': 24})
 
     def test_has_showAnalysisUI(self):
         self.assertIn('function showAnalysisUI', JS_CONTENT)
@@ -929,24 +951,17 @@ class TestUXFeatures(unittest.TestCase):
         self.assertNotIn('stopPropagation', modal_section,
                          'Help modal content must not need a stopPropagation shim - the backdrop action only closes when the click target is the backdrop itself')
 
-    def test_help_modal_backdrop_handler_closes_modal(self):
-        """handleHelpBackdropClick must close the modal only when the backdrop is clicked."""
-        func_match = re.search(r'function handleHelpBackdropClick\([^)]*\)\s*\{', JS_CONTENT)
-        self.assertIsNotNone(func_match, 'handleHelpBackdropClick function must exist')
-        start = func_match.end()
-        brace_count = 1
-        pos = start
-        while pos < len(JS_CONTENT) and brace_count > 0:
-            if JS_CONTENT[pos] == '{':
-                brace_count += 1
-            elif JS_CONTENT[pos] == '}':
-                brace_count -= 1
-            pos += 1
-        func_body = JS_CONTENT[start:pos]
-        self.assertIn("event.target === document.getElementById('helpModal')", func_body,
-                      'Backdrop handler must only close when the helpModal wrapper is clicked')
-        self.assertIn('closeHelpModal()', func_body,
-                      'Backdrop handler must call closeHelpModal()')
+    def test_help_modal_backdrop_click_closes_modal(self):
+        """A click on the Help modal's backdrop closes it - through the
+        delegated 'backdrop' action (data-action="backdrop" on the modal,
+        its close action in data-arg) - and a click inside its content
+        doesn't."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('helpModal');
+        ''')
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
+
 
     def test_header_has_no_separators(self):
         """Header items must not have any separators (pipes or borders) for clean responsive wrapping."""
@@ -2839,8 +2854,6 @@ class TestThemeAndMenu(unittest.TestCase):
                       'showThemesModal function must exist')
         self.assertIn('function closeThemesModal(', JS_CONTENT,
                       'closeThemesModal function must exist')
-        self.assertIn('function handleModalBackdropClick(', JS_CONTENT,
-                      'handleModalBackdropClick function must exist')
 
     def test_css_theme_variables_exist(self):
         self.assertIn('--bg-primary:', CSS_CONTENT,
@@ -3386,7 +3399,7 @@ class TestThemeAndMenu(unittest.TestCase):
     def test_record_demo_prewarm_reads_the_real_default_sample_url(self):
         """record_demo.py's _prewarm_sample_analysis (see AGENTS.md's
         Release Checklist) must pre-warm the exact same sample the
-        recorded 'Sample pcap file' click actually requests - a hardcoded
+        recorded Load from URL ('Go') click actually requests - a hardcoded
         second copy of DEFAULT_SAMPLE_URL in record_demo.py would silently
         drift out of sync with the real one if it ever changed, quietly
         pre-warming the wrong sample (or erroring) while the recorded
@@ -3515,31 +3528,26 @@ class TestThemeAndMenu(unittest.TestCase):
                       'optional --interactive-highlight override for themes (like C64) where '
                       '--accent alone is not visually distinct from --border-color')
 
-    def test_sample_cards_hint_their_source_domain_on_hover(self):
-        """Each sample card fetches from a real third-party domain the
-        moment it's clicked, with no visible indication of that beforehand
-        - a title tooltip surfaces it on hover without changing the card's
-        appearance. Derived from the same URL constant the click uses
-        (_sampleCardTitle()), not a second hardcoded copy of the domain
-        that could drift from it."""
+    def test_sample_cards_say_they_are_built_in(self):
+        """Every sample card loads a sample built into SO-CRATES
+        (samples.py, POST /api/load-sample) - nothing is downloaded, and the
+        hover text says so."""
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             localStorage.setItem('socrates_hideHelp', 'true');
             await new Promise(r => setTimeout(r, 50));
             var cards = document.querySelectorAll('.sample-card');
             window.__jsdom_result = Array.from(cards).map(function(c) {
-                return { label: c.querySelector('.sample-label').textContent, title: c.title };
+                return { label: c.querySelector('.sample-label').textContent, title: c.title,
+                         action: c.dataset.action, sample: c.dataset.sample };
             });
         ''')
-        titles = {r['label']: r['title'] for r in result}
-        self.assertEqual(titles.get('Sample PCAP file'), 'Downloads from www.malware-traffic-analysis.net')
-        self.assertEqual(titles.get('Sample log file'), 'Downloads from github.com')
-        self.assertEqual(titles.get('Sample binary file'), 'Downloads from secure.eicar.org')
-
-    def test_sampleCardTitle_handles_invalid_url(self):
-        from tests.jsdom_helper import js_expression
-        result = js_expression("_sampleCardTitle('not a url')")
-        self.assertEqual(result, '')
+        self.assertEqual([(r['label'], r['sample']) for r in result],
+                         [('Sample PCAP file', 'pcap'), ('Sample log file', 'log'),
+                          ('Sample binary file', 'binary'), ('Sample email file', 'email')])
+        for r in result:
+            self.assertEqual(r['action'], 'load-builtin-sample')
+            self.assertEqual(r['title'], 'Built into SO-CRATES - works without internet access')
 
     def test_interactive_highlight_consumers_match_documented_list(self):
         """AGENTS.md's --interactive-highlight bullet enumerates the exact
@@ -4166,11 +4174,11 @@ class TestThemeAndMenu(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             var calls = [];
-            window.loadSampleUrl = function(url) { calls.push(url); };
+            window.loadBuiltInSample = function(name) { calls.push(name); };
             document.getElementById('inputBoxes').innerHTML = `
-                <div class="sample-card" data-action="load-sample-url" data-url="pcap-url"><span>Sample pcap file</span></div>
-                <div class="sample-card" data-action="load-sample-url" data-url="log-url"><span>Sample log file</span></div>
-                <div class="sample-card" data-action="load-sample-url" data-url="binary-url"><span>Sample binary file</span></div>
+                <div class="sample-card" data-action="load-builtin-sample" data-sample="pcap"><span>Sample pcap file</span></div>
+                <div class="sample-card" data-action="load-builtin-sample" data-sample="log"><span>Sample log file</span></div>
+                <div class="sample-card" data-action="load-builtin-sample" data-sample="binary"><span>Sample binary file</span></div>
             `;
             document.getElementById('inputBoxes').style.display = 'block';
             var cards = document.querySelectorAll('.sample-card');
@@ -4184,7 +4192,7 @@ class TestThemeAndMenu(unittest.TestCase):
         ''')
         self.assertEqual(result['selectedAfterFirst'], [True, False, False],
                          'first ArrowRight must select (not activate) the first sample card')
-        self.assertEqual(result['calls'], ['pcap-url'], 'Enter must activate the keyboard-selected sample card')
+        self.assertEqual(result['calls'], ['pcap'], 'Enter must activate the keyboard-selected sample card')
 
     def test_arrow_key_navigation_theme_tiles(self):
         """When the Themes modal is open, all four arrow keys must move a
@@ -4246,9 +4254,9 @@ class TestThemeAndMenu(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             var sampleCalls = [];
-            window.loadSampleUrl = function(url) { sampleCalls.push(url); };
+            window.loadBuiltInSample = function(name) { sampleCalls.push(name); };
             document.getElementById('inputBoxes').innerHTML = `
-                <div class="sample-card" data-action="load-sample-url" data-url="pcap-url"><span>Sample pcap file</span></div>
+                <div class="sample-card" data-action="load-builtin-sample" data-sample="pcap"><span>Sample pcap file</span></div>
             `;
             document.getElementById('inputBoxes').style.display = 'block';
             document.getElementById('themesModalBody').innerHTML = `
@@ -4455,7 +4463,7 @@ class TestThemeAndMenu(unittest.TestCase):
         activateKeyboardSelection() must not click that stale, invisible sample
         card when the user later presses Enter on a data-table row - it must
         activate the row instead. (Previously this re-triggered the sample's
-        loadSampleUrl() and looked like the app was re-analyzing the file.)"""
+        sample load and looked like the app was re-analyzing the file.)"""
         from tests.jsdom_helper import js_statements
         result = js_statements('''
             document.getElementById('inputBoxes').innerHTML = '<div class="sample-card">Sample binary file</div>';
@@ -6152,23 +6160,12 @@ class TestFiltering(unittest.TestCase):
         self.assertTrue(result['openBefore'])
         self.assertFalse(result['openAfter'], 'Escape must close the About modal')
 
-    def test_handleModalBackdropClick_closes_only_on_backdrop_for_about(self):
+    def test_backdrop_click_closes_only_on_backdrop_for_about(self):
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            var modal = document.getElementById('aboutModal');
-            modal.classList.add('active');
-            handleModalBackdropClick({ target: modal, currentTarget: modal }, closeAboutModal);
-            var closedOnBackdrop = !modal.classList.contains('active');
-
-            modal.classList.add('active');
-            var inner = document.querySelector('#aboutModal .modal-content');
-            handleModalBackdropClick({ target: inner, currentTarget: modal }, closeAboutModal);
-            var stayedOpenOnContent = modal.classList.contains('active');
-
-            window.__jsdom_result = { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: stayedOpenOnContent };
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('aboutModal');
         ''')
-        self.assertTrue(result['closedOnBackdrop'])
-        self.assertTrue(result['stayedOpenOnContent'])
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
     def test_footer_center_teaser_skeleton_empty_in_html(self):
         """#footerCenterTeaser is empty in the static HTML - its content
@@ -6292,23 +6289,12 @@ class TestFiltering(unittest.TestCase):
         self.assertTrue(result['openBefore'])
         self.assertFalse(result['openAfter'], 'Escape must close the Security Onion modal')
 
-    def test_handleModalBackdropClick_closes_only_on_backdrop_for_security_onion(self):
+    def test_backdrop_click_closes_only_on_backdrop_for_security_onion(self):
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            var modal = document.getElementById('securityOnionModal');
-            modal.classList.add('active');
-            handleModalBackdropClick({ target: modal, currentTarget: modal }, closeSecurityOnionModal);
-            var closedOnBackdrop = !modal.classList.contains('active');
-
-            modal.classList.add('active');
-            var inner = document.querySelector('#securityOnionModal .modal-content');
-            handleModalBackdropClick({ target: inner, currentTarget: modal }, closeSecurityOnionModal);
-            var stayedOpenOnContent = modal.classList.contains('active');
-
-            window.__jsdom_result = { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: stayedOpenOnContent };
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('securityOnionModal');
         ''')
-        self.assertTrue(result['closedOnBackdrop'])
-        self.assertTrue(result['stayedOpenOnContent'])
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
     def test_has_analysis_header(self):
         self.assertIn('id="mainHeader"', HTML_CONTENT)
@@ -10726,7 +10712,7 @@ class TestAnalysisNotes(unittest.TestCase):
         result = js_statements(self._setup_js(initial_notes='original notes') + '''
             showNotesModal();
             var notesModal = document.getElementById('notesModal');
-            handleModalBackdropClick({ target: notesModal, currentTarget: notesModal }, closeNotesModal);
+            notesModal.dispatchEvent(new MouseEvent('click', { bubbles: true }));
             window.__jsdom_result = {
                 modalOpen: document.getElementById('notesModal').classList.contains('active')
             };
@@ -15676,6 +15662,15 @@ class TestMaybeLinkifyValueSecurity(unittest.TestCase):
 
 
 class TestLogAnalysisUI(unittest.TestCase):
+    def test_log_table_cells_wrap_long_unbroken_values(self):
+        """REGRESSION: a long CommandLine (a base64 PowerShell stager) has no
+        spaces, so with only overflow-wrap: break-word it set the column's
+        min-content width and pushed the log table to ~3,700px - the expanded
+        detail panel ran off-screen. Log and Sigma cells must wrap anywhere."""
+        m = re.search(r'#section-log td,\s*#section-sigmaalert td\s*\{([^}]*)\}', CSS_CONTENT)
+        self.assertIsNotNone(m, 'log/Sigma table cells need their own wrapping rule')
+        self.assertIn('overflow-wrap: anywhere', m.group(1))
+
     def test_discoverLogColumns_prioritizes_known_fields(self):
         """discoverLogColumns must return base fields first, then dynamic fields, max 8 total."""
         from tests.jsdom_helper import js_statements
@@ -16671,7 +16666,7 @@ class TestErrorHandlingUI(unittest.TestCase):
 
     def test_loadAnalysis_catch_calls_hideLoading_and_showError(self):
         """loadAnalysis catch block must call hideLoading and showError."""
-        func_body = JS_CONTENT.split('function loadAnalysis(md5)')[1].split('function loadSampleUrl(')[0]
+        func_body = JS_CONTENT.split('function loadAnalysis(md5)')[1].split('async function loadBuiltInSample(')[0]
         self.assertIn('} catch(err) {', func_body, 'loadAnalysis must have catch block')
         self.assertIn('hideLoading();', func_body, 'catch must call hideLoading')
         self.assertIn('showError(', func_body, 'catch must call showError')
@@ -17848,7 +17843,7 @@ class TestTruncationIndicator(unittest.TestCase):
                       'refreshAnalysisData must clear truncatedTypes alongside the allEvents/tabDataCache reset it does on search change')
 
     def test_loadAnalysis_clears_truncatedTypes(self):
-        func = JS_CONTENT.split('async function loadAnalysis(')[1].split('function loadSampleUrl(')[0]
+        func = JS_CONTENT.split('async function loadAnalysis(')[1].split('async function loadBuiltInSample(')[0]
         self.assertIn('truncatedTypes.clear()', func,
                       'loadAnalysis must clear truncatedTypes alongside the allEvents/tabDataCache reset it does on a fresh file load')
 
@@ -17860,7 +17855,7 @@ class TestTruncationIndicator(unittest.TestCase):
         newer, correct call already finished. loadAnalysis must bump the
         fetchGeneration counter (the same mechanism updateSankeyDiagram already
         uses) and bail before assigning eventStats if superseded."""
-        func = JS_CONTENT.split('async function loadAnalysis(')[1].split('function loadSampleUrl(')[0]
+        func = JS_CONTENT.split('async function loadAnalysis(')[1].split('async function loadBuiltInSample(')[0]
         self.assertIn('const gen = bumpFetchGeneration();', func,
                       'loadAnalysis must capture a fetch generation at the top')
         gen_pos = func.find('const gen = bumpFetchGeneration();')
@@ -18051,23 +18046,12 @@ class TestUserConfigurableQueryLimit(unittest.TestCase):
         ''')
         self.assertFalse(result['isActive'])
 
-    def test_handleModalBackdropClick_closes_only_on_backdrop_for_settings(self):
+    def test_backdrop_click_closes_only_on_backdrop_for_settings(self):
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            var modal = document.getElementById('settingsModal');
-            modal.classList.add('active');
-            handleModalBackdropClick({ target: modal, currentTarget: modal }, closeSettingsModal);
-            var closedOnBackdrop = !modal.classList.contains('active');
-
-            modal.classList.add('active');
-            var inner = document.querySelector('#settingsModal .modal-content');
-            handleModalBackdropClick({ target: inner, currentTarget: modal }, closeSettingsModal);
-            var stayedOpenOnContent = modal.classList.contains('active');
-
-            window.__jsdom_result = { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: stayedOpenOnContent };
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('settingsModal');
         ''')
-        self.assertTrue(result['closedOnBackdrop'])
-        self.assertTrue(result['stayedOpenOnContent'])
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
     def test_saveSettings_rejects_value_below_floor(self):
         from tests.jsdom_helper import js_statements
@@ -20619,23 +20603,12 @@ class TestRulesModal(unittest.TestCase):
         self.assertTrue(result['openBefore'], 'rules modal must actually be open before pressing Escape')
         self.assertFalse(result['openAfter'], 'Escape must close the rules modal')
 
-    def test_handleModalBackdropClick_closes_only_on_backdrop_for_rules(self):
+    def test_backdrop_click_closes_only_on_backdrop_for_rules(self):
         from tests.jsdom_helper import js_statements
-        result = js_statements('''
-            var modal = document.getElementById('rulesModal');
-            modal.classList.add('active');
-            handleModalBackdropClick({ target: modal, currentTarget: modal }, closeRulesModal);
-            var closedOnBackdrop = !modal.classList.contains('active');
-
-            modal.classList.add('active');
-            var inner = document.querySelector('#rulesModal .modal-content');
-            handleModalBackdropClick({ target: inner, currentTarget: modal }, closeRulesModal);
-            var stayedOpenOnContent = modal.classList.contains('active');
-
-            window.__jsdom_result = { closedOnBackdrop: closedOnBackdrop, stayedOpenOnContent: stayedOpenOnContent };
+        result = js_statements(BACKDROP_CLICK_JS + '''
+            window.__jsdom_result = backdropResults('rulesModal');
         ''')
-        self.assertTrue(result['closedOnBackdrop'])
-        self.assertTrue(result['stayedOpenOnContent'])
+        self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
 
 class TestAlertRulesetClassification(unittest.TestCase):
@@ -21212,6 +21185,239 @@ class TestAcknowledgeAlerts(unittest.TestCase):
         self.assertIn('Acknowledged Alerts', result['label'])
         self.assertIn('3', result['label'])
 
+
+
+class TestEmailAnalysisUI(unittest.TestCase):
+    """Email (.eml) analysis mode: networkless per-type tabs for email,
+    link, fileinfo and filealerts events (see isEmailAnalysisMode)."""
+
+    EVENTS = """
+        var emailEv = { id: 1, event_type: 'email', timestamp: '2026-02-03T10:00:00+00:00',
+            src_ip: '', src_port: 0, dest_ip: '', dest_port: 0, proto: '',
+            email: { from: 'Bank <security@bank.example>', to: ['a@example.com', 'b@example.com'], cc: [],
+                     reply_to: ['x@collector.example'], return_path: '', subject: '<script>alert(1)</script>',
+                     date: 'Tue, 03 Feb 2026 10:00:00 +0000', message_id: '', mailer: '',
+                     spf: 'fail', dkim: '', dmarc: 'pass', originating_ip: '1.2.3.4',
+                     received: [{ from: 'sender.example', ip: '1.2.3.4', by: 'mx.example', date: 'Tue' }],
+                     attachments: ['invoice.com'], link_count: 1,
+                     warnings: ['SPF fail', 'Attachment with an executable extension: invoice.com'],
+                     body: 'line one\\nline two', body_truncated: false, depth: 0 } };
+        var linkEv = { id: 2, event_type: 'link', timestamp: '2026-02-03T10:00:00+00:00',
+            link: { url: 'https://evil.example/x', domain: 'evil.example', text: 'https://bank.example',
+                    text_domain: 'bank.example', mismatch: true, source: 'html' } };
+        var fileEv = { id: 3, event_type: 'fileinfo', timestamp: '2026-02-03T10:00:00+00:00',
+            fileinfo: { filename: 'invoice.com', size: 68, sha256: 'a'.repeat(64), magic: 'EICAR virus test files',
+                        stored: true, source: 'attachment', yara: [{ rule_name: 'EICAR_Test', tags: ['test'] }] } };
+    """
+
+    def test_sample_email_card_loads_builtin_sample(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var calls = [];
+            window.fetch = function(url, opts) {
+                calls.push({ url: String(url), method: opts && opts.method, body: opts && opts.body });
+                return Promise.resolve({ ok: true, status: 200, json: function() { return Promise.resolve({ status: 'ready', md5: 'abc' }); } });
+            };
+            var opened = null;
+            loadAnalysis = function(md5) { opened = md5; return Promise.resolve(); };
+            await loadBuiltInSample('email');
+            var post = calls.filter(function(c) { return c.url === '/api/load-sample'; })[0];
+            window.__jsdom_result = { post: post, opened: opened };
+        ''')
+        self.assertEqual(result['post']['method'], 'POST')
+        self.assertEqual(json.loads(result['post']['body']), {'name': 'email'})
+        self.assertEqual(result['opened'], 'abc')
+
+    def test_sample_email_card_markup(self):
+        self.assertIn('data-action="load-builtin-sample" data-sample="email"', JS_CONTENT)
+        self.assertIn('data-action="load-builtin-sample" data-sample="binary"', JS_CONTENT)
+        self.assertIn('data-action="load-builtin-sample" data-sample="log"', JS_CONTENT)
+        self.assertIn('data-action="load-builtin-sample" data-sample="pcap"', JS_CONTENT)
+        self.assertIn("'load-builtin-sample': (el) => loadBuiltInSample(el.dataset.sample)", JS_CONTENT)
+
+    def test_tab_choice_follows_results(self):
+        """REGRESSION (4.4.0 review): a search that matched only links
+        reopened the empty Emails tab instead of Links."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var types = ['email', 'link', 'filealerts', 'fileinfo'];
+            window.__jsdom_result = {
+                stays: pickEmailTab(types, { email: 1, link: 2 }, 'link'),
+                movesOn: pickEmailTab(types, { link: 2 }, 'email'),
+                firstWithResults: pickEmailTab(types, { fileinfo: 1 }, null),
+                nothing: pickEmailTab(types, {}, 'link'),
+            };
+        ''')
+        self.assertEqual(result, {'stays': 'link', 'movesOn': 'link', 'firstWithResults': 'fileinfo', 'nothing': 'email'})
+
+    def test_time_column_sorts(self):
+        """REGRESSION (4.4.0 review): email tabs sort in the browser, and
+        extractValue had no Time case, so sorting by Time did nothing."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var a = { event_type: 'link', timestamp: '2026-02-03T10:00:00', link: {} };
+            var b = { event_type: 'link', timestamp: '2026-01-01T10:00:00', link: {} };
+            var cols = ['Time', 'URL'];
+            window.__jsdom_result = sortItemsByColumn([a, b], cols, extractValue, 0, true).map(function(e) { return e.timestamp; });
+        ''')
+        self.assertEqual(result, ['2026-01-01T10:00:00', '2026-02-03T10:00:00'])
+
+    def test_size_detail_pivots_on_the_column_value(self):
+        """REGRESSION (4.4.0 review): the detail panel's "12,345 bytes"
+        was the pivot value, so Include on it never matched the Size
+        column's "12345"."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            fileEv.fileinfo.size = 12345;
+            var div = document.createElement('div');
+            div.innerHTML = renderFileInfoDetails(fileEv);
+            var span = Array.from(div.querySelectorAll('[data-detail-pivot]')).find(function(s) {
+                return JSON.parse(decodeURIComponent(s.dataset.detailPivot))[0] === 'Size';
+            });
+            isEmailAnalysisMode = true;
+            window.__jsdom_result = { shown: span.textContent, pivot: JSON.parse(decodeURIComponent(span.dataset.detailPivot)),
+                                      column: extractValue(fileEv, 'Size', -1) };
+        ''')
+        self.assertEqual(result['shown'], '12,345 bytes')
+        self.assertEqual(result['pivot'], ['Size', '12345'])
+        self.assertEqual(result['column'], '12345')
+
+    def test_filealert_without_filename_has_no_blank_row(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var div = document.createElement('div');
+            div.innerHTML = renderFileAlertDetails({ event_type: 'filealerts', filealerts: { rule_name: 'R', sha256: 'x' } });
+            window.__jsdom_result = Array.from(div.querySelectorAll('.detail-label')).map(function(l) { return l.textContent; });
+        ''')
+        self.assertNotIn('Filename', result)
+
+    def test_log_stat_counts_use_the_log_tables_own_filter(self):
+        """REGRESSION (4.4.0 review): log-mode stat counts filtered through
+        extractValue, whose named cases (Domain, From, URL, ...) mean
+        something else for a log field of the same name - so a filter on
+        such a field emptied the count while the table still showed rows."""
+        body = JS_CONTENT.split('async function computeFilteredStats()')[1].split('\n        }\n')[0]
+        log_branch = body.split('if (isLogAnalysisMode) {')[1].split('return stats;')[0]
+        self.assertIn('getFilteredLogEvents(logEvents)', log_branch)
+        self.assertNotIn('eventMatchesFilters(e)', log_branch)
+
+    def test_detect_file_type_and_tab_order(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            window.__jsdom_result = {
+                eml: detectFileType('Phish.EML'),
+                order: sortEventTypes(['fileinfo', 'filealerts', 'link', 'email']),
+            };
+        ''')
+        self.assertEqual(result['eml'], 'email')
+        self.assertEqual(result['order'], ['email', 'link', 'filealerts', 'fileinfo'])
+
+    def test_columns_are_networkless_only_in_email_mode(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var pcapFileinfo = getColumnsForType('fileinfo');
+            isEmailAnalysisMode = true;
+            window.__jsdom_result = {
+                pcapFileinfo: pcapFileinfo,
+                email: getColumnsForType('email'),
+                link: getColumnsForType('link'),
+                fileinfo: getColumnsForType('fileinfo'),
+                filealerts: getColumnsForType('filealerts'),
+                serverAgg: canUseServerAggregation('email'),
+                serverSort: canServerSortEventType('link'),
+            };
+        ''')
+        self.assertIn('Source IP', result['pcapFileinfo'])
+        for key in ('email', 'link', 'fileinfo', 'filealerts'):
+            self.assertEqual(result[key][0], 'Time')
+            self.assertNotIn('Source IP', result[key])
+        self.assertIn('Mismatch', result['link'])
+        self.assertFalse(result['serverAgg'])
+        self.assertFalse(result['serverSort'])
+
+    def test_extract_values(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            window.__jsdom_result = {
+                to: extractValue(emailEv, 'To', -1),
+                subject: extractValue(emailEv, 'Subject', -1),
+                warnings: extractValue(emailEv, 'Warnings', -1),
+                url: extractValue(linkEv, 'URL', -1),
+                mismatch: extractValue(linkEv, 'Mismatch', -1),
+                source: extractValue(fileEv, 'Source', -1),
+                // Other types' same-named columns are unchanged.
+                tlsSubject: extractValue({ event_type: 'tls', tls: { subject: 'CN=x' } }, 'Subject', -1),
+                httpUrl: extractValue({ event_type: 'http', http: { url: '/a' } }, 'URL', -1),
+            };
+        ''')
+        self.assertEqual(result['to'], 'a@example.com, b@example.com')
+        self.assertEqual(result['subject'], '<script>alert(1)</script>')
+        self.assertEqual(result['warnings'], '2')
+        self.assertEqual(result['url'], 'https://evil.example/x')
+        self.assertEqual(result['mismatch'], 'Yes')
+        self.assertEqual(result['source'], 'Attachment')
+        self.assertEqual(result['tlsSubject'], 'CN=x')
+        self.assertEqual(result['httpUrl'], '/a')
+
+    def test_email_row_has_no_network_cells_and_escapes(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            isEmailAnalysisMode = true;
+            var table = document.createElement('table');
+            table.innerHTML = '<tbody>' + buildRowForEvent(emailEv) + '</tbody>';
+            var row = table.querySelector('tr[data-id]');
+            var cells = Array.from(row.children).map(function(td) { return td.textContent; });
+            var detail = table.querySelector('tr.detail-row td');
+            window.__jsdom_result = {
+                cells: cells, colspan: detail.getAttribute('colspan'),
+                scriptTags: table.querySelectorAll('script').length,
+            };
+        ''')
+        # Time + 8 email columns + the note-icon cell.
+        self.assertEqual(len(result['cells']), 10)
+        self.assertEqual(result['cells'][1], 'Bank <security@bank.example>')
+        self.assertEqual(result['cells'][3], '<script>alert(1)</script>')
+        self.assertEqual(result['colspan'], '10')
+        self.assertEqual(result['scriptTags'], 0)
+
+    def test_email_detail_panel(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            var div = document.createElement('div');
+            div.innerHTML = renderEmailDetails(emailEv);
+            var labels = Array.from(div.querySelectorAll('.detail-label')).map(function(l) { return l.textContent; });
+            window.__jsdom_result = { text: div.textContent, labels: labels, scripts: div.querySelectorAll('script').length };
+        ''')
+        self.assertIn('SPF fail', result['text'])
+        self.assertIn('Attachment with an executable extension: invoice.com', result['text'])
+        self.assertIn('Originating IP', result['labels'])
+        self.assertIn('Hop 1', result['labels'])
+        self.assertNotIn('Message-ID', result['labels'], 'missing headers are left out')
+        self.assertNotIn('Cc', result['labels'])
+        self.assertIn('not reported', result['text'], 'DKIM had no result')
+        self.assertEqual(result['scripts'], 0)
+
+    def test_link_and_fileinfo_details(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.EVENTS + '''
+            currentMd5 = 'abc';
+            var link = document.createElement('div');
+            link.innerHTML = renderLinkDetails(linkEv);
+            var file = document.createElement('div');
+            file.innerHTML = renderFileInfoDetails(fileEv);
+            var pcapFile = document.createElement('div');
+            pcapFile.innerHTML = renderFileInfoDetails({ event_type: 'fileinfo', fileinfo: { filename: 'x.bin', sha256: '' } });
+            window.__jsdom_result = {
+                link: link.textContent, file: file.textContent,
+                cyberchef: file.querySelectorAll('[data-action="send-file-to-cyberchef"]').length,
+                pcapLabels: Array.from(pcapFile.querySelectorAll('.detail-label')).map(function(l) { return l.textContent; }),
+            };
+        ''')
+        self.assertIn('The link text names bank.example, but the link goes to evil.example', result['link'])
+        self.assertIn('EICAR_Test', result['file'], "an email's files carry their own YARA results")
+        self.assertIn('Attachment', result['file'])
+        self.assertEqual(result['cyberchef'], 1)
+        self.assertNotIn('Source', result['pcapLabels'], 'no blank Source row for a pcap file')
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -539,6 +539,18 @@ def _events_select(terms, has_fts, plain_cols, fts_cols):
     return f'SELECT {plain_cols} FROM events', 'event_type'
 
 
+def create_email_analysis_db(db_path, events):
+    """Create events.db for an email message (.eml) analysis from the
+    events email_analyzer.analyze_message built: email, link, fileinfo and
+    filealerts, all with empty network fields."""
+    with _db_connection(db_path) as conn:
+        has_fts = _init_db(conn)
+        for event in events:
+            _insert_event(conn, event, has_fts)
+        conn.execute('PRAGMA optimize;')
+        conn.commit()
+
+
 def init_empty_db(db_path):
     """Create an empty events.db with the full schema (no events).
 

@@ -85,7 +85,9 @@
             // mode vs pcap mode are mutually exclusive), so their relative
             // priority to each other is preserved from before without
             // affecting the pcap-mode ordering above.
-            const order = { alert: 0, filealerts: 1, protocol_decode: 2, anomaly: 3, sigmaalert: 4, log: 5 };
+            // email/link only occur in email mode, where the message
+            // itself leads, then its links.
+            const order = { email: -2, link: -1, alert: 0, filealerts: 1, protocol_decode: 2, anomaly: 3, sigmaalert: 4, log: 5 };
             return [...types].sort((a, b) => {
                 const ai = order[a] ?? 99;
                 const bi = order[b] ?? 99;
@@ -1880,16 +1882,6 @@
             themeTileNavSelection = null;
         }
 
-        // Backdrop-click helper: closes exactly when the click landed on
-        // the backdrop div itself (not a child element), i.e. when
-        // target === currentTarget. The static modals now route backdrop
-        // clicks through the delegated 'backdrop' STATIC_ACTIONS entry
-        // instead (same target check), but this helper's logic is still
-        // the reference implementation the tests exercise directly.
-        function handleModalBackdropClick(event, closeFn) {
-            if (event.target === event.currentTarget) closeFn();
-        }
-
         // Applies immediately on toggle, unlike the numeric Settings
         // fields which need a "Save" click - the themes modal has no save
         // step for anything else (theme clicks apply instantly too), so a
@@ -2096,11 +2088,13 @@
                 anomaly: '#ff9800',
                 dns: '#66bb6a',
                 dnp3: '#26c6da',
+                email: '#4fc3f7',
                 filealerts: '#e91e63',
                 fileinfo: '#9c27b0',
                 flow: '#bc8cff',
                 ftp: '#00bcd4',
                 http: '#ffa726',
+                link: '#ffca28',
                 log: '#b0b0b0',
                 modbus: '#ab47bc',
                 pgsql: '#ff7043',
@@ -2192,21 +2186,19 @@
             const stored = parseInt(safeStorageGet(localStorage, AGG_PAGE_SIZE_STORAGE_KEY), 10);
             return AGG_PAGE_SIZE_OPTIONS.includes(stored) ? stored : CONFIG.AGGREGATION_TOP_N;
         })();
+        // The URL box's starting value: a real infection's traffic on
+        // malware-traffic-analysis.net. The Sample PCAP file card is built
+        // in instead (see samples.py); this stays as the URL example, and
+        // as what scripts/record_demo.py and capture_screenshots.py load.
         const DEFAULT_SAMPLE_URL = 'https://www.malware-traffic-analysis.net/2026/02/03/2026-02-03-GuLoader-for-AgentTesla-style-infection-with-FTP-data-exfil.pcap.zip';
-        const SAMPLE_LOG_URL = 'https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES/raw/refs/heads/master/Defense%20Evasion/apt10_jjs_sideloading_prochollowing_persist_as_service_sysmon_1_7_8_13.evtx';
-        const SAMPLE_BINARY_URL = 'https://secure.eicar.org/eicar.com';
+        // The hover text for the sample cards: every sample is built into
+        // SO-CRATES (see samples.py), none is downloaded.
+        const BUILTIN_SAMPLE_TITLE = 'Built into SO-CRATES - works without internet access';
+        // A collection of real phishing emails - linked to (More email
+        // samples, the 'email samples' command), not bundled: the Sample
+        // email file is one built into SO-CRATES instead (see samples.py).
+        const EMAIL_SAMPLES_URL = 'https://github.com/rf-peixoto/phishing_pot';
 
-        // Named constants above (not inline string literals in the sample
-        // cards below) so the tooltip's domain is always derived from the
-        // same URL the click actually fetches, rather than a second,
-        // separately-typed copy that could silently drift from it.
-        function _sampleCardTitle(url) {
-            try {
-                return 'Downloads from ' + new URL(url).hostname;
-            } catch (e) {
-                return '';
-            }
-        }
         const FILE_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 4px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>';
         const REFRESH_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>';
         const DELETE_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
@@ -2239,8 +2231,8 @@
                 <thead>
                     <tr style="border-bottom: 1px solid var(--border-color);">
                         <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 18%;">File Type</th>
-                        <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 40%;">File Extensions</th>
-                        <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 18%;">Engine</th>
+                        <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 34%;">File Extensions</th>
+                        <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 24%;">Engine</th>
                         <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-weight: 600; width: 24%;">Ruleset</th>
                     </tr>
                 </thead>
@@ -2256,6 +2248,12 @@
                         <td style="padding: 8px 12px;">.evtx, .json, .jsonl, .csv, .xml, .log</td>
                         <td style="padding: 8px 12px;">Zircolite</td>
                         <td style="padding: 8px 12px;"><a href="#" data-action="show-rules-modal" style="color: var(--accent); text-decoration: underline; font-weight: 600;">SigmaHQ</a></td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--bg-tertiary);">
+                        <td style="padding: 8px 12px;"><strong style="color: var(--accent);">Email</strong></td>
+                        <td style="padding: 8px 12px;">.eml</td>
+                        <td style="padding: 8px 12px;">Email parser + YARA</td>
+                        <td style="padding: 8px 12px;"><a href="#" data-action="show-rules-modal" style="color: var(--accent); text-decoration: underline; font-weight: 600;">YARA Forge</a></td>
                     </tr>
                     <tr>
                         <td style="padding: 8px 12px;"><strong style="color: var(--accent);">Binary / Other</strong></td>
@@ -2439,10 +2437,13 @@
             return currentSearch.length > 0 ? currentSearch.map(t => '&q=' + encodeURIComponent(t)).join('') : '';
         }
 
-        // Classify a filename as 'pcap', 'log', or 'binary' by extension.
+        // Classify a filename as 'pcap', 'log', 'email' or 'binary' by
+        // extension - a fallback for when the server's .meta detected_type
+        // isn't available.
         function detectFileType(name) {
             if (name && /\.(pcap|pcapng|cap|trace)$/i.test(name)) return 'pcap';
             if (name && /\.(evtx|json|jsonl|csv|xml|log)$/i.test(name)) return 'log';
+            if (name && /\.eml$/i.test(name)) return 'email';
             return 'binary';
         }
 
@@ -2762,13 +2763,9 @@
         // full-looking menu whose Include/Exclude/Only silently filter on
         // the wrong data, which is worse than the current trimmed menu.
         // 'Timestamp' (used by every renderer via _formatEventCommon) is
-        // deliberately excluded even though every event type's own 'Time'
-        // column exists in getColumnsForType()'s array - extractValue()
-        // has no matching 'Time' case (falls through to its log-analysis-
-        // only default branch), so a table-cell click on the Time column
-        // already offers a silently-nonfunctional Include/Exclude/Only;
-        // mapping 'Timestamp' here would just reproduce that same existing
-        // gap in a second place rather than close it.
+        // deliberately excluded: the Time column is never a filter target
+        // (pivotDataAttrsHtml skips it), so mapping 'Timestamp' to it would
+        // offer an Include/Exclude/Only that matches nothing.
         const DETAIL_LABEL_TO_COLUMN = {
             alert: { 'Signature': 'Alert' },
             protocol_decode: { 'Signature': 'Alert' },
@@ -3827,6 +3824,8 @@
             const fa = e.filealerts || {};
             let html = htmlRowText('Rule', fa.rule_name);
             html += aiSummaryPlaceholderHtml('yara', fa.rule_name);
+            // Which file matched - set for an email's message/attachments.
+            if (fa.filename) html += htmlRowText('Filename', fa.filename, 'mono');
             html += htmlRowText('SHA256', fa.sha256, 'mono');
             if (fa.author) {
                 html += htmlRowText('Author', fa.author);
@@ -3841,11 +3840,16 @@
         function renderFileInfoDetails(e) {
             let html = htmlSection('File Info', COLORS.EVENT.fileinfo);
             html += htmlRowText('Filename', e.fileinfo?.filename, 'mono');
+            if (e.fileinfo?.source) html += htmlRowText('Source', extractValue(e, 'Source', -1));
             html += htmlRowText('Magic', e.fileinfo?.magic);
             html += htmlRowText('MD5', e.fileinfo?.md5, 'mono');
             html += htmlRowText('SHA1', e.fileinfo?.sha1, 'mono');
             html += htmlRowText('SHA256', e.fileinfo?.sha256, 'mono');
-            html += htmlRowText('Size', `${(e.fileinfo?.size || 0).toLocaleString()} bytes`);
+            // Shown as "12,345 bytes" but pivoted on the bare number - the
+            // Size column's own value - so Include/Exclude/Only match.
+            const size = e.fileinfo?.size || 0;
+            const sizePivot = encodeURIComponent(JSON.stringify(['Size', String(size)]));
+            html += htmlRow('Size', `<span class="detail-value-pivot" data-detail-pivot="${sizePivot}">${escapeHtml(size.toLocaleString())} bytes</span>`);
             // Only files Suricata actually stored exist in the filestore -
             // it logs a fileinfo event for every transfer it sees.
             if (e.fileinfo?.stored && e.fileinfo?.sha256 && currentMd5) {
@@ -3872,7 +3876,11 @@
             }
 
             const fileSha = e.fileinfo?.sha256 || '';
-            const matches = allEvents.filter(ev => ev.event_type === 'filealerts' && ev.filealerts?.sha256 === fileSha);
+            // An email analysis's files carry their own YARA results; other
+            // analyses' are matched up from the loaded filealerts events.
+            const matches = Array.isArray(e.fileinfo?.yara)
+                ? e.fileinfo.yara.map(m => ({ filealerts: m }))
+                : allEvents.filter(ev => ev.event_type === 'filealerts' && ev.filealerts?.sha256 === fileSha);
             html += htmlSection('File Alerts', COLORS.EVENT.filealerts);
             if (matches.length > 0) {
                 matches.forEach(m => {
@@ -3885,6 +3893,73 @@
             } else {
                 html += `<span style="color: var(--bg-hover-light); grid-column: 1 / -1;">No YARA matches</span>`;
             }
+            return html;
+        }
+
+        // A message's warning signs, full-width in the danger color - each
+        // already worded for an analyst (see email_analyzer.py).
+        function emailWarningRowsHtml(warnings) {
+            return warnings.map(w => `<span style="grid-column: 1 / -1; color: var(--badge-danger-text);">${escapeHtml(w)}</span>`).join('');
+        }
+
+        function renderEmailDetails(e) {
+            const m = e.email || {};
+            // Headers a message doesn't have are left out, not shown blank.
+            const row = (label, value, cls, style) => value ? htmlRowText(label, value, cls, style) : '';
+            let html = '';
+            if ((m.warnings || []).length) {
+                html += htmlSection('Warnings', 'var(--badge-danger-text)');
+                html += emailWarningRowsHtml(m.warnings);
+            }
+            html += htmlSection('Message', COLORS.EVENT.email);
+            if (m.depth) html += htmlRowText('Forwarded', `Attached to another message (level ${m.depth})`);
+            html += row('From', m.from, 'mono');
+            html += row('To', (m.to || []).join(', '), 'mono');
+            html += row('Cc', (m.cc || []).join(', '), 'mono');
+            html += row('Reply-To', (m.reply_to || []).join(', '), 'mono');
+            html += row('Return-Path', m.return_path, 'mono');
+            html += row('Subject', m.subject);
+            html += row('Date', m.date);
+            html += row('Message-ID', m.message_id, 'mono');
+            html += row('Mailer', m.mailer);
+            html += row('Originating IP', m.originating_ip, 'mono');
+
+            html += htmlSection('Authentication', COLORS.EVENT.email);
+            ['spf', 'dkim', 'dmarc'].forEach(k => {
+                const result = m[k] || '';
+                html += htmlRow(k.toUpperCase(), result ? `${valueDotSpan(authResultColor(result))}${escapeHtml(result)}` : '<span style="color: var(--text-muted);">not reported</span>');
+            });
+
+            if ((m.received || []).length) {
+                html += htmlSection('Received (oldest first)', COLORS.EVENT.email);
+                m.received.forEach((hop, i) => {
+                    const parts = [hop.from && `from ${hop.from}`, hop.ip && `[${hop.ip}]`, hop.by && `by ${hop.by}`, hop.date && `- ${hop.date}`].filter(Boolean);
+                    html += htmlRowText(`Hop ${i + 1}`, parts.length ? parts.join(' ') : hop.raw, 'mono');
+                });
+            }
+
+            if ((m.attachments || []).length) {
+                html += htmlSection('Attachments', COLORS.EVENT.fileinfo);
+                m.attachments.forEach(name => { html += htmlRowText('Attachment', name, 'mono'); });
+            }
+
+            if (m.body) {
+                html += htmlSection(m.body_truncated ? 'Body (truncated)' : 'Body', COLORS.EVENT.email);
+                html += htmlRowText('Text', m.body, '', 'white-space: pre-wrap; word-break: break-word;');
+            }
+            return html;
+        }
+
+        function renderLinkDetails(e) {
+            const l = e.link || {};
+            let html = htmlSection('Link', COLORS.EVENT.link);
+            if (l.mismatch) {
+                html += emailWarningRowsHtml([`The link text names ${l.text_domain || 'another domain'}, but the link goes to ${l.domain}`]);
+            }
+            html += htmlRowText('URL', l.url, 'mono', 'word-break: break-all;');
+            html += htmlRowText('Domain', l.domain, 'mono');
+            if (l.text) html += htmlRowText('Link Text', l.text);
+            html += htmlRowText('Found In', l.source === 'html' ? 'HTML link' : 'Message text');
             return html;
         }
 
@@ -3902,6 +3977,8 @@
             anomaly: renderAnomalyDetails,
             filealerts: renderFileAlertDetails,
             fileinfo: renderFileInfoDetails,
+            email: renderEmailDetails,
+            link: renderLinkDetails,
         };
 
         function formatEvent(e) {
@@ -3969,6 +4046,7 @@
 
         function clearAnalysisContainers() {
             isLogAnalysisMode = false;
+            isEmailAnalysisMode = false;
             document.body.classList.remove('file-analysis');
             const statsGrid = document.getElementById('statsGrid');
             if (statsGrid) {
@@ -4055,11 +4133,13 @@
                 helpModal.classList.add('wide');
             } else {
                 modalTitle.textContent = 'Analysis Help';
-                const isLogFile = detectFileType(currentFileName) === 'log';
+                const isLogFile = isLogAnalysisMode;
                 const isFileOnly = document.body.classList.contains('file-analysis');
                 let helpText;
                 if (isLogFile) {
                     helpText = `<span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Investigate Sigma Alerts and then review Log Events. Filter using the search bar or Aggregation Tables.`;
+                } else if (isEmailAnalysisMode) {
+                    helpText = `<span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Start with the email itself: its Warnings, SPF/DKIM/DMARC results and Received chain. Then check Links for any whose text names a different domain, and File Info and File Alerts for its attachments - each one can be sent to CyberChef. Filter using the search bar or Aggregation Tables.`;
                 } else if (isFileOnly) {
                     helpText = `<span style="color: var(--help-icon-color);">${LIGHTBULB_ICON_SVG}</span> Review the FILE INFO section for metadata and then the data table at the bottom for any matches found by the YARA rules.`;
                 } else {
@@ -4083,12 +4163,6 @@
                 } else {
                     safeStorageRemove(localStorage, 'socrates_hideHelp');
                 }
-            }
-        }
-
-        function handleHelpBackdropClick(event) {
-            if (event.target === document.getElementById('helpModal')) {
-                closeHelpModal();
             }
         }
 
@@ -4333,7 +4407,7 @@
         }
 
         async function showWelcome() {
-            document.title = 'SO-CRATES - Welcome';
+            document.title = 'SO-CRATES';
             closeAllModals();
             if (window.location.search.includes('file=') || window.location.search.includes('pcap=')) {
                 history.replaceState({}, '', window.location.pathname);
@@ -4391,14 +4465,17 @@
                         <div style="background: var(--bg-secondary); padding: 20px; border-radius: 8px; border: 1px solid var(--border-color); width: 100%; box-sizing: border-box;">
                             <div style="color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; margin-bottom: 15px; font-weight: 600;">${DOWN_ARROW_ICON_SVG} Select a sample file, import a file from URL, or import a file from your local system</div>
                             <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 15px;">
-                                <div class="sample-card" title="${_sampleCardTitle(DEFAULT_SAMPLE_URL)}" tabindex="0" role="button" aria-label="Analyze the sample PCAP file" data-action="load-sample-url" data-url="${escapeHtml(DEFAULT_SAMPLE_URL)}" data-key-activate="enter-space">
+                                <div class="sample-card" title="${BUILTIN_SAMPLE_TITLE}" tabindex="0" role="button" aria-label="Analyze the sample PCAP file" data-action="load-builtin-sample" data-sample="pcap" data-key-activate="enter-space">
                                      <span class="sample-label">Sample PCAP file</span>
                                  </div>
-                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_LOG_URL)}" tabindex="0" role="button" aria-label="Analyze the sample log file" data-action="load-sample-url" data-url="${escapeHtml(SAMPLE_LOG_URL)}" data-key-activate="enter-space">
+                                <div class="sample-card" title="${BUILTIN_SAMPLE_TITLE}" tabindex="0" role="button" aria-label="Analyze the sample log file" data-action="load-builtin-sample" data-sample="log" data-key-activate="enter-space">
                                     <span class="sample-label">Sample log file</span>
                                 </div>
-                                <div class="sample-card" title="${_sampleCardTitle(SAMPLE_BINARY_URL)}" tabindex="0" role="button" aria-label="Analyze the sample binary file" data-action="load-sample-url" data-url="${escapeHtml(SAMPLE_BINARY_URL)}" data-key-activate="enter-space">
+                                <div class="sample-card" title="${BUILTIN_SAMPLE_TITLE}" tabindex="0" role="button" aria-label="Analyze the sample binary file" data-action="load-builtin-sample" data-sample="binary" data-key-activate="enter-space">
                                     <span class="sample-label">Sample binary file</span>
+                                </div>
+                                <div class="sample-card" title="${BUILTIN_SAMPLE_TITLE}" tabindex="0" role="button" aria-label="Analyze the sample email file" data-action="load-builtin-sample" data-sample="email" data-key-activate="enter-space">
+                                    <span class="sample-label">Sample email file</span>
                                 </div>
                             </div>
                             <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 15px;">
@@ -4410,6 +4487,9 @@
                                 </div>
                                 <div style="flex: 1; text-align: center;">
                                     <a href="https://www.eicar.org/" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none; font-size: 0.85rem;">More binary samples ↗</a>
+                                </div>
+                                <div style="flex: 1; text-align: center;">
+                                    <a href="${EMAIL_SAMPLES_URL}" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: none; font-size: 0.85rem;">More email samples ↗</a>
                                 </div>
                             </div>
                             <div style="text-align: center; color: var(--text-muted); font-size: 0.9rem; font-weight: 600; text-transform: uppercase; margin-bottom: 15px;">— OR —</div>
@@ -5433,6 +5513,7 @@
             { code: 'pcap samples', label: 'PCAP samples', action: () => { closeAutocompleteModal(); window.open('https://malware-traffic-analysis.net', '_blank', 'noopener,noreferrer'); } },
             { code: 'log samples', label: 'Log samples', action: () => { closeAutocompleteModal(); window.open('https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES', '_blank', 'noopener,noreferrer'); } },
             { code: 'binary samples', label: 'Binary samples', action: () => { closeAutocompleteModal(); window.open('https://www.eicar.org/', '_blank', 'noopener,noreferrer'); } },
+            { code: 'email samples', label: 'Email samples', action: () => { closeAutocompleteModal(); window.open(EMAIL_SAMPLES_URL, '_blank', 'noopener,noreferrer'); } },
             { code: 'themes', label: 'Themes', action: () => { closeAutocompleteModal(); showThemesModal(); } },
             { code: 'rules', label: 'Rules', action: () => { closeAutocompleteModal(); showRulesModal(); } },
             { code: 'settings', label: 'Settings', action: () => { closeAutocompleteModal(); showSettingsModal(); } },
@@ -6505,11 +6586,13 @@
             protocol_decode: 'Decoder Alerts',
             dns: 'DNS Queries',
             dns_heuristics: 'DNS Heuristics',
+            email: 'Emails',
             filealerts: 'File Alerts',
             fileinfo: 'File Info',
             flow: 'Flows',
             ftp: 'FTP',
             http: 'HTTP',
+            link: 'Links',
             log: 'Log Events',
             sigmaalert: 'Sigma Alerts',
             stats: 'Stats',
@@ -6733,7 +6816,8 @@
 
         async function updateSankeyDiagram() {
             const sankeyPanel = document.getElementById('sankeyPanel');
-            if (!sankeyPanel) return;
+            // An email's events have no IPs or ports to draw.
+            if (!sankeyPanel || isEmailAnalysisMode) return;
             sankeyPanel.innerHTML = '';
 
             if (!diagramMode) {
@@ -6779,7 +6863,16 @@
             renderSankeySVG(data, svgContainer);
         }
 
+        // Columns for an email analysis's tabs - see isEmailAnalysisMode.
+        const EMAIL_MODE_COLUMNS = {
+            email: ['Time', 'From', 'To', 'Subject', 'SPF', 'DKIM', 'DMARC', 'Attachments', 'Warnings'],
+            link: ['Time', 'URL', 'Domain', 'Link Text', 'Mismatch'],
+            fileinfo: ['Time', 'Filename', 'Source', 'File Type', 'Size', 'SHA256'],
+            filealerts: ['Time', 'Rule Name', 'Tags', 'Filename'],
+        };
+
         function getColumnsForType(eventType) {
+            if (isEmailAnalysisMode && EMAIL_MODE_COLUMNS[eventType]) return EMAIL_MODE_COLUMNS[eventType];
             switch(eventType) {
                 case 'alert':
                 case 'protocol_decode':
@@ -7013,9 +7106,41 @@
             return `<tr data-id="${escapeHtml(String(e.id))}"${pivotAttrs}${identityAttr}${communityIdAttr} data-action="toggle-row"><td class="timestamp">${escapeHtml(ts)}</td><td>${valueDotSpan(DOT_COLORS.PROTO[proto.toUpperCase()])}${escapeHtml(proto)}</td><td class="mono-fixed" title="${escapeHtml(srcIp)}">${escapeHtml(srcIp)}</td><td class="mono-fixed">${escapeHtml(String(srcPort))}</td><td class="mono-fixed" title="${escapeHtml(dstIp)}">${escapeHtml(dstIp)}</td><td class="mono-fixed">${escapeHtml(String(dstPort))}</td>`;
         }
 
+        // An email-mode row's cells after Time, one per EMAIL_MODE_COLUMNS
+        // entry - every value through extractValue, so the table, filters
+        // and aggregations show the same thing.
+        function emailModeRowCells(e) {
+            const cols = EMAIL_MODE_COLUMNS[e.event_type] || ['Time'];
+            return cols.slice(1).map(col => {
+                const val = extractValue(e, col, -1);
+                if (col === 'Mismatch' && val === 'Yes') return `<td>${valueDotSpan('var(--badge-danger-text)')}Yes</td>`;
+                if (col === 'Tags') return `<td>${(e.filealerts?.tags || []).map(t => yaraTagBadgeHtml(t)).join('')}</td>`;
+                if (['SPF', 'DKIM', 'DMARC'].includes(col)) return val ? `<td>${valueDotSpan(authResultColor(val))}${escapeHtml(val)}</td>` : '<td></td>';
+                const mono = ['From', 'To', 'URL', 'Domain', 'Filename', 'SHA256'].includes(col) ? ' class="mono"' : '';
+                return `<td${mono}>${escapeHtml(val)}</td>`;
+            }).join('');
+        }
+
+        // Dot color for an SPF/DKIM/DMARC result: green pass, red failure,
+        // neutral for everything else (none, neutral, missing).
+        function authResultColor(result) {
+            if (result === 'pass') return 'var(--badge-success-text)';
+            if (['fail', 'softfail', 'permerror'].includes(result)) return 'var(--badge-danger-text)';
+            return '';
+        }
+
         function buildRowForEvent(e) {
             const etype = e.event_type || '';
             const formatted = formatEvent(e);
+
+            if (isEmailAnalysisMode && EMAIL_MODE_COLUMNS[etype]) {
+                const cols = EMAIL_MODE_COLUMNS[etype];
+                const ts = (e.timestamp || '').slice(0, 19);
+                const pivotAttrs = pivotDataAttrsHtml(e, etype, cols, extractValue);
+                return `<tr data-id="${escapeHtml(String(e.id))}"${pivotAttrs} data-action="toggle-row"><td class="timestamp">${escapeHtml(ts)}</td>`
+                    + emailModeRowCells(e) + rowNoteIconHtml('events', e.id, e.row_note) + '</tr>'
+                    + `<tr class="detail-row"><td colspan="${cols.length + 1}"><div class="detail-content">${formatted}</div></td></tr>`;
+            }
 
             let row = '';
             let colSpan = 6;
@@ -8836,7 +8961,7 @@
         let dnsHeuristicsCountMd5 = null;
 
         async function refreshDnsHeuristicsCount() {
-            if (isLogAnalysisMode || !currentMd5) {
+            if (isLogAnalysisMode || isEmailAnalysisMode || !currentMd5) {
                 dnsHeuristicsFlaggedCount = 0;
                 dnsHeuristicsCountMd5 = currentMd5;
                 return;
@@ -8885,7 +9010,7 @@
         }
 
         async function refreshAcknowledgedAlertsCount() {
-            if (isLogAnalysisMode || !currentMd5) {
+            if (isLogAnalysisMode || isEmailAnalysisMode || !currentMd5) {
                 acknowledgedAlertsCount = 0;
                 acknowledgedAlertsCountMd5 = currentMd5;
                 return;
@@ -8939,10 +9064,12 @@
                 const stats = {};
                 const logEvents = tabDataCache['log'] || [];
                 const sigmaAlerts = tabDataCache['sigmaalert'] || [];
-                let logCount = 0;
-                for (const e of logEvents) {
-                    if (eventMatchesFilters(e)) logCount++;
-                }
+                // getFilteredLogEvents - the table's own filter, through
+                // extractLogValue. eventMatchesFilters goes through
+                // extractValue, whose named cases (URL, Domain, From, ...)
+                // can mean something else entirely for a log field of the
+                // same name, leaving the count and the table disagreeing.
+                const logCount = getFilteredLogEvents(logEvents).length;
                 if (logCount > 0) stats['log'] = logCount;
                 let sigmaCount = 0;
                 for (const a of sigmaAlerts) {
@@ -9024,9 +9151,9 @@
                 // below and dnsHeuristicsCountStale's own comment) - NOT
                 // the raw DNS event count, which would read as "this many
                 // suspicious things" on a card literally labeled DNS
-                // Heuristics. Guarded by !isLogAnalysisMode for parity
-                // with 'all'/'acknowledged' below even though 'dns' can't
-                // actually occur in log-analysis mode in practice.
+                // Heuristics. The !isLogAnalysisMode guard is defensive:
+                // 'dns' can't actually occur in log-analysis (or email)
+                // mode in practice.
                 if (type === 'dns' && !isLogAnalysisMode) {
                     stats.push({
                         id: 'dns_heuristics',
@@ -9046,7 +9173,7 @@
                 });
             });
 
-            if (!isLogAnalysisMode) {
+            if (!isLogAnalysisMode && !isEmailAnalysisMode) {
                 stats.push({
                     id: 'all',
                     label: 'All Events',
@@ -9403,6 +9530,9 @@
         
         function extractValue(e, col, colIndex) {
             switch(col) {
+                // Used to sort the tabs that sort client-side (email mode,
+                // mqtt/ldap) - Time is never aggregated or filtered on.
+                case 'Time': return e.timestamp || '';
                 case 'Protocol': return e.proto || '';
                 case 'Source IP': return e.src_ip || '';
                 case 'Source Port': return String(e.src_port || '');
@@ -9426,7 +9556,10 @@
                 }
                 case 'Method': return e.http?.http_method || '';
                 case 'Host': return e.http?.hostname || '';
-                case 'URL': return e.http?.url || '';
+                case 'URL': {
+                    if (e.event_type === 'link') return e.link?.url || '';
+                    return e.http?.url || '';
+                }
                 case 'Status': {
                     if (e.event_type === 'enip') return e.enip?.response?.status || e.enip?.request?.status || '';
                     if (e.event_type === 'pop3') return e.pop3?.response?.status || '';
@@ -9438,7 +9571,6 @@
                     if (e.event_type === 'ntp') return e.ntp?.version !== undefined ? String(e.ntp.version) : '';
                     return e.tls?.version || '-';
                 }
-                case 'Subject': return (e.tls?.subject || '-').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
                 case 'Issuer': return (e.tls?.issuerdn || '-').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
                 case 'Pkts →': return String(e.flow?.pkts_toserver || 0);
                 case 'Pkts ←': return String(e.flow?.pkts_toclient || 0);
@@ -9450,8 +9582,28 @@
                     if (e.event_type === 'smb') return e.smb?.filename || '';
                     if (e.event_type === 'ftp_data') return e.ftp_data?.filename || '';
                     if (e.event_type === 'nfs') return e.nfs?.filename || '';
+                    if (e.event_type === 'filealerts') return e.filealerts?.filename || '';
                     return e.fileinfo?.filename || '';
                 }
+                // Email analysis columns - see EMAIL_MODE_COLUMNS.
+                case 'From': return e.email?.from || '';
+                case 'To': return (e.email?.to || []).join(', ');
+                case 'Subject': {
+                    if (e.event_type === 'email') return e.email?.subject || '';
+                    return (e.tls?.subject || '-').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
+                }
+                case 'SPF': return e.email?.spf || '';
+                case 'DKIM': return e.email?.dkim || '';
+                case 'DMARC': return e.email?.dmarc || '';
+                case 'Attachments': return String((e.email?.attachments || []).length);
+                case 'Warnings': return String((e.email?.warnings || []).length);
+                case 'Domain': return e.link?.domain || '';
+                case 'Link Text': return e.link?.text || '';
+                case 'Mismatch': return e.link?.mismatch ? 'Yes' : 'No';
+                case 'Source': return e.fileinfo?.source === 'message' ? 'Message' : e.fileinfo?.source === 'attachment' ? 'Attachment' : '';
+                case 'File Type': return e.fileinfo?.magic || '';
+                case 'Size': return e.fileinfo?.size !== undefined ? String(e.fileinfo.size) : '';
+                case 'SHA256': return e.fileinfo?.sha256 || '';
                 case 'Rule Name': return e.filealerts?.rule_name || '';
                 case 'Tags': return (e.filealerts?.tags || []).join(', ');
                 case 'Author': return e.filealerts?.author || '';
@@ -9824,7 +9976,7 @@
             // (see db.py's AGGREGATION_JSON_PATHS) - falling back to
             // client-side computation here, like log/sigmaalert already do,
             // instead of hitting an always-empty server result.
-            return !!eventType && eventType !== 'sigmaalert'
+            return !!eventType && !isEmailAnalysisMode && eventType !== 'sigmaalert'
                 && eventType !== 'log' && eventType !== 'binary'
                 && eventType !== 'mqtt' && eventType !== 'ldap'
                 && Object.keys(currentFilters).length === 0;
@@ -9846,7 +9998,7 @@
             // static JSON path server-side, so _sort_expr() returns None for
             // anything but 'Time' - fall back to full client-side sort,
             // which handles every column correctly.
-            return !!eventType && eventType !== 'sigmaalert'
+            return !!eventType && !isEmailAnalysisMode && eventType !== 'sigmaalert'
                 && eventType !== 'log' && eventType !== 'binary'
                 && eventType !== 'mqtt' && eventType !== 'ldap';
         }
@@ -9987,6 +10139,13 @@
         var aggTotalsCache = {};
         let baseEventStats = {};
         var isLogAnalysisMode = false;
+        // An email message (.eml) analysis: the same per-type tabs as a pcap
+        // (Emails, Links, File Info, File Alerts), but its events have no
+        // network fields - so no network columns, Sankey diagram, All Events
+        // or stream tools. Aggregation and sorting stay client-side (see
+        // canUseServerAggregation): a message's events are few, and the
+        // server's aggregation always adds the network columns.
+        var isEmailAnalysisMode = false;
         const ALL_EVENTS_COLUMNS = ['Time', 'Type', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Detail'];
 
         // Columns whose content is short and structurally identical across every
@@ -10124,9 +10283,10 @@
         // performed server-side - fetchEventsPage picks up the new
         // currentSort and re-fetches just one page in the new order, so no
         // full-batch fetch is needed here. For everything else ('all',
-        // sigmaalert, log, binary), clicking a column header while in
-        // scalable mode must first fetch the full capped batch (a no-op if
-        // already cached for aggregations/Sankey) before currentSort takes
+        // sigmaalert, log, binary, mqtt, ldap, and every tab in email mode),
+        // clicking a column header while in scalable mode must first fetch
+        // the full capped batch (a no-op if already cached for
+        // aggregations/Sankey) before currentSort takes
         // effect - canUseScalableFetch() becomes false the moment it's set,
         // so the next rerender() naturally takes the fallback (full-batch,
         // client-side sort) path through the same top-level build function.
@@ -11034,6 +11194,37 @@
             }
         }
 
+        // An email analysis: the per-type tabs, opening on the message itself
+        // (see isEmailAnalysisMode). Same shape as _renderLogAnalysisView.
+        // The tab an email analysis opens on: preferredType (the one visible
+        // before a search or filter rebuilt the view) if it still has
+        // results, otherwise the first tab that does.
+        function pickEmailTab(types, filteredCounts, preferredType) {
+            const hasResults = t => (filteredCounts[t] || 0) > 0;
+            return (preferredType && hasResults(preferredType) ? preferredType : null)
+                || types.find(hasResults) || types[0];
+        }
+
+        async function _renderEmailAnalysisView(counts, preferredType) {
+            eventStats = counts;
+            eventTypes = sortEventTypes(Object.keys(baseEventStats).filter(t => t !== 'stats' && t !== 'all'));
+            const filtered = await computeFilteredStats();
+            buildStats(filtered);
+            buildSections();
+
+            const defaultType = pickEmailTab(eventTypes, filtered, preferredType);
+            if (!defaultType) return;
+            document.querySelectorAll('.section').forEach(s => s.classList.add('section-hidden'));
+            const defaultSection = document.getElementById('section-' + defaultType);
+            if (defaultSection) defaultSection.classList.remove('section-hidden');
+            await loadTabData(defaultType, null);
+
+            const aggContainer = document.getElementById('aggregations');
+            if (aggContainer && !advancedMode) {
+                aggContainer.innerHTML = AGG_COLLAPSED_HTML;
+            }
+        }
+
         async function refreshAnalysisData() {
             if (!currentMd5) return;
             // Marks the Acknowledged Alerts stat card's own count stale so
@@ -11077,6 +11268,9 @@
                 // Use existing file-analysis class set during initial load
                 const isFileOnly = document.body.classList.contains('file-analysis');
                 const isLogFile = isLogAnalysisMode;
+                // Read before the sections are cleared below - see
+                // _renderEmailAnalysisView's preferredType.
+                const emailTabBeforeRefresh = isEmailAnalysisMode ? getVisibleEventType() : null;
 
                 if (isFileOnly) {
                 document.querySelectorAll('.file-info-card').forEach(c => c.remove());
@@ -11105,6 +11299,10 @@
                         console.error('Failed to load log analysis:', e);
                         document.getElementById('sections').innerHTML = '<div class="log-events-section"><h3>📋 Log Events</h3><div class="no-matches">Error loading log events</div></div>';
                     }
+                } else if (isEmailAnalysisMode) {
+                    const statsGrid = document.getElementById('statsGrid');
+                    if (statsGrid) statsGrid.style.display = '';
+                    await _renderEmailAnalysisView(eventStats, emailTabBeforeRefresh);
                 } else {
                     // Binary file analysis: unified view with search + aggregations + file info + YARA table
                     const statsGrid = document.getElementById('statsGrid');
@@ -11490,11 +11688,15 @@
                     // Fetch analysis metadata for routing (supports ZIP uploads)
                     const statusResp = await fetch('/api/status?md5=' + encodeURIComponent(md5) + '&t=' + Date.now());
                     const analysisStatus = await statusResp.json();
+                    // A newer load started meanwhile - don't let this one set
+                    // the mode flags or render over it.
+                    if (isStaleFetch(gen)) return;
                     const detectedType = analysisStatus.meta?.detected_type || detectFileType(currentFileName);
 
                     const isPcap = detectedType === 'pcap';
                     const isLogFile = detectedType === 'log';
                     const isFileOnly = !isPcap;
+                    isEmailAnalysisMode = detectedType === 'email';
                     
                     if (isFileOnly) {
                         document.body.classList.add('file-analysis');
@@ -11553,6 +11755,12 @@
                                     document.getElementById('sections').innerHTML = '<div class="log-events-section"><h3>📋 Log Events</h3><div class="no-matches">Error loading log events</div></div>';
                                 }
                             })();
+                        } else if (isEmailAnalysisMode) {
+                            isLogAnalysisMode = false;
+                            const statsGrid = document.getElementById('statsGrid');
+                            if (statsGrid) statsGrid.style.display = '';
+                            await _renderEmailAnalysisView(eventStats);
+                            seedVerticalNavSelectionIfStale();
                         } else {
                             // Binary file analysis: unified view with search + aggregations + file info + YARA table
                             await ensureBinaryEventsBatch();
@@ -11626,11 +11834,32 @@
             }
         }
         
-        function loadSampleUrl(url) {
+        // A sample built into SO-CRATES (POST /api/load-sample - see
+        // samples.py), generated server-side, so it works with no internet
+        // access. Same response handling as loadFromUrl.
+        async function loadBuiltInSample(name) {
             closeHelpModal();
-            lastSampleUrl = url;
-            document.getElementById('pcapUrl').value = url;
-            loadFromUrl();
+            showLoading('Loading sample...');
+            try {
+                const resp = await fetch('/api/load-sample', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: name})
+                });
+                const result = await resp.json();
+                if (result.status === 'processing') {
+                    await checkStatus(result.md5, result.phase || 'files');
+                } else if (result.status === 'ready') {
+                    hideLoading();
+                    await loadAnalysis(result.md5);
+                } else {
+                    hideLoading();
+                    showError(result.error || 'Unknown error');
+                }
+            } catch(err) {
+                hideLoading();
+                showError(err.message);
+            }
         }
 
         async function loadFromUrl() {
@@ -11851,14 +12080,16 @@
                     'network': 'Analyzing network traffic...',
                     'files': 'Analyzing files...',
                     'importing': 'Importing data...',
-                    'logs': 'Analyzing log file...'
+                    'logs': 'Analyzing log file...',
+                    'email': 'Analyzing email...'
                 };
             }
             return {
                 network: pickRandom(pool),
                 files: pickRandom(pool),
                 importing: pickRandom(pool),
-                logs: pickRandom(pool)
+                logs: pickRandom(pool),
+                email: pickRandom(pool)
             };
         }
 
@@ -12070,12 +12301,14 @@
                 const status = await resp.json();
                 const detectedType = status.meta?.detected_type || detectFileType(name);
                 if (detectedType === 'log') phase = 'logs';
+                else if (detectedType === 'email') phase = 'email';
                 else if (detectedType === 'pcap') phase = 'network';
                 hasRowNotes = !!status.hasRowNotes;
             } catch(err) {
                 // Fallback to filename-based detection if status API fails
                 const detectedType = detectFileType(name);
                 if (detectedType === 'log') phase = 'logs';
+                else if (detectedType === 'email') phase = 'email';
                 else if (detectedType === 'pcap') phase = 'network';
             }
             pendingReanalyze = { md5, name, phase };
@@ -12183,9 +12416,7 @@
             // click anywhere inside the modal bubbles up through the
             // backdrop div (the .modal-content stopPropagation shims are
             // gone), so close only when the click landed on the backdrop
-            // itself - the same event.target === backdrop check the old
-            // handleModalBackdropClick()/handle*BackdropClick() inline
-            // handlers made.
+            // itself.
             'backdrop': (el, e) => {
                 if (e.target !== el) return;
                 const closeFn = STATIC_ACTIONS[el.dataset.arg];
@@ -12215,7 +12446,7 @@
 
             // Welcome screen: sample cards, URL import, upload drop zone,
             // previous-analyses rows.
-            'load-sample-url': (el) => loadSampleUrl(el.dataset.url),
+            'load-builtin-sample': (el) => loadBuiltInSample(el.dataset.sample),
             'load-from-url': () => loadFromUrl(),
             'open-upload-picker': () => document.getElementById('pcapUpload').click(),
             // Real href (?file=md5) kept for copy-link/middle-click;

@@ -80,7 +80,7 @@ RESERVED_FILENAMES = {
     # Analyzer output artifacts: an upload with one of these names would be
     # overwritten mid-scan (result spoofing) or deleted by reanalyze's
     # artifact sweep. Keep in sync with PCAP_ANALYSIS_ARTIFACTS /
-    # FILE_ANALYSIS_ARTIFACTS in socrates.py.
+    # FILE_ANALYSIS_ARTIFACTS in storage.py.
     'yara_matches.json', 'sigma_matches.json', 'zircolite.log',
     '.zircolite_events.db', 'file_metadata.json',
     # Suricata's own outputs - an upload named stats.log would be appended
@@ -345,6 +345,7 @@ def is_file_stale(path, max_age_hours):
 
 
 LOG_EXTENSIONS = ('.evtx', '.json', '.jsonl', '.csv', '.xml', '.log')
+EMAIL_EXTENSIONS = ('.eml',)
 OFFICE_EXTENSIONS = ('.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
                      '.docm', '.xlsm', '.pptm', '.odt', '.ods', '.odp')
 
@@ -363,6 +364,62 @@ def _is_mostly_text(data):
     text_chars = set(bytes(range(32, 127)) + b'\t\n\r')
     text_count = sum(1 for b in data if b in text_chars)
     return text_count / len(data) > 0.7
+
+
+# A header field: a token-like name (RFC 5322 allows more, but real header
+# names are letters, digits and hyphens - and a JSON line's '{"Key":' must
+# not pass), then ':' and whitespace ("Date: Tue, 3 Feb 2026 ...").
+_MAIL_HEADER_RE = re.compile(rb'^([A-Za-z][A-Za-z0-9-]*):[ \t]')
+# Header names only a mail message has, one of which must appear - so a
+# file of 'Key: value' lines (a config, a plain-text log) isn't an email.
+_MAIL_HEADER_NAMES = {
+    b'from', b'to', b'cc', b'subject', b'date', b'received', b'return-path',
+    b'message-id', b'mime-version', b'delivered-to', b'reply-to',
+    b'x-mailer', b'authentication-results', b'dkim-signature', b'x-received',
+}
+
+
+def _looks_like_mail_headers(data):
+    """True if data starts with an email message's header block (.eml):
+    at least two 'Name: value' fields, one of them a mail header (From,
+    Subject, Received, ...), allowing folded continuation lines (which
+    start with whitespace). Checked ahead of the CSV test in
+    is_log_file, which a header line with a comma in it - 'Date: Tue, 3
+    Feb ...' is a common first one - would otherwise pass, sending the
+    message to Sigma as a CSV log and leaving an empty analysis. A CSV
+    whose header row happens to look like a field still has data rows
+    that don't, so it isn't caught by this."""
+    # The last line may be cut off mid-way by the prefix length.
+    lines = data[:4096].split(b'\n')[:-1]
+    fields = 0
+    mail_header = False
+    for line in lines:
+        line = line.rstrip(b'\r')
+        if not line:
+            break
+        if line[:1] in (b' ', b'\t'):
+            if not fields:
+                return False
+            continue
+        m = _MAIL_HEADER_RE.match(line)
+        if not m:
+            return False
+        fields += 1
+        mail_header = mail_header or m.group(1).lower() in _MAIL_HEADER_NAMES
+        if fields >= 2 and mail_header:
+            return True
+    return False
+
+
+def is_email_file(data):
+    """Detect an email message (.eml) by its content - see
+    _looks_like_mail_headers."""
+    return _looks_like_mail_headers(data)
+
+
+def is_email_file_by_extension(filename):
+    """Check if filename has an email message extension (.eml)."""
+    return filename.lower().endswith(EMAIL_EXTENSIONS)
 
 
 def is_log_file(data):
@@ -422,6 +479,9 @@ def is_log_file(data):
         if first_line.startswith('<!doctype html') or first_line.startswith('<html'):
             return False
         return True
+    # An email message (.eml), not a CSV - see _looks_like_mail_headers
+    if _looks_like_mail_headers(data):
+        return False
     # CSV: detectable by commas in first line and newline
     first_line = data.split(b'\n')[0]
     if b',' in first_line and len(first_line) < 4096 and _is_mostly_text(first_line):

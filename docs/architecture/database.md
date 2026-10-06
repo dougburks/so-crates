@@ -13,7 +13,7 @@ CREATE TABLE events (
     dest_port INTEGER,
     protocol TEXT,
     app_proto TEXT,
-    json_data TEXT          -- Full original eve.json line
+    json_data TEXT          -- The full event as JSON: the original eve.json line (PCAP), or built by SO-CRATES (log, binary, email)
 );
 CREATE INDEX idx_event_type ON events(event_type);
 CREATE INDEX idx_timestamp ON events(timestamp);
@@ -99,7 +99,7 @@ PRAGMA busy_timeout = 30000;    -- Retry for 30s when database is locked
 PRAGMA optimize;                -- Gather stats for query planner after bulk load
 ```
 
-The `json_data` column stores the complete original event, allowing the server to return full eve.json objects without re-parsing the source file. An optional `events_fts` virtual table enables fast full-text search over all event data. If FTS5 is unavailable, searches fall back to `json_data LIKE '%term%'`. `row_notes` backs the per-row notes feature (`POST /api/row-note`, see [API Reference](../api.md)) - separate from the whole-analysis `notes.txt` file, and lost on reanalyze along with the rest of `events.db`. `acknowledged_alerts` backs the Acknowledge Alerts feature (`POST /api/acknowledge-alert`/`POST /api/acknowledge-alerts-bulk`) - every `events`/`sigma_alerts` query excludes a row present here by default (`_build_where_conditions`/`_sigma_alert_where` in `db.py`), which is what makes acknowledging remove a row from view instead of just flagging it; the `acknowledged=only` query param flips that to include *only* acknowledged rows, for the Acknowledged Alerts tab's own fetches. Lost on reanalyze along with the rest of `events.db`, same as `row_notes`.
+The `json_data` column stores the complete event - the original eve.json line for a pcap, or the event SO-CRATES built for a log, binary or email - so the server returns full event objects without re-parsing the source file. An optional `events_fts` virtual table enables fast full-text search over all event data. If FTS5 is unavailable, searches fall back to `json_data LIKE '%term%'`. `row_notes` backs the per-row notes feature (`POST /api/row-note`, see [API Reference](../api.md)) - separate from the whole-analysis `notes.txt` file, and lost on reanalyze along with the rest of `events.db`. `acknowledged_alerts` backs the Acknowledge Alerts feature (`POST /api/acknowledge-alert`/`POST /api/acknowledge-alerts-bulk`) - every `events`/`sigma_alerts` query excludes a row present here by default (`_build_where_conditions`/`_sigma_alert_where` in `db.py`), which is what makes acknowledging remove a row from view instead of just flagging it; the `acknowledged=only` query param flips that to include *only* acknowledged rows, for the Acknowledged Alerts tab's own fetches. Lost on reanalyze along with the rest of `events.db`, same as `row_notes`.
 
 New databases build the composite and expression indexes above at ingest. Pre-existing ones get them backfilled lazily (`CREATE INDEX IF NOT EXISTS`) the first time `get_sankey_data_sqlite`, `get_aggregation_data_sqlite` or `get_aggregation_totals_sqlite` runs against them, so upgrading never requires a migration step. Each backfill also re-runs `PRAGMA optimize` to keep the query planner's statistics current - without it, a planner working from stale/missing stats can pick an unhelpful index even for unrelated queries once several indexes share `event_type` as a leading column.
 
