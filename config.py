@@ -40,6 +40,7 @@ SURICATA_SOURCE_RECONCILE_TIMEOUT = 30      # per enable-source/disable-source s
 SURICATA_RUN_TIMEOUT = 300                 # 5 minutes max for a single PCAP
 SIGMA_RUN_TIMEOUT = 300                    # 5 minutes max for Zircolite log analysis
 SHARK_RUN_TIMEOUT = 1800                   # 30 minutes max for one tshark run - it runs in the background at low priority, after Suricata
+STALE_TMP_SECONDS = 2 * 3600               # what a dead server left in /tmp is removed at startup once this old (storage.cleanup_stale_tmp) - well past the longest anything there lives, a tshark run's folder (SHARK_RUN_TIMEOUT, plus the 10 minutes the build gets after it)
 
 # Sigma / Zircolite
 ZIRCOLITE_VERSION = '3.7.1'

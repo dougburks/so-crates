@@ -1270,6 +1270,22 @@ class CaptureDenied(RuntimeError):
     """tshark wasn't allowed to open the capture (see _DENIED_CAPTURE)."""
 
 
+# The folder in /tmp each run gets (analyze), and a startup sweep removes
+# when a server that died left it (storage.cleanup_stale_tmp)
+RUN_TMP_PREFIX = 'shark-run-'
+# 5.0.1's name for it, when it held only the capture's copy. (Before
+# 5.1.0, a killed run's second passes left plain shark-XXXXXXXX folders
+# in /tmp, but a name that short could be anyone's.)
+LEGACY_TMP_PREFIXES = ('shark-copy-',)
+# In a run's folder once its build read the capture from a copy
+_DENIED_MARKER = '.denied'
+# Whether a build has had to: tshark's AppArmor profile (see
+# _DENIED_CAPTURE) doesn't change while the server runs, so later runs go
+# straight to the copy rather than each being refused - and logged by the
+# kernel - once more. Set from the queue's one thread.
+_read_from_copy = False
+
+
 def _read_to_damage(returncode, stderr):
     """Whether a tshark run that failed only stopped at a capture's cut-off
     or damaged end, having read all it could."""
@@ -1385,14 +1401,19 @@ def analyze(dir_path, pcap_path, on_start=None):
     _remove(error_path)
     with _lock:
         _unwritten_errors.pop(dir_path, None)
-    # Where the build puts a copy of the capture if tshark may not read it
-    # in place (_run_from_tmp_copy) - made here, so it's removed even when
-    # the build is killed, and unique, so no other run shares it
-    copy_dir = tempfile.mkdtemp(prefix='shark-copy-')
+    # The run's temp folder, in /tmp: the build's TMPDIR (its second
+    # passes' copies of frames) and where it puts a copy of the capture if
+    # tshark may not read it in place (_run_from_tmp_copy). Made here so
+    # it's removed even when the build is killed (a cancel, the memory
+    # watchdog), and unique, so no other run shares it
+    global _read_from_copy
+    run_dir = tempfile.mkdtemp(prefix=RUN_TMP_PREFIX)
     try:
-        succeeded = _analyze(dir_path, pcap_path, on_start, copy_dir)
+        succeeded = _analyze(dir_path, pcap_path, on_start, run_dir)
+        if os.path.exists(os.path.join(run_dir, _DENIED_MARKER)):
+            _read_from_copy = True
     finally:
-        shutil.rmtree(copy_dir, ignore_errors=True)
+        shutil.rmtree(run_dir, ignore_errors=True)
     if not succeeded and not os.path.exists(error_path):
         # Failed where neither the build nor _analyze could say why (an
         # unwritable folder, a full disk): without this, status() would read
@@ -1405,13 +1426,16 @@ def analyze(dir_path, pcap_path, on_start=None):
                 _unwritten_errors[dir_path] = message
 
 
-def _analyze(dir_path, pcap_path, on_start, copy_dir):
+def _analyze(dir_path, pcap_path, on_start, run_dir):
     """analyze's child process and what it says when it fails. Returns
     whether the build succeeded."""
+    env = dict(os.environ, SHARK_RUN_DIR=run_dir, TMPDIR=run_dir)
+    if _read_from_copy:
+        env['SHARK_READ_FROM_COPY'] = '1'
     with tempfile.TemporaryFile(mode='w+', errors='replace') as stderr_file:
         proc = subprocess.Popen(_child_command(dir_path, pcap_path), cwd=os.path.dirname(os.path.abspath(__file__)),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=stderr_file,
-                                env=dict(os.environ, SHARK_COPY_DIR=copy_dir),
+                                env=env,
                                 preexec_fn=_low_priority, start_new_session=True)
         if on_start:
             on_start(proc)
@@ -1451,10 +1475,12 @@ def _analyze(dir_path, pcap_path, on_start, copy_dir):
     return False
 
 
-def build(dir_path, pcap_path, copy_dir=None):
+def build(dir_path, pcap_path, copy_dir=None, from_copy=False):
     """analyze's child process: run tshark and write its records into
     shark.db as they're built, committing as it goes. On failure, writes
-    the reason to .shark_error. Returns whether it succeeded."""
+    the reason to .shark_error. Returns whether it succeeded. from_copy:
+    read the capture from a copy in copy_dir without trying it in place
+    first - an earlier run found tshark may not."""
     db_path = shark_db_path(dir_path)
     tmp_path = db_path + '.tmp'
     started = time.monotonic()
@@ -1462,12 +1488,19 @@ def build(dir_path, pcap_path, copy_dir=None):
         for name in (tmp_path, tmp_path + '-wal', tmp_path + '-shm'):
             _remove(name)
         notes = {}
-        try:
-            run_tshark(pcap_path, consume=lambda records: create_shark_db(tmp_path, records), notes=notes)
-        except CaptureDenied:
-            # Not allowed to read it here: from a copy in /tmp, which tshark may read
-            for name in (tmp_path, tmp_path + '-wal', tmp_path + '-shm'):
-                _remove(name)
+        denied = from_copy
+        if not from_copy:
+            try:
+                run_tshark(pcap_path, consume=lambda records: create_shark_db(tmp_path, records), notes=notes)
+            except CaptureDenied:
+                denied = True
+                for name in (tmp_path, tmp_path + '-wal', tmp_path + '-shm'):
+                    _remove(name)
+        if denied:
+            # Not allowed to read it here: from a copy in /tmp, which tshark
+            # may read - noted for analyze, so later runs start there
+            if copy_dir:
+                open(os.path.join(copy_dir, _DENIED_MARKER), 'w').close()
             _run_from_tmp_copy(copy_dir, pcap_path, tmp_path, notes)
         conn = sqlite3.connect(tmp_path)
         try:
@@ -1500,7 +1533,7 @@ def _run_from_tmp_copy(copy_dir, pcap_path, tmp_path, notes):
     the run ends."""
     own_dir = copy_dir is None
     if own_dir:
-        copy_dir = tempfile.mkdtemp(prefix='shark-copy-')
+        copy_dir = tempfile.mkdtemp(prefix=RUN_TMP_PREFIX)
     copy = os.path.join(copy_dir, os.path.basename(pcap_path))
     try:
         _place_copy(pcap_path, copy)
@@ -1968,5 +2001,6 @@ def wait_idle(timeout=60):
 if __name__ == '__main__':
     # analyze's child: python3 -m shark_analyzer build <analysis dir> <pcap>
     if len(sys.argv) == 4 and sys.argv[1] == 'build':
-        sys.exit(0 if build(sys.argv[2], sys.argv[3], os.environ.get('SHARK_COPY_DIR')) else 1)
+        sys.exit(0 if build(sys.argv[2], sys.argv[3], os.environ.get('SHARK_RUN_DIR'),
+                            os.environ.get('SHARK_READ_FROM_COPY') == '1') else 1)
     sys.exit('usage: python3 -m shark_analyzer build <analysis dir> <pcap>')

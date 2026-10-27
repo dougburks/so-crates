@@ -45,3 +45,15 @@
     .error                  # Present only if analysis failed; contains the error message
     .warnings               # Present only if something went wrong without failing the analysis (e.g. a failed YARA scan); storage.add_analysis_warning
 ```
+
+Two things live in the system temp directory (`/tmp`) instead, because AppArmor 5's profile for tshark lets it read files there and hardly anywhere else:
+
+```
+/tmp/
+  socrates-flow-XXXXXXXX.pcap  # A flow carved out for an ASCII transcript or a stream payload, removed once read
+  shark-run-XXXXXXXX/          # One tshark run's temp folder: its second passes' copies of frames, and the
+                               # capture's copy if tshark may not read it in place - removed when the run ends,
+                               # however it ends (cancelled or killed too)
+```
+
+The server removes them itself; a startup sweep (`storage.cleanup_stale_tmp`) catches what a server that died left, if they're its own user's and older than `config.STALE_TMP_SECONDS` - `/tmp` may be shared with another SO-CRATES on the same computer, unlike `upload-tmp/`, so one still young enough to be in use is left for a later start.

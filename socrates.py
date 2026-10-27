@@ -40,7 +40,7 @@ from validators import (
 from url_fetch import FileTooLargeError, fetch_url_safely
 from storage import (
     PCAP_EXTENSIONS, PCAP_ANALYSIS_ARTIFACTS, FILE_ANALYSIS_ARTIFACTS,
-    upload_tmp_dir, cleanup_upload_tmp_dir, remove_imported_eve_files, resolve_upload_size_limit, extract_zip_contents,
+    upload_tmp_dir, cleanup_upload_tmp_dir, cleanup_stale_tmp, remove_imported_eve_files, resolve_upload_size_limit, extract_zip_contents,
     hash_file, hash_file_with_prefix, is_pcap_path, write_meta, read_meta, find_pcap_file,
     add_analysis_warning, read_analysis_warnings,
 )
@@ -178,6 +178,11 @@ def _run_capped(cmd, max_bytes, timeout, text=False):
     return proc.returncode, data, truncated
 
 
+# A flow carved for a transcript or payload, in /tmp (_carved_flow) - and
+# what a startup sweep removes when a server that died left one there
+FLOW_CARVE_PREFIX = 'socrates-flow-'
+
+
 @contextlib.contextmanager
 def _carved_flow(pcap, src, sport, dst, dport, max_bytes):
     """One flow, carved out of pcap by tcpdump into a file in /tmp, for
@@ -193,7 +198,7 @@ def _carved_flow(pcap, src, sport, dst, dport, max_bytes):
         max_bytes=max_bytes,
         timeout=config.STREAM_TIMEOUT_SECONDS
     )
-    with tempfile.NamedTemporaryFile(prefix='socrates-flow-', suffix='.pcap') as tmp:
+    with tempfile.NamedTemporaryFile(prefix=FLOW_CARVE_PREFIX, suffix='.pcap') as tmp:
         tmp.write(carved)
         tmp.flush()
         yield tmp.name, truncated
@@ -2896,6 +2901,8 @@ def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(os.path.join(DATA_DIR, config.UPLOAD_TMP_SUBDIR), exist_ok=True)
     cleanup_upload_tmp_dir(DATA_DIR)
+    cleanup_stale_tmp([(FLOW_CARVE_PREFIX, '.pcap'), (shark_analyzer.RUN_TMP_PREFIX, '')]
+                      + [(prefix, '') for prefix in shark_analyzer.LEGACY_TMP_PREFIXES])
     remove_imported_eve_files(DATA_DIR)
 
     # Check for required executables

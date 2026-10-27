@@ -1,5 +1,5 @@
 """Files on disk for uploads and analyses: the upload scratch directory,
-ZIP extraction, hashing, and what an analysis directory (DATA_DIR/<md5>/)
+what a server that died left in /tmp, ZIP extraction, hashing, and what an analysis directory (DATA_DIR/<md5>/)
 contains - its .meta file, its pcap, and its analysis artifacts.
 
 Functions that need DATA_DIR take it as a parameter rather than reading a
@@ -10,7 +10,10 @@ module constant, so they follow socrates.DATA_DIR when it is reassigned
 import hashlib
 import json
 import os
+import re
 import shutil
+import tempfile
+import time
 import zipfile
 import zlib
 from datetime import datetime
@@ -56,6 +59,38 @@ def cleanup_upload_tmp_dir(data_dir):
         path = os.path.join(tmp_dir, entry)
         try:
             if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.unlink(path)
+        except OSError:
+            pass
+
+
+def cleanup_stale_tmp(names, max_age=config.STALE_TMP_SECONDS):
+    """Remove what a server that died (crash, OOM-kill, kill -9) left in
+    the system temp directory: entries named by names - (prefix, suffix)
+    pairs around tempfile's 8 random characters - that are this user's
+    and older than max_age. Unlike upload_tmp_dir(), /tmp may be shared
+    with another SO-CRATES running on the same computer, so what's still
+    young enough to be in use there is left alone; on a container restart,
+    what's left there goes the next time. Called once at startup."""
+    pattern = re.compile('|'.join(re.escape(prefix) + '[a-z0-9_]{8}' + re.escape(suffix)
+                                  for prefix, suffix in names))
+    tmp_dir = tempfile.gettempdir()
+    now = time.time()
+    try:
+        entries = os.listdir(tmp_dir)
+    except OSError:
+        return
+    for entry in entries:
+        if not pattern.fullmatch(entry):
+            continue
+        path = os.path.join(tmp_dir, entry)
+        try:
+            st = os.lstat(path)
+            if st.st_uid != os.getuid() or now - st.st_mtime < max_age:
+                continue
+            if os.path.isdir(path) and not os.path.islink(path):
                 shutil.rmtree(path, ignore_errors=True)
             else:
                 os.unlink(path)

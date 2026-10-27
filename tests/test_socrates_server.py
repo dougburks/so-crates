@@ -511,6 +511,78 @@ class TestDetectFileType(unittest.TestCase):
                 self.assertEqual(server._detect_file_type(b'From: a@example.com\nSubject: big\n', f.name), 'binary')
 
 
+class TestCleanupStaleTmp(unittest.TestCase):
+    """storage.cleanup_stale_tmp() removes what a server that died left in
+    /tmp - flows carved for transcripts, tshark runs' folders - but, since
+    /tmp can be shared with another SO-CRATES on the same computer, only
+    this user's and only once old enough not to be in use there."""
+
+    NAMES = [('socrates-flow-', '.pcap'), ('shark-run-', '')]
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        patcher = unittest.mock.patch.object(tempfile, 'tempdir', self.tmp)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _make(self, name, is_dir=False, age=0):
+        path = os.path.join(self.tmp, name)
+        if is_dir:
+            os.makedirs(os.path.join(path, 'inner'))
+            with open(os.path.join(path, 'inner', 'frames'), 'wb') as f:
+                f.write(b'x')
+        else:
+            with open(path, 'wb') as f:
+                f.write(b'x')
+        then = time.time() - age
+        os.utime(path, (then, then))
+        return path
+
+    def test_removes_only_old_entries_with_its_names(self):
+        old = config.STALE_TMP_SECONDS + 60
+        self._make('socrates-flow-ab1_cd2e.pcap', age=old)
+        self._make('shark-run-zz9yy8xx', is_dir=True, age=old)
+        kept = [
+            self._make('socrates-flow-young123.pcap'),                        # maybe another server's, in use
+            self._make('shark-run-young456', is_dir=True, age=60),
+            self._make('shark-captures', age=old),                            # not a name of ours
+            self._make('socrates-flow-ab1_cd2e.pcap.bak', age=old),
+            self._make('shark-run-TOOLONG123', is_dir=True, age=old),
+        ]
+        storage.cleanup_stale_tmp(self.NAMES)
+        self.assertEqual(sorted(os.listdir(self.tmp)), sorted(os.path.basename(p) for p in kept))
+
+    def test_a_symlink_is_removed_not_followed(self):
+        target = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, target, True)
+        with open(os.path.join(target, 'keep'), 'w') as f:
+            f.write('x')
+        link = os.path.join(self.tmp, 'shark-run-link1234')
+        os.symlink(target, link)
+        then = time.time() - config.STALE_TMP_SECONDS - 60
+        os.utime(link, (then, then), follow_symlinks=False)
+        storage.cleanup_stale_tmp(self.NAMES)
+        self.assertFalse(os.path.lexists(link))
+        self.assertTrue(os.path.exists(os.path.join(target, 'keep')))
+
+    def test_another_users_entry_is_left_alone(self):
+        path = self._make('shark-run-other123', is_dir=True, age=config.STALE_TMP_SECONDS + 60)
+        with unittest.mock.patch.object(storage.os, 'getuid', return_value=os.getuid() + 1):
+            storage.cleanup_stale_tmp(self.NAMES)
+        self.assertTrue(os.path.exists(path))
+
+    def test_main_sweeps_every_name_it_puts_in_tmp(self):
+        """Wired into main() before serving, and given the flow carve's
+        and tshark's names - the ones the code that makes them uses."""
+        with open(SERVER_FILE, 'r') as f:
+            main_section = f.read().split('\ndef main():')[1]
+        sweep = main_section.index('cleanup_stale_tmp(')
+        self.assertLess(sweep, main_section.index('serve_forever()'))
+        for name in ('FLOW_CARVE_PREFIX', 'shark_analyzer.RUN_TMP_PREFIX', 'shark_analyzer.LEGACY_TMP_PREFIXES'):
+            self.assertIn(name, main_section[sweep:sweep + 300])
+
+
 class TestCleanupUploadTmpDir(unittest.TestCase):
     """storage.cleanup_upload_tmp_dir() sweeps orphaned files/dirs left behind in
     upload-tmp/ by a process that died mid-upload (crash, OOM-kill, kill -9)

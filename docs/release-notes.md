@@ -10,6 +10,18 @@
   or with Shift held - the browser's own menu shows, and a right-click
   never expands or collapses a row. Suggested by crystalstorm466
 
+### Fixes
+
+- A tshark run that was cancelled (reanalyzing or deleting an analysis
+  while it ran) or stopped for using too much memory left its copies of
+  the capture's frames in `/tmp` - often RAM. Everything a run puts in
+  `/tmp` is now in one folder the server removes however the run ends,
+  and at startup it removes what a server that died left there
+- Where AppArmor confines tshark (5.0.1), only the first tshark run after
+  the server starts tries the capture in place; later runs read the copy
+  in `/tmp` straight away, so the kernel's log gets one "DENIED" line per
+  server start rather than one per capture
+
 ## 5.0.1
 
 ### Fixes
