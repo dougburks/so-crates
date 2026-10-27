@@ -8999,6 +8999,109 @@ class TestAggregationPivotMenu(unittest.TestCase):
         self.assertFalse(result['menuOpen'], 'clicking the (empty) bucket must not open a pivot menu')
 
 
+class TestRightClickPivotMenu(unittest.TestCase):
+    """A right-click opens the pivot menu wherever a left-click does - a
+    table row's value, a detail-panel value, an aggregation row - and
+    holds back the browser's own menu only then. Anywhere else, on a
+    link, with text selected or with Shift held, the browser's menu
+    shows, and a right-click never expands or collapses a row."""
+
+    SETUP = TestPivotMenu._row_html(None) + '''
+        function rightClick(el, opts) {
+            opts = opts || {};
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 }));
+            var ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2,
+                                                     shiftKey: !!opts.shift, clientX: 5, clientY: 5 });
+            el.dispatchEvent(ev);
+            var out = { menuOpen: !!document.querySelector('.pivot-menu'),
+                        browserMenuHeld: ev.defaultPrevented,
+                        rowExpanded: tr.classList.contains('expanded-row') };
+            var label = document.querySelector('.pivot-menu-label');
+            out.label = label ? label.textContent : null;
+            closePivotMenu();
+            return out;
+        }
+    '''
+
+    def test_row_value_opens_menu_instead_of_browser_menu(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            window.__jsdom_result = rightClick(tr.children[2]); // Source IP
+        ''')
+        self.assertTrue(result['menuOpen'])
+        self.assertTrue(result['browserMenuHeld'])
+        self.assertIn('1.1.1.1', result['label'])
+        self.assertFalse(result['rowExpanded'])
+
+    def test_cell_without_a_value_leaves_row_and_browser_menu_alone(self):
+        """The Time column has no pivot value: a left-click there expands
+        the row, a right-click must not."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            window.__jsdom_result = rightClick(tr.querySelector('td.timestamp') || tr.children[0]);
+        ''')
+        self.assertFalse(result['menuOpen'])
+        self.assertFalse(result['browserMenuHeld'])
+        self.assertFalse(result['rowExpanded'], 'a right-click must never expand a row')
+
+    def test_shift_and_selection_keep_the_browser_menu(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            var cell = tr.children[2];
+            var shifted = rightClick(cell, { shift: true });
+            var r = document.createRange();
+            r.selectNodeContents(cell);
+            getSelection().removeAllRanges(); getSelection().addRange(r);
+            var selected = rightClick(cell);
+            getSelection().removeAllRanges();
+            var plain = rightClick(cell);
+            window.__jsdom_result = { shifted: shifted, selected: selected, plain: plain };
+        ''')
+        for case in ('shifted', 'selected'):
+            self.assertFalse(result[case]['menuOpen'], case)
+            self.assertFalse(result[case]['browserMenuHeld'], case)
+        self.assertTrue(result['plain']['menuOpen'], 'a selection only counts for the right-click it was there for')
+
+    def test_link_in_a_row_keeps_the_browser_menu(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            tr.children[2].innerHTML = '<a href="https://attack.mitre.org/techniques/T1059/" data-action="stop-propagation">T1059</a>';
+            window.__jsdom_result = rightClick(tr.children[2].querySelector('a'));
+        ''')
+        self.assertFalse(result['menuOpen'])
+        self.assertFalse(result['browserMenuHeld'])
+
+    def test_right_click_elsewhere_closes_an_open_menu(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            tr.children[2].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            var before = !!document.querySelector('.pivot-menu');
+            document.body.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }));
+            window.__jsdom_result = { before: before, after: !!document.querySelector('.pivot-menu') };
+        ''')
+        self.assertTrue(result['before'])
+        self.assertFalse(result['after'])
+
+    def test_detail_value_and_aggregation_row(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            var t2 = document.createElement('table');
+            t2.innerHTML = '<tbody><tr data-event-type="http"><td></td></tr>'
+                + '<tr class="detail-row visible"><td>' + htmlRowText('URL', '/api/v2/telemetry') + '</td></tr></tbody>';
+            document.body.appendChild(t2);
+            var detail = rightClick(t2.querySelector('.detail-value-pivot'));
+            var div = document.createElement('div');
+            div.innerHTML = _renderAggTablesHtml({ Protocol: { TCP: 5 } }, ['Protocol'], 'section-dns');
+            document.body.appendChild(div);
+            var agg = rightClick(div.querySelector('.agg-row'));
+            window.__jsdom_result = { detail: detail, agg: agg };
+        ''')
+        self.assertTrue(result['detail']['browserMenuHeld'])
+        self.assertEqual(result['detail']['label'], 'URL: /api/v2/telemetry')
+        self.assertTrue(result['agg']['browserMenuHeld'])
+        self.assertIn('TCP', result['agg']['label'])
+
+
 class TestAggregationPagination(unittest.TestCase):
     """Aggregation Tables' Prev/Next pagination (AGG_PAGE_SIZE, fixed at
     CONFIG.AGGREGATION_TOP_N) - matches Security Onion's own aggregation-

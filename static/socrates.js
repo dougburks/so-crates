@@ -2897,14 +2897,16 @@
         // collapsed row instead: every detail-row is rendered as the very
         // next sibling of the row it expands from (see e.g.
         // buildRowForEvent's own row + detail-row pairing).
-        document.addEventListener('click', function(event) {
+        // Returns true if it opened the menu - the right-click listener
+        // below needs to know whether to hold back the browser's own.
+        function openDetailValuePivotMenu(event) {
             const pivotEl = event.target.closest('[data-detail-pivot]');
-            if (!pivotEl) return;
+            if (!pivotEl) return false;
             let pair;
             try {
                 pair = JSON.parse(decodeURIComponent(pivotEl.dataset.detailPivot));
             } catch (e) {
-                return;
+                return false;
             }
             const [label, value, isDynamicField] = pair;
             const detailRow = pivotEl.closest('tr.detail-row');
@@ -2920,7 +2922,7 @@
             if (selected.trim() && selected !== String(value)) {
                 event.stopPropagation();
                 showPivotMenu(event, null, `${label} (selection)`, selected, true, null, collapsedRow ? collapsedRow.dataset.communityId : null);
-                return;
+                return true;
             }
             const eventType = collapsedRow ? collapsedRow.dataset.eventType : null;
             const columns = detailColumnsForEventType(eventType);
@@ -2958,25 +2960,68 @@
             const trimmed = !eventType || !mappedColumn;
             event.stopPropagation();
             showPivotMenu(event, eventType ? 'section-' + eventType : null, mappedColumn || label, value, trimmed, null, collapsedRow ? collapsedRow.dataset.communityId : null);
-        });
+            return true;
+        }
+        document.addEventListener('click', openDetailValuePivotMenu);
 
         // Aggregation-table rows (see _renderAggTablesHtml) always carry a
         // real column - they're literally grouped by it - so this always
         // opens the full menu, unlike the detail-panel listener above.
         // Delegated for the same reason: _renderAggTablesHtml returns a
         // plain HTML string, and val is arbitrary field content.
-        document.addEventListener('click', function(event) {
+        function openAggRowPivotMenu(event) {
             const row = event.target.closest('tr.agg-row[data-agg-pivot]');
-            if (!row) return;
+            if (!row) return false;
             let triple;
             try {
                 triple = JSON.parse(decodeURIComponent(row.dataset.aggPivot));
             } catch (e) {
-                return;
+                return false;
             }
             const [sectionId, col, value] = triple;
             event.stopPropagation();
             showPivotMenu(event, sectionId, col, value, false);
+            return true;
+        }
+        document.addEventListener('click', openAggRowPivotMenu);
+
+        // Right-click opens the same pivot menu a left-click does, on
+        // anything a left-click opens it from: a table row's value, a
+        // detail-panel value, an aggregation row. Only there - anywhere
+        // else (a row's Time column or an empty cell, padding, the rest of
+        // the page) the browser's own menu shows, and a right-click never
+        // expands or collapses a row. The browser's menu also wins on a
+        // link (open in a new tab), with text selected (Copy), and with
+        // Shift held, so it's always one modifier away.
+        //
+        // Whether text was selected is read at mousedown, before the
+        // browser's own handling of it: macOS selects the word under the
+        // pointer on a right-click, so by contextmenu every value would
+        // look like a selection. That word's selection is cleared when
+        // our menu opens instead.
+        const ROW_TOGGLE_ACTIONS = new Set(['toggle-row', 'toggle-log-row', 'toggle-sigma-row']);
+        let selectionAtMousedown = false;
+        document.addEventListener('mousedown', () => {
+            const sel = window.getSelection();
+            selectionAtMousedown = !!(sel && !sel.isCollapsed && sel.toString().trim());
+        }, true);
+        document.addEventListener('contextmenu', event => {
+            const hadSelection = selectionAtMousedown;
+            selectionAtMousedown = false;
+            if (event.shiftKey || hadSelection) return;
+            if (activePivotMenuEl && activePivotMenuEl.contains(event.target)) return;
+            if (event.target.closest('a[href]:not([href="#"])')) return;
+            const actionEl = event.target.closest('[data-action]');
+            const opened = openDetailValuePivotMenu(event)
+                || openAggRowPivotMenu(event)
+                || (!!actionEl && ROW_TOGGLE_ACTIONS.has(actionEl.dataset.action) && handleRowCellClick(actionEl, event));
+            if (opened) {
+                event.preventDefault();
+                const sel = window.getSelection();
+                if (sel) sel.removeAllRanges();
+            } else {
+                closePivotMenu();
+            }
         });
 
         // Include/Exclude/Only for one row-cell's value (see

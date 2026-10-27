@@ -1,5 +1,15 @@
 # Release Notes
 
+## Unreleased
+
+### Improvements
+
+- **Right-click opens the pivot menu**, the same menu a click opens, on
+  a value in a table row, an expanded row's detail panel, or an
+  aggregation table. Anywhere else - and on a link, with text selected,
+  or with Shift held - the browser's own menu shows, and a right-click
+  never expands or collapses a row. Suggested by crystalstorm466
+
 ## 5.0.1
 
 ### Fixes
