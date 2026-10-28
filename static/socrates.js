@@ -5925,14 +5925,14 @@
             return true;
         }
 
-        // .stats-grid is a responsive CSS grid (repeat(auto-fit,
-        // minmax(140px, 1fr))) with no fixed column count - mirrors
+        // .stats-grid (or, in sections, each panel's .stats-group-cards)
+        // is a responsive CSS grid (repeat(auto-fit, ...)) with no fixed
+        // column count - mirrors
         // themeTileGridColumnCount()'s own technique of reading the
         // browser's already-resolved column list back via
         // getComputedStyle rather than trying to compute it by hand from
         // container width/card width.
-        function statsGridColumnCount() {
-            const grid = document.getElementById('statsGrid');
+        function statsGridColumnCount(grid = document.getElementById('statsGrid')) {
             if (!grid) return 1;
             const columns = getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length;
             return columns > 0 ? columns : 1;
@@ -5972,22 +5972,22 @@
                 : document.querySelector('.stat-card.tab-active');
             if (!referenceCard) return [];
             const cards = Array.from(document.querySelectorAll('#statsGrid .stat-card:not(.stat-card-collapsed)'));
-            const columnCount = statsGridColumnCount();
             // The open tab's card in a section the viewer collapsed: the
             // grid is still reachable, from its first card showing
             if (!cards.includes(referenceCard) && referenceCard.classList.contains('stat-card-collapsed')) referenceCard = cards[0];
             if (!cards.includes(referenceCard)) return [];
-            // Each section's cards start a fresh row under its heading (see
-            // STAT_GROUPS), so their columns count from the section's first
-            const place = new Map();
-            let n = 0;
-            for (const el of document.getElementById('statsGrid').children) {
-                if (el.classList.contains('stats-grid-heading')) n = 0;
-                else if (el.classList.contains('stat-card') && !el.classList.contains('stat-card-collapsed')) place.set(el, n++);
-            }
-            const columnOf = c => place.get(c) % columnCount;
-            const column = columnOf(referenceCard);
-            return cards.filter(c => columnOf(c) === column);
+            // In sections each panel is a grid of its own (see STAT_GROUPS),
+            // so a card's column counts from its panel's first card, in that
+            // panel's columns; Down/Up walks that column through every
+            // section in turn
+            const columnOf = new Map();
+            const containers = [...new Set(cards.map(c => c.parentElement))];
+            containers.forEach(container => {
+                const columnCount = statsGridColumnCount(container);
+                cards.filter(c => c.parentElement === container).forEach((c, i) => columnOf.set(c, i % columnCount));
+            });
+            const column = columnOf.get(referenceCard);
+            return cards.filter(c => columnOf.get(c) === column);
         }
 
         // True for the controls that behave as one horizontal group within
@@ -10496,13 +10496,17 @@
             requestAnimationFrame(tick);
         }
 
-        // A PCAP analysis's cards come in three sections, each under a
-        // heading on a row of its own: triage (the alert cards, the views
+        // A PCAP analysis's cards come in three sections, each a panel
+        // with its heading on top: triage (the alert cards, the views
         // that pick out what's worth a look, and All Events - the way into
         // everything), then the protocol records, then the connections -
         // Suricata's flows and tshark's connection cards, which list
         // connections the same way. STAT_GROUPS is in that order;
-        // statGroup() says which a card is in.
+        // statGroup() says which a card is in. The panels share rows, each
+        // as wide as its share of the cards (--cards), so a section of
+        // three cards sits beside the next rather than leaving the rest of
+        // its row empty; one with too many cards for what's left of a row
+        // starts the next.
         const STAT_GROUPS = [
             { heading: 'Triage', note: 'alerts, what the records show is worth a look, and every event in one view' },
             { heading: 'Protocol records', note: 'what Suricata and tshark parsed from the traffic' },
@@ -10539,14 +10543,15 @@
         }
 
         // The Protocol records heading also ends with tshark's finished
-        // line, once there is one (see updateTsharkLine)
+        // line, once there is one (see updateTsharkLine). The section's
+        // note is the heading's tooltip - spelled out on the heading, it
+        // made the panel as wide as the note, not as its cards.
         function statGroupHeadingHtml(group, collapsed, cardCount) {
             const g = STAT_GROUPS[group];
-            return `<div class="stats-grid-heading${collapsed ? ' collapsed' : ''}" data-action="toggle-stat-group" data-group="${group}">`
+            return `<div class="stats-grid-heading${collapsed ? ' collapsed' : ''}" data-action="toggle-stat-group" data-group="${group}" title="${escapeHtml(g.note)}">`
                 + `<button type="button" class="stats-grid-heading-toggle" aria-expanded="${!collapsed}">`
                 + `<span class="stats-grid-heading-arrow" aria-hidden="true">${collapsed ? '▸' : '▾'}</span>`
                 + `<span class="stats-grid-heading-label">${g.heading}</span></button>`
-                + `<span class="stats-grid-heading-note">${escapeHtml(g.note)}</span>`
                 + `<span class="stats-grid-heading-summary"${collapsed ? '' : ' hidden'}>${statGroupSummary(cardCount)}</span>`
                 + (group === 1 ? '<span id="tsharkHeadingStatus" class="stats-grid-heading-aside" aria-live="polite" hidden></span>' : '')
                 + '</div>';
@@ -10561,6 +10566,7 @@
             const cards = grid.querySelectorAll(`.stat-card[data-stat-group="${group}"]`);
             cards.forEach(c => c.classList.toggle('stat-card-collapsed', collapsed));
             heading.classList.toggle('collapsed', collapsed);
+            heading.parentElement.classList.toggle('collapsed', collapsed);
             heading.querySelector('.stats-grid-heading-toggle').setAttribute('aria-expanded', String(!collapsed));
             heading.querySelector('.stats-grid-heading-arrow').textContent = collapsed ? '▸' : '▾';
             heading.querySelector('.stats-grid-heading-summary').hidden = !collapsed;
@@ -10569,10 +10575,10 @@
                     c.classList.remove('keyboard-selected');
                     if (verticalNavSelection === c) verticalNavSelection = null;
                 });
-            } else {
-                // Labels hidden while collapsed couldn't be measured
-                fitStatLabels(grid);
             }
+            // Labels hidden while collapsed couldn't be measured, and the
+            // other panels in its row widen or narrow with it
+            fitStatLabels(grid);
         }
 
         function toggleStatGroup(heading) {
@@ -10730,8 +10736,16 @@
                 ? Object.keys(groupCards).map(Number).filter(g => g !== activeGroup && statGroupCollapsed(g, groupCards[g]))
                 : []);
             let lastGroup = null;
+            grid.classList.toggle('stats-grid-grouped', showHeadings);
             grid.innerHTML = visibleStats.map(s => {
-                const heading = showHeadings && s.group !== lastGroup ? statGroupHeadingHtml(s.group, collapsedGroups.has(s.group), groupCards[s.group]) : '';
+                let heading = '';
+                if (showHeadings && s.group !== lastGroup) {
+                    const collapsed = collapsedGroups.has(s.group);
+                    heading = (lastGroup === null ? '' : '</div></div>')
+                        + `<div class="stats-group${collapsed ? ' collapsed' : ''}" data-group="${s.group}" style="--cards: ${groupCards[s.group]}">`
+                        + statGroupHeadingHtml(s.group, collapsed, groupCards[s.group])
+                        + '<div class="stats-group-cards">';
+                }
                 lastGroup = s.group;
                 const collapsedClass = collapsedGroups.has(s.group) ? ' stat-card-collapsed' : '';
                 const groupAttr = s.group !== undefined ? ` data-stat-group="${s.group}"` : '';
@@ -10754,7 +10768,7 @@
                         <div class="stat-label">${escapeHtml(s.label)}</div>${s.notInSuricata ? '<span class="stat-badge" title="From tshark: Suricata doesn\'t parse this protocol"><span class="sr-only">from tshark</span></span>' : ''}
                     </div>
                 `;
-            }).join('');
+            }).join('') + (showHeadings ? '</div></div>' : '');
             const numberEls = grid.querySelectorAll('.stat-number');
             visibleStats.forEach((s, i) => animateStatNumber(numberEls[i], s.count));
             // The new Protocol records heading takes tshark's finished line

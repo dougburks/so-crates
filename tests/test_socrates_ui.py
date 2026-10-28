@@ -403,14 +403,15 @@ class TestHTMLStructure(unittest.TestCase):
 
 class TestCSSLayout(unittest.TestCase):
     def test_stats_grid_columns(self):
-        match = re.search(r'grid-template-columns:\s*repeat\(([^)]+)\)', CSS_CONTENT)
-        self.assertIsNotNone(match, "stats-grid should have grid-template-columns")
-        if match:
-            columns = match.group(1)
-            self.assertIn('auto-fit', columns,
-                          'stats-grid must use auto-fit for responsive wrapping')
-            self.assertIn('minmax', columns,
-                          'stats-grid must use minmax for responsive column sizing')
+        """Every card one width, wrapping to fit - in a section's panel
+        too - so no card reads larger than another"""
+        grid = re.search(r'\.stats-grid \{[^}]*grid-template-columns:\s*repeat\(([^)]+)\)', CSS_CONTENT)
+        panel = re.search(r'\.stats-group-cards \{[^}]*grid-template-columns:\s*repeat\(([^)]+)\)', CSS_CONTENT)
+        self.assertIsNotNone(grid, "stats-grid should have grid-template-columns")
+        self.assertIsNotNone(panel, "a section panel's cards should have grid-template-columns")
+        self.assertRegex(grid.group(1), r'^auto-fill, \d+px$', 'stats-grid must wrap fixed-width cards')
+        self.assertEqual(panel.group(1), grid.group(1), "a panel's cards must be the same width as the grid's")
+        self.assertRegex(CSS_CONTENT, r'\.stat-number \{ font-size: [\d.]+rem;', 'one number size on every card')
 
     def test_stats_grid_gap(self):
         self.assertIn('gap:', CSS_CONTENT)
@@ -22239,9 +22240,9 @@ class TestTsharkUI(unittest.TestCase):
     def test_cards_come_in_sections_under_headings_of_their_own(self):
         """A PCAP analysis's cards come in three sections - triage, the
         protocol records, the connections (Flows, then tshark's connection
-        cards) - each under a heading on a row of its own. (REGRESSION: the
-        connection cards' alphabetical run (BFD...) after the record
-        types' (...TLS) read as the cards sorted wrong.)"""
+        cards) - each a panel with its heading on top, sized by its cards.
+        (REGRESSION: the connection cards' alphabetical run (BFD...) after
+        the record types' (...TLS) read as the cards sorted wrong.)"""
         from tests.jsdom_helper import js_statements
         result = js_statements("""
             await new Promise(function(r) { setTimeout(r, 100); });
@@ -22264,9 +22265,12 @@ class TestTsharkUI(unittest.TestCase):
             await new Promise(function(r) { setTimeout(r, 200); });
             buildStats();
             var grid = document.getElementById('statsGrid');
-            var order = [...grid.children].map(el => el.classList.contains('stats-grid-heading') ? 'HEADING ' + el.querySelector('.stats-grid-heading-label').textContent
+            var order = [...grid.querySelectorAll('.stats-grid-heading, .stat-card')].map(el => el.classList.contains('stats-grid-heading') ? 'HEADING ' + el.querySelector('.stats-grid-heading-label').textContent
                 : el.querySelector('.stat-label').textContent);
-            // a 3-column grid: each section starts a row of its own
+            var panels = [...grid.children].map(p => [p.className, p.style.getPropertyValue('--cards'),
+                p.firstElementChild.classList.contains('stats-grid-heading'), p.querySelectorAll('.stats-group-cards > .stat-card').length]);
+            var groupedClass = grid.classList.contains('stats-grid-grouped');
+            // 3-column panels: each counts its columns from its first card
             window.statsGridColumnCount = function() { return 3; };
             // (the active card - a test can't set verticalNavSelection)
             var column = function(label) {
@@ -22275,18 +22279,21 @@ class TestTsharkUI(unittest.TestCase):
             };
             var columns = {bfd: column('BFD'), flows: column('Flows'), dns: column('DNS Queries')};
             var all = grid.querySelector('[data-section="section-all"]');
-            var notes = [...grid.querySelectorAll('.stats-grid-heading')].map(h => h.textContent);
+            var notes = [...grid.querySelectorAll('.stats-grid-heading')].map(h => h.title);
             var probedTitle = grid.querySelector('[data-section="section-conn__probed"]').title;
             buildStats({tls: 2, alert: 1, http: 5, flow: 40});      // a filter that leaves no connection rows
-            window.__jsdom_result = {order: order, columns: columns, notes: notes, probedTitle: probedTitle,
+            window.__jsdom_result = {order: order, panels: panels, groupedClass: groupedClass, columns: columns, notes: notes, probedTitle: probedTitle,
                                      allTitle: all.title, allTitleWithoutConnections: grid.querySelector('[data-section="section-all"]').title};
         """)
         self.assertEqual(result['order'], [
             'HEADING Triage', 'Network Alerts', 'Anomalies', 'Findings', 'DNS Heuristics', 'Acknowledged Alerts', 'All Events',
             'HEADING Protocol records', 'DNS Queries', 'HTTP', 'TLS',
             'HEADING Connections', 'Flows', 'BFD', 'XDMCP', 'Probed Only'])
+        self.assertTrue(result['groupedClass'])
+        self.assertEqual(result['panels'], [['stats-group', '6', True, 6], ['stats-group', '3', True, 3], ['stats-group', '4', True, 4]],
+                         'a panel per section, its heading first, sized by its cards')
         self.assertEqual(result['columns']['flows'], ['Network Alerts', 'DNS Heuristics', 'DNS Queries', 'Flows', 'Probed Only'],
-                         "each section's columns count from its own first card")
+                         "each panel's columns count from its own first card, and Down/Up walks the column through every section")
         self.assertEqual(result['columns']['bfd'], ['Anomalies', 'Acknowledged Alerts', 'HTTP', 'BFD'])
         self.assertIn('worth a look', result['notes'][0])
         self.assertIn("Suricata's flows", result['notes'][2])

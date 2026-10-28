@@ -1346,14 +1346,24 @@
         .container { width: 100%; padding: 20px; box-sizing: border-box; padding-bottom: 80px; padding-top: 56px; }
         header { background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%); padding: 30px; border-radius: 12px; margin-bottom: 20px; border: 1px solid var(--border-color); }
         #mainHeader { padding: 0; background: transparent; border: none; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        /* Its own solid panel, like the cards: the fun themes animate the
-           page background behind the grid, and bare text over it was
-           unreadable (CGA's dithering, Vaporwave's sun). */
-        .stats-grid-heading { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-top: 10px; padding: 10px 16px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 10px; color: var(--text-muted); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+        /* Every card the same width, in sections or not, so every card
+           reads the same - a row's spare width is left at its end */
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, 112px); gap: 8px; margin-bottom: 20px; }
+        /* A PCAP analysis's sections (socrates.js STAT_GROUPS): a panel each,
+           sharing rows, each as wide as its cards (--cards) - so a small
+           section sits beside the next, and one too big for what's left of
+           a row starts the next, its cards wrapping inside it. The panel is
+           solid, like the cards: the fun themes animate the page background
+           behind the grid, and bare text over it was unreadable (CGA's
+           dithering, Vaporwave's sun). */
+        .stats-grid.stats-grid-grouped { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
+        .stats-group { flex: 0 1 calc(var(--cards) * 120px + 14px); min-width: 0; padding: 8px 10px 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 10px; }
+        .stats-group.collapsed { flex: 0 1 auto; padding-bottom: 8px; }
+        .stats-group-cards { display: grid; grid-template-columns: repeat(auto-fill, 112px); gap: 8px; }
         /* the cards' label color (.stat-label): readable on every theme, where
            --text-primary isn't always (Breadbin Blue's is the dimmer one) */
-        .stats-grid-heading-note { font-weight: normal; text-transform: none; letter-spacing: normal; }
+        .stats-grid-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 0 2px 8px; color: var(--text-muted); font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+        .stats-grid-heading.collapsed { padding-bottom: 0; }
         .stats-grid-heading { cursor: pointer; user-select: none; }
         .stats-grid-heading:hover { color: var(--text-bright); }
         .stats-grid-heading-toggle { all: unset; display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
@@ -1373,7 +1383,10 @@
         .stats-grid-heading-aside { margin-left: auto; font-weight: normal; text-transform: none; letter-spacing: normal; }
         .stats-grid-heading-aside[hidden] { display: none; }
         .stats-grid-heading-aside .stat-badge-dot { margin-right: 6px; vertical-align: 1px; }
-        .stat-card { background: var(--bg-secondary); padding: 20px; border-radius: 10px; border: 1px solid var(--border-color); text-align: center; cursor: pointer; container-type: inline-size; position: relative; }
+        /* Every card one height - room for a two-line label ("DNS
+           HEURISTICS"), its number and label centered - so a section whose
+           labels wrap isn't taller than the one beside it */
+        .stat-card { background: var(--bg-secondary); padding: 10px 8px; min-height: 76px; display: flex; flex-direction: column; justify-content: center; border-radius: 10px; border: 1px solid var(--border-color); text-align: center; cursor: pointer; position: relative; }
         .stat-card:hover { border-color: var(--interactive-highlight, var(--accent)); }
         .stat-card.tab-active { border-color: var(--interactive-highlight, var(--accent)); background: var(--bg-tertiary); }
         /* A stat-card gets .keyboard-selected from Up/Down (the active tab's
@@ -1418,28 +1431,24 @@
         .fun-theme .stat-card::after { bottom: 0; background-position: bottom left, bottom left, bottom right, bottom right; }
         .fun-theme .stat-card:hover::before, .fun-theme .stat-card:hover::after,
         .fun-theme .stat-card.tab-active::before, .fun-theme .stat-card.tab-active::after { opacity: 1; }
-        /* Fluid, not fixed - a large sample can have 20+ event-type cards
-           in the auto-fit grid below, squeezing each card down to its
-           140px minmax floor; a fixed 2.5rem digit size overflowed cards
-           that narrow once counts hit 6-7 digits (e.g. "207,010"). Scaled
-           off the card's own width (container query, not viewport) so it
-           adapts to however many columns actually end up on screen,
-           clamped so it never shrinks below legible or grows past the
-           original 2.5rem on a roomy card. buildStats() always shows a
-           single plain count now (never a longer "filtered / total"
-           string - see its own comment), so white-space: nowrap is safe:
-           a lone number has no space to wrap on anyway. */
-        .stat-number { font-size: clamp(1.15rem, 15cqw, 2.5rem); font-weight: bold; white-space: nowrap; }
+        /* One size on every card, as every card is one width (.stats-grid):
+           sized to the card, it grew on a section's roomier cards and set
+           them apart. 1.25rem keeps a 7-digit count ("1,234,567") inside a
+           112px card. buildStats() always shows a single plain count (never
+           a longer "filtered / total" string - see its own comment), so
+           white-space: nowrap is safe: a lone number has no space to wrap
+           on anyway. */
+        .stat-number { font-size: 1.25rem; font-weight: bold; white-space: nowrap; line-height: 1.25; }
         /* Never breaks inside a word - a word too long for its card is
            scaled down to fit instead (socrates.js fitStatLabels) */
-        .stat-label { color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; word-break: keep-all; overflow-wrap: normal; line-height: 1.2; }
+        .stat-label { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; word-break: keep-all; overflow-wrap: normal; line-height: 1.2; }
         /* tshark: a tab for a protocol Suricata doesn't parse - a dot in
            the card's corner (the tshark line, which starts with the same dot, says what it
            means), so the card keeps its two lines */
         .stat-badge, .stat-badge-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-        .stat-badge { position: absolute; top: 10px; right: 10px; }
+        .stat-badge { position: absolute; top: 6px; right: 6px; }
         .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-        @media (max-width: 600px) { .stat-card { padding: 15px 10px; } .stat-number { font-size: 1.8rem; } .stat-label { font-size: 0.75rem; letter-spacing: 0.5px; } }
+        @media (max-width: 600px) { .stat-label { font-size: 0.7rem; letter-spacing: 0.5px; } }
         .section { background: var(--bg-secondary); overflow: hidden; }
         .section-hidden { display: none; }
         .section-header { background: var(--bg-tertiary); padding: 15px 20px; font-size: 1.1rem; font-weight: 600; color: var(--text-bright); }

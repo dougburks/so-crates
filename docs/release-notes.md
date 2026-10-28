@@ -9,6 +9,12 @@
   aggregation table. Anywhere else - and on a link, with text selected,
   or with Shift held - the browser's own menu shows, and a right-click
   never expands or collapses a row. Suggested by crystalstorm466
+- **The stat cards take less room.** Triage, Protocol records and
+  Connections are each a panel now, sized to its cards, and the panels
+  share rows - a section of three cards sits beside the next instead of
+  leaving the rest of its row empty, and a heading no longer takes a row
+  of its own (hover it for what its section holds). The cards are
+  smaller, and all one size, in every section
 - **The About modal** asks you to share SO-CRATES if you like it, with
   links that open a post to X, LinkedIn or Bluesky in a new tab (nothing
   loads from those sites until you click)
