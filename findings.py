@@ -106,9 +106,15 @@ def _name_matches(name, pattern):
 
 
 _SNI = f"lower({_j('tls', 'sni')})"
-_SUBJECT_CN_REST = f"substr({_j('tls', 'subject')}, instr({_j('tls', 'subject')}, 'CN=') + 3)"
-_SUBJECT_CN = (f"lower(CASE WHEN instr({_SUBJECT_CN_REST}, ', ') > 0 "
-               f"THEN substr({_SUBJECT_CN_REST}, 1, instr({_SUBJECT_CN_REST}, ', ') - 1) ELSE {_SUBJECT_CN_REST} END)")
+def _cn(field):
+    """A TLS record's distinguished name field's CN, lowercased (Suricata
+    writes a DN's parts separated by ', ')."""
+    rest = f"substr({_j('tls', field)}, instr({_j('tls', field)}, 'CN=') + 3)"
+    return (f"lower(CASE WHEN instr({rest}, ', ') > 0 "
+            f"THEN substr({rest}, 1, instr({rest}, ', ') - 1) ELSE {rest} END)")
+
+
+_SUBJECT_CN = _cn('subject')
 _HAS_SANS = "json_array_length(json_data, '$.tls.subjectaltname') > 0"
 # A certificate that doesn't name the host the client asked for: its SANs,
 # when it has any - or else its subject's CN (RFC 6125) - cover no match
@@ -129,6 +135,28 @@ def _tls_certificate(b):
     return _join(b.get('subject'), f"(for {b['sni']})" if b.get('sni') else '')
 
 
+# Intermediate CAs whose private keys are known to be recoverable, so a
+# certificate they issued could be anyone's forgery - by CN, with the
+# operator's name in the DN too. eMudhra's eight (Oct 2026, Mozilla bug
+# 2083449): weak P-384 keys from an April 2025 ceremony; revoked Oct 18
+# 2026, and they never issued a real certificate, so every one on the wire
+# is forged. Sectigo's cross-signs of them carry the same names and keys.
+_COMPROMISED_CAS = (
+    ('eMudhra', ('EM DV TLS CA - G3B', 'EM OV TLS CA - G3B', 'EM EV TLS CA - G3B',
+                 'EM DV TLS CA - G3C', 'EM OV TLS CA - G3C', 'EM EV TLS CA - G3C',
+                 'EM OV CS CA - G3B', 'EM OV CS CA - G3C')),
+)
+_ISSUED_BY_COMPROMISED_CA = '(' + ' OR '.join(
+    f"(instr({_j('tls', 'issuerdn')}, '{operator}') > 0 AND {_cn('issuerdn')} IN "
+    f"({', '.join(repr(name.lower()) for name in names)}))"
+    for operator, names in _COMPROMISED_CAS) + ')'
+
+
+def _issuer_cn(b):
+    issuer = b.get('issuerdn') or ''
+    return issuer.split('CN=', 1)[1].split(', ', 1)[0] if 'CN=' in issuer else issuer
+
+
 _DEFAULT_ROUTE = ("EXISTS (SELECT 1 FROM json_each(json_data, '$.rip.routes') "
                   "WHERE value LIKE '0.0.0.0/0 %' OR value LIKE '::/0 %')")
 
@@ -144,6 +172,15 @@ class Rule:
 # Most severe first; within a severity, roughly by how rarely the thing
 # found is innocent
 RULES = (
+    Rule('tls_compromised_ca', 'high', 'tls', 'TLS certificate from a compromised CA',
+         _ISSUED_BY_COMPROMISED_CA,
+         lambda b: _join(('issued by', _issuer_cn(b)), ('-', _tls_certificate(b))),
+         "A certificate signed by an intermediate CA whose private key could be recovered - eMudhra's "
+         "eight, revoked in October 2026, never issued a real one, so this is a forgery made with the "
+         "recovered key: someone in the middle of this connection, or a server impersonating another. "
+         "Browsers that enforce Certificate Transparency refuse it; apps, scripts, devices and older "
+         "trust stores may not, so check whether the client went on talking. Seen only where the "
+         "certificate went out readable - TLS 1.2 and earlier."),
     Rule('ipmi_cipher_zero', 'high', 'ipmi', 'IPMI accepts cipher zero',
          _has('ipmi', 'weaknesses', ['cipher zero accepted']),
          lambda b: _join(('privilege', b.get('requested_privilege'))),

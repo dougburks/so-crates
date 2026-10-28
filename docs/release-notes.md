@@ -9,6 +9,12 @@
   aggregation table. Anywhere else - and on a link, with text selected,
   or with Shift held - the browser's own menu shows, and a right-click
   never expands or collapses a row. Suggested by crystalstorm466
+- **Findings flag a TLS certificate from a compromised CA** (high
+  severity): one issued by any of the eight eMudhra intermediates whose
+  private keys turned out to be recoverable (revoked in October 2026).
+  They never issued a real certificate, so any one seen is a forgery made
+  with a recovered key. ET Open has no rule for it. It reads Suricata's
+  TLS records, so it covers older analyses too, and TLS 1.2 and earlier
 - **The stat cards take less room.** Triage, Protocol records and
   Connections are each a panel now, sized to its cards, and the panels
   share rows - a section of three cards sits beside the next instead of

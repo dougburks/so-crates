@@ -64,6 +64,9 @@ MATCHES = {
                                 'notbefore': '2025-01-01T00:00:00', 'notafter': '2027-01-01T00:00:00'}),
     'tls_name_mismatch': ('tls', {'sni': 'login.bank.example', 'subject': 'CN=*.cdn.example', 'issuerdn': 'CN=Some CA',
                                   'subjectaltname': ['*.cdn.example', 'cdn.example']}),
+    'tls_compromised_ca': ('tls', {'sni': 'login.bank.example', 'subject': 'CN=login.bank.example',
+                                   'issuerdn': 'C=NL, O=eMudhra BV, CN=EM DV TLS CA - G3B',
+                                   'subjectaltname': ['login.bank.example']}),
 }
 
 # Records like those the rules look for that no rule should match
@@ -95,6 +98,14 @@ NON_MATCHES = [
     ('tls', {'sni': 'WWW.Shop.example', 'subject': 'CN=shop.example', 'issuerdn': 'CN=Some CA',
              'subjectaltname': ['shop.example', '*.shop.example']}),
     ('tls', {'sni': '192.0.2.7', 'subject': 'CN=device', 'issuerdn': 'CN=Some CA'}),
+    # eMudhra's other CAs, a G3 intermediate that isn't one of the eight,
+    # and one of the eight's names from someone else
+    ('tls', {'sni': 'www.example', 'subject': 'CN=www.example', 'subjectaltname': ['www.example'],
+             'issuerdn': 'C=IN, OU=emSign PKI, O=eMudhra Technologies Limited, CN=emSign SSL CA - G1'}),
+    ('tls', {'sni': 'www.example', 'subject': 'CN=www.example', 'subjectaltname': ['www.example'],
+             'issuerdn': 'C=NL, O=eMudhra BV, CN=EM DV TLS CA - G3'}),
+    ('tls', {'sni': 'www.example', 'subject': 'CN=www.example', 'subjectaltname': ['www.example'],
+             'issuerdn': 'C=US, O=Example Corp, CN=EM DV TLS CA - G3B'}),
 ]
 
 
@@ -277,6 +288,24 @@ class TestFindings(unittest.TestCase):
         found = {f['event']['dest_port'] for f in findings.query_findings(self._db(events))['findings']
                  if f['rule'] == 'tls_name_mismatch'}
         self.assertEqual([(c[0], c[1], c[2]) for i, c in enumerate(cases) if (i in found) != c[3]], [])
+
+    def test_every_compromised_intermediate_is_found(self):
+        """eMudhra's eight, as Mozilla bug 2083449 names them - whatever
+        order the DN's parts come in"""
+        names = [('EM DV TLS CA - G3B', 'eMudhra BV', 'NL'), ('EM OV TLS CA - G3B', 'eMudhra BV', 'NL'),
+                 ('EM EV TLS CA - G3B', 'eMudhra BV', 'NL'), ('EM DV TLS CA - G3C', 'eMudhra Inc', 'US'),
+                 ('EM OV TLS CA - G3C', 'eMudhra Inc', 'US'), ('EM EV TLS CA - G3C', 'eMudhra Inc', 'US'),
+                 ('EM OV CS CA - G3B', 'eMudhra BV', 'NL'), ('EM OV CS CA - G3C', 'eMudhra Inc', 'US')]
+        events = []
+        for i, (cn, o, c) in enumerate(names):
+            for dn in (f'C={c}, O={o}, CN={cn}', f'CN={cn}, O={o}, C={c}'):
+                events.append(_record('tls', {'sni': f'h{i}.example', 'subject': f'CN=h{i}.example',
+                                              'subjectaltname': [f'h{i}.example'], 'issuerdn': dn}, len(events)))
+        result = findings.query_findings(self._db(events))
+        self.assertEqual([(r['id'], r['count']) for r in result['rules']], [('tls_compromised_ca', 16)])
+        details = sorted(f['detail'] for f in result['findings'])
+        self.assertEqual(details[0], 'issued by EM DV TLS CA - G3B - CN=h0.example (for h0.example)')
+        self.assertEqual(len(details), 16)
 
     def test_findings_carry_their_row_notes(self):
         path = self._db([_record('tunnel', {'type': 'GRE', 'returns_to_sender': True}, 1)])
