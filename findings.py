@@ -86,12 +86,17 @@ _IEC104_CONTROL = ('Single command', 'Double command', 'Regulating step command'
 # (tshark's names)
 _TLS_CERT_ALERTS = ('Bad Certificate', 'Unsupported Certificate', 'Certificate Revoked', 'Certificate Expired',
                     'Certificate Unknown', 'Unknown CA')
+# A record's time in UTC, as Suricata writes a certificate's dates
+# (2026-01-01T00:00:00): Suricata writes the record's own in the host's
+# zone (2026-10-29T09:17:41.968994-0400) - UTC in the container, not on a
+# server run outside it. SQLite takes the offset as -04:00; a time without
+# one is used as it is.
+_UTC_TIME = ("coalesce(strftime('%Y-%m-%dT%H:%M:%S', substr(timestamp, 1, 19) "
+             "|| substr(timestamp, -5, 3) || ':' || substr(timestamp, -2)), substr(timestamp, 1, 19))")
 # A certificate outside its validity at the time of the connection - not
-# today, or every old capture's would be expired. Suricata writes the
-# validity dates in UTC, and - the container's clock being UTC - the
-# record's time too (2026-01-01T00:00:00.000000+0000).
-_TLS_OUT_OF_DATE = (f"({_j('tls', 'notafter')} < substr(timestamp, 1, 19) "
-                    f"OR {_j('tls', 'notbefore')} > substr(timestamp, 1, 19))")
+# today, or every old capture's would be expired
+_TLS_OUT_OF_DATE = (f"({_j('tls', 'notafter')} < {_UTC_TIME} "
+                    f"OR {_j('tls', 'notbefore')} > {_UTC_TIME})")
 
 
 def _name_matches(name, pattern):

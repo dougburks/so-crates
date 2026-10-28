@@ -258,6 +258,22 @@ class TestFindings(unittest.TestCase):
         searched = findings.query_findings(path, q=['CN=CA'])
         self.assertEqual([r['count'] for r in searched['rules']], [2])
 
+    def test_a_certificate_is_judged_in_utc(self):
+        """Suricata writes a certificate's dates in UTC but a record's
+        time in the server's zone: an hour into a certificate's life is
+        within it, however far west the server - and an hour before it
+        isn't, however far east. (REGRESSION: compared as text, a server
+        at -0400 saw a certificate made 13:16 UTC as not yet valid at
+        14:16 UTC, written 10:16-0400.)"""
+        cert = {'subject': 'CN=a', 'issuerdn': 'CN=CA', 'notbefore': '2026-10-28T13:16:29',
+                'notafter': '2027-12-02T13:16:29'}
+        events = [_record('tls', cert, 1, timestamp='2026-10-28T10:16:44.954880-0400'),   # 14:16 UTC
+                  _record('tls', cert, 2, timestamp='2026-10-28T17:46:44.954880+0530'),   # 12:16 UTC
+                  _record('tls', cert, 3, timestamp='2027-12-02T08:00:00.000000-0800'),   # 16:00 UTC
+                  _record('tls', cert, 4, timestamp='2026-10-28T14:16:44.954880')]        # no zone: as it is
+        found = [f['event']['src_port'] for f in findings.query_findings(self._db(events))['findings']]
+        self.assertEqual(found, [40002, 40003])
+
     def test_which_names_a_certificate_covers(self):
         """Its SANs when it has any (its CN then doesn't count), or else
         its CN; a wildcard covers exactly one label; case doesn't matter."""

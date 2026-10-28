@@ -1357,7 +1357,12 @@
            behind the grid, and bare text over it was unreadable (CGA's
            dithering, Vaporwave's sun). */
         .stats-grid.stats-grid-grouped { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
-        .stats-group { flex: 0 1 calc(var(--cards) * 120px + 14px); min-width: 0; padding: 8px 10px 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 10px; }
+        /* At least as wide as its heading's name, which never wraps (a
+           one-card panel squeezed "PROTOCOL RECORDS" onto two lines) - and,
+           while the heading carries tshark's finished line, as wide as the
+           whole heading on one line, up to the row's width: in a one-card
+           panel it stacked a word or two to a line */
+        .stats-group { flex: 0 1 calc(var(--cards) * 120px + 14px); min-width: min-content; padding: 8px 10px 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 10px; }
         .stats-group.collapsed { flex: 0 1 auto; padding-bottom: 8px; }
         .stats-group-cards { display: grid; grid-template-columns: repeat(auto-fill, 112px); gap: 8px; }
         /* the cards' label color (.stat-label): readable on every theme, where
@@ -1366,7 +1371,8 @@
         .stats-grid-heading.collapsed { padding-bottom: 0; }
         .stats-grid-heading { cursor: pointer; user-select: none; }
         .stats-grid-heading:hover { color: var(--text-bright); }
-        .stats-grid-heading-toggle { all: unset; display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
+        .stats-group:has(.stats-grid-heading-aside:not([hidden])) { min-width: fit-content; }
+        .stats-grid-heading-toggle { all: unset; white-space: nowrap; display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
         .stats-grid-heading-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
         .stats-grid-heading-summary { font-weight: normal; text-transform: none; letter-spacing: normal; color: var(--text-bright); }
         .stats-grid-heading-summary[hidden] { display: none; }

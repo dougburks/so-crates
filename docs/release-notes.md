@@ -27,6 +27,11 @@
 
 ### Fixes
 
+- The Findings rule for a TLS certificate expired or not yet valid
+  compared the certificate's dates (UTC) with the connection's time in
+  the server's own zone, so a server not on UTC - one run outside the
+  container - misjudged a certificate within a few hours of its start or
+  end. The connection's time is now taken in UTC
 - A tshark run that was cancelled (reanalyzing or deleting an analysis
   while it ran) or stopped for using too much memory left its copies of
   the capture's frames in `/tmp` - often RAM. Everything a run puts in
