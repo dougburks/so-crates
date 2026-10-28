@@ -6105,6 +6105,9 @@ class TestFiltering(unittest.TestCase):
         # On X a share credits the developer and mentions the sponsor
         self.assertIn('&amp;via=dougburks', links[0][0])
         self.assertIn('%40SecurityOnion', links[0][0])
+        # Bluesky has no via - both are mentioned in the text
+        self.assertIn('%40securityonion.bsky.social', links[2][0])
+        self.assertIn('via%20%40dougburks.bsky.social', links[2][0])
         self.assertTrue(links[1][0].startswith('https://www.linkedin.com/sharing/share-offsite/?'))
         self.assertTrue(links[2][0].startswith('https://bsky.app/intent/compose?'))
         self.assertLess(about_block.index('by defenders, for defenders'), about_block.index('id="aboutShare"'))
