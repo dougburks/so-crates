@@ -9,6 +9,10 @@
   aggregation table. Anywhere else - and on a link, with text selected,
   or with Shift held - the browser's own menu shows, and a right-click
   never expands or collapses a row. Suggested by crystalstorm466
+- **The About modal** asks you to share SO-CRATES if you like it, with
+  links that open a post to X, LinkedIn or Bluesky in a new tab (nothing
+  loads from those sites until you click), and the sponsor line moved
+  down below the documentation and GitHub links
 
 ### Fixes
 

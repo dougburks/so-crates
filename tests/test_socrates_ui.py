@@ -6083,30 +6083,44 @@ class TestFiltering(unittest.TestCase):
     def test_about_modal_has_made_with_heart_line(self):
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
         self.assertIn('Made with', about_block)
-        self.assertIn('by defenders for defenders', about_block)
+        self.assertIn('by defenders, for defenders', about_block)
         self.assertIn('<svg', about_block.split('Made with')[1].split('by defenders')[0],
                       'the heart must be an inline SVG icon (matching the app\'s icon style), not an emoji')
+        self.assertIn('white-space: nowrap', about_block.split('Made with')[0].rsplit('<div', 1)[-1])
+
+    def test_about_modal_share_links(self):
+        """The share request sits right under the "Made with" line, and
+        each network is a plain link that opens a new tab - no share
+        widgets or third-party scripts, so nothing loads until a click."""
+        about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
+        share = about_block.split('id="aboutShare"')[1].split('</div>')[0]
+        self.assertIn('If you like SO-CRATES, please share it on', share)
+        links = re.findall(r'<a href="([^"]+)"([^>]*)>([^<]+)</a>', share)
+        self.assertEqual([label for _, _, label in links], ['X', 'LinkedIn', 'Bluesky'])
+        for href, attrs, label in links:
+            self.assertIn('so-crates.org', href.replace('%2F', '/').replace('%3A', ':'), label)
+            self.assertIn('target="_blank"', attrs, label)
+            self.assertIn('rel="noopener noreferrer"', attrs, label)
+        self.assertTrue(links[0][0].startswith('https://x.com/intent/post?'))
+        # On X a share credits the developer and mentions the sponsor
+        self.assertIn('&amp;via=dougburks', links[0][0])
+        self.assertIn('%40SecurityOnion', links[0][0])
+        self.assertTrue(links[1][0].startswith('https://www.linkedin.com/sharing/share-offsite/?'))
+        self.assertTrue(links[2][0].startswith('https://bsky.app/intent/compose?'))
+        self.assertLess(about_block.index('by defenders, for defenders'), about_block.index('id="aboutShare"'))
+        self.assertLess(about_block.index('id="aboutShare"'), about_block.index('href="https://so-crates.org"'))
 
     def test_about_modal_has_sponsor_line(self):
+        """The sponsor line has its own line between the documentation
+        links and the update check (it used to share the "Made with" line)."""
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
         self.assertIn('Sponsored by', about_block)
         sponsor_link = about_block.split('Sponsored by')[1].split('</div>')[0]
         self.assertIn('href="https://securityonion.com"', sponsor_link)
         self.assertIn('>Security Onion Solutions, LLC</a>', sponsor_link)
-        made_with_pos = about_block.index('Made with')
-        sponsor_pos = about_block.index('Sponsored by')
-        self.assertLess(made_with_pos, sponsor_pos, 'the sponsor line must come after the "Made with" line')
-
-    def test_about_modal_made_with_and_sponsor_share_one_line(self):
-        """REGRESSION: these were originally two separate lines; measured
-        against the modal's actual width there was enough room to combine
-        them into one, hyphen-separated line - must not regress back to
-        two separate <div> blocks."""
-        about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
-        made_with_block = about_block.split('Made with')[1].split('</div>')[0]
-        self.assertIn('by defenders for defenders - Sponsored by', made_with_block)
-        self.assertIn('href="https://securityonion.com"', made_with_block)
-        self.assertIn('white-space: nowrap', about_block.split('Made with')[0].rsplit('<div', 1)[-1])
+        self.assertNotIn('Sponsored by', about_block.split('Made with')[1].split('</div>')[0])
+        self.assertLess(about_block.index('href="https://github.com/dougburks/so-crates"'), about_block.index('Sponsored by'))
+        self.assertLess(about_block.index('Sponsored by'), about_block.index('id="checkForUpdates"'))
 
     def test_about_modal_wide_enough_for_tagline_to_not_wrap(self):
         """REGRESSION: at the original 450px max-width, 'Security Onion
