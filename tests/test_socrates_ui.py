@@ -6114,16 +6114,27 @@ class TestFiltering(unittest.TestCase):
         self.assertLess(about_block.index('id="aboutShare"'), about_block.index('href="https://so-crates.org"'))
 
     def test_about_modal_has_sponsor_line(self):
-        """The sponsor line has its own line between the documentation
-        links and the update check (it used to share the "Made with" line)."""
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
         self.assertIn('Sponsored by', about_block)
         sponsor_link = about_block.split('Sponsored by')[1].split('</div>')[0]
         self.assertIn('href="https://securityonion.com"', sponsor_link)
         self.assertIn('>Security Onion Solutions, LLC</a>', sponsor_link)
-        self.assertNotIn('Sponsored by', about_block.split('Made with')[1].split('</div>')[0])
-        self.assertLess(about_block.index('href="https://github.com/dougburks/so-crates"'), about_block.index('Sponsored by'))
-        self.assertLess(about_block.index('Sponsored by'), about_block.index('id="checkForUpdates"'))
+        made_with_pos = about_block.index('Made with')
+        sponsor_pos = about_block.index('Sponsored by')
+        self.assertLess(made_with_pos, sponsor_pos, 'the sponsor line must come after the "Made with" line')
+
+    def test_about_modal_made_with_and_sponsor_share_one_line(self):
+        """REGRESSION: these were originally two separate lines; measured
+        against the modal's actual width there was enough room to combine
+        them into one, hyphen-separated line - must not regress back to
+        two separate <div> blocks. (5.1.0 tried the sponsor on a line of
+        its own, under the share request and then under the links, and
+        kept it here.)"""
+        about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
+        made_with_block = about_block.split('Made with')[1].split('</div>')[0]
+        self.assertIn('by defenders, for defenders - Sponsored by', made_with_block)
+        self.assertIn('href="https://securityonion.com"', made_with_block)
+        self.assertIn('white-space: nowrap', about_block.split('Made with')[0].rsplit('<div', 1)[-1])
 
     def test_about_modal_wide_enough_for_tagline_to_not_wrap(self):
         """REGRESSION: at the original 450px max-width, 'Security Onion

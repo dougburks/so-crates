@@ -11,8 +11,7 @@
   never expands or collapses a row. Suggested by crystalstorm466
 - **The About modal** asks you to share SO-CRATES if you like it, with
   links that open a post to X, LinkedIn or Bluesky in a new tab (nothing
-  loads from those sites until you click), and the sponsor line moved
-  down below the documentation and GitHub links
+  loads from those sites until you click)
 
 ### Fixes
 
