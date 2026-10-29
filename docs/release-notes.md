@@ -41,6 +41,29 @@
   the server starts tries the capture in place; later runs read the copy
   in `/tmp` straight away, so the kernel's log gets one "DENIED" line per
   server start rather than one per capture
+- A failed YARA scan, or tshark's rows failing to join, showed the whole
+  analysis as "Analysis failed" while its results were still on the way
+  (until it flipped to ready minutes later). Both are a warning on the
+  analysis now, as other partial failures already were. A log Zircolite
+  couldn't read, or one analyzed with no Sigma rules installed, now says
+  so instead of opening empty without a word
+- Two quick clicks on **Reanalyze** for a log, email or file could start
+  two analyses in the same folder; the second click now gets "already in
+  progress", as a PCAP's always did
+- Going back to the main screen while tshark was still running could
+  bring the analysis's "Loading events..." back over it when tshark
+  finished; renaming an analysis and then clicking the logo could put
+  its name back in the header; and **Acknowledged Alerts** could show
+  the results of an earlier search when a slower reply landed last
+- A stream's **ASCII Transcript** or **Send to CyberChef** on a capture
+  tcpdump can't read said there was nothing there; it says the capture
+  couldn't be read. **Hexdump** showed one empty packet past its limit
+- Deleting an analysis that's still being written to reports an error
+  instead of leaving the request unanswered
+- **Load from URL** also refuses an IPv6 address that carries a private
+  IPv4 one (6to4, NAT64), on Python versions that don't already block
+  those ranges
+- tshark's note says "in under a second" rather than "in 0s"
 
 ## 5.0.1
 

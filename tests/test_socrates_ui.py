@@ -9130,6 +9130,30 @@ class TestRightClickPivotMenu(unittest.TestCase):
         self.assertTrue(result['agg']['browserMenuHeld'])
         self.assertIn('TCP', result['agg']['label'])
 
+    def test_macos_word_selection_doesnt_shrink_a_detail_value_menu(self):
+        """macOS selects the word under the pointer between mousedown and
+        contextmenu: the menu is still for the whole value, with
+        Include/Exclude/Only, not '(selection)' for that one word."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            var t2 = document.createElement('table');
+            t2.innerHTML = '<tbody><tr data-event-type="http"><td></td></tr>'
+                + '<tr class="detail-row visible"><td>' + htmlRowText('URL', '/api/v2/telemetry') + '</td></tr></tbody>';
+            document.body.appendChild(t2);
+            var el = t2.querySelector('.detail-value-pivot');
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 }));
+            var text = el.firstChild.nodeType === 3 ? el.firstChild : el.querySelector('*').firstChild;
+            var r = document.createRange();
+            r.setStart(text, 1); r.setEnd(text, 4);  // 'api', as macOS would
+            getSelection().removeAllRanges(); getSelection().addRange(r);
+            el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 }));
+            var label = document.querySelector('.pivot-menu-label');
+            window.__jsdom_result = { label: label ? label.textContent : null,
+                                      include: !!document.querySelector('[data-pivot-action="include"]') };
+        ''')
+        self.assertEqual(result['label'], 'URL: /api/v2/telemetry')
+        self.assertTrue(result['include'])
+
 
 class TestAggregationPagination(unittest.TestCase):
     """Aggregation Tables' Prev/Next pagination (AGG_PAGE_SIZE, fixed at
@@ -22036,6 +22060,7 @@ class TestTsharkUI(unittest.TestCase):
                 one: shown({status: 'ready', merged: true}, ['nbns']),
                 damaged: shown({status: 'ready', merged: true, seconds: 9, damaged: true}, ['nbns']),
                 none: shown({status: 'ready', merged: true, seconds: 3}),
+                quick: shown({status: 'ready', merged: true, seconds: 0}),
                 merging: shown({status: 'ready', merged: false}),
                 running: shown({status: 'running', elapsed: 5}),
                 queued: shown({status: 'queued', position: 1}),
@@ -22050,6 +22075,8 @@ class TestTsharkUI(unittest.TestCase):
         self.assertEqual(result['damaged']['text'],
                          'tshark parsed 1 additional protocol in 9s \u00b7 the capture is cut off, so its last packet wasn\u2019t read')
         self.assertEqual((result['none']['text'], result['none']['dot']), ('tshark found no additional protocols in 3s', False))
+        self.assertEqual(result['quick']['text'], 'tshark found no additional protocols in under a second',
+                         "the server rounds to whole seconds - a quick run isn't 'in 0s'")
         self.assertEqual(result['merging']['text'], 'tshark is parsing additional protocols\u2026')
         self.assertEqual((result['running']['text'], result['running']['dot']), ('tshark is parsing additional protocols\u2026 5s', False))
         self.assertIn('waiting for another capture', result['queued']['text'])

@@ -10,6 +10,7 @@ import time
 
 import config
 from db import create_sqlite_db
+from storage import add_analysis_warning
 import shark_analyzer
 from validators import is_host_reachable, is_epoch_stale, gunzip_atomically
 from yara_analyzer import run_yara_pipeline
@@ -903,10 +904,13 @@ def spawn_suricata(dir_path, pcap_path, suricata_config_path=None, data_dir=None
     def on_suricata_done(returncode=0):
         # Phase 2: Run YARA scan on extracted files
         _set_phase(dir_path, 'files')
+        # A failed scan or tshark merge is a warning, not .error: the
+        # analysis itself still completes, and .error would show it as
+        # failed (until a status poll cleared it as stale)
         try:
             run_yara_pipeline(dir_path, data_dir=data_dir)
         except Exception as e:
-            _set_error(dir_path, f'YARA scan failed: {e}')
+            add_analysis_warning(dir_path, f'The YARA scan of extracted files failed - File Alerts may be missing: {e}')
         # Phase 3: Build SQLite database
         _set_phase(dir_path, 'importing')
         eve_file = os.path.join(dir_path, 'eve.json')
@@ -936,7 +940,7 @@ def spawn_suricata(dir_path, pcap_path, suricata_config_path=None, data_dir=None
         try:
             shark_analyzer.merge(dir_path)
         except Exception as e:
-            _set_error(dir_path, f'Adding tshark protocols failed: {e}')
+            add_analysis_warning(dir_path, f'Adding tshark protocols failed: {e}')
 
     try:
         proc = subprocess.Popen(

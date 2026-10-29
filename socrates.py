@@ -183,6 +183,10 @@ def _run_capped(cmd, max_bytes, timeout, text=False):
 FLOW_CARVE_PREFIX = 'socrates-flow-'
 
 
+class _CarveFailed(Exception):
+    """tcpdump couldn't read the capture to carve a flow out of it."""
+
+
 @contextlib.contextmanager
 def _carved_flow(pcap, src, sport, dst, dport, max_bytes):
     """One flow, carved out of pcap by tcpdump into a file in /tmp, for
@@ -193,11 +197,16 @@ def _carved_flow(pcap, src, sport, dst, dport, max_bytes):
     is the one place AppArmor 5's profile for tshark (Ubuntu 26.04 on) lets
     it read a file at all, in a rootless container too (see
     shark_analyzer's _DENIED_CAPTURE)."""
-    _, carved, truncated = _run_capped(
+    rc, carved, truncated = _run_capped(
         ['tcpdump', '-r', pcap, '-w', '-', _stream_bpf_filter(src, sport, dst, dport)],
         max_bytes=max_bytes,
         timeout=config.STREAM_TIMEOUT_SECONDS
     )
+    # Nothing written at all, not even a capture header: tcpdump couldn't
+    # read the capture - an error, not a flow with no packets. (Killed at
+    # max_bytes, or a capture cut off mid-packet, it still wrote some.)
+    if rc != 0 and not carved:
+        raise _CarveFailed()
     with tempfile.NamedTemporaryFile(prefix=FLOW_CARVE_PREFIX, suffix='.pcap') as tmp:
         tmp.write(carved)
         tmp.flush()
@@ -1148,6 +1157,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({'lines': lines, 'truncated': truncated, 'proto': proto})
         except subprocess.TimeoutExpired:
             self._send_error(500, 'ASCII transcript extraction timed out')
+        except _CarveFailed:
+            self._send_error(500, "Couldn't read the capture")
         except Exception:
             self._send_error(500, 'Internal server error')
 
@@ -1242,7 +1253,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     truncated = True
                     break
 
-            if current_packet:
+            # (stopped at the packet limit, current_packet is the next
+            # packet's header alone - one more than the limit, and empty)
+            if current_packet and len(packets) < config.MAX_HEXDUMP_PACKETS:
                 packets.append(current_packet)
 
             self._send_json({'packets': packets, 'truncated': truncated})
@@ -1298,6 +1311,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                           .replace(':', '-'))
         except subprocess.TimeoutExpired:
             self._send_error(500, 'Stream payload extraction timed out')
+        except _CarveFailed:
+            self._send_error(500, "Couldn't read the capture")
         except Exception:
             self._send_error(500, 'Internal server error')
 
@@ -1417,7 +1432,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         shark_analyzer.cancel(dir_path)
-        shutil.rmtree(dir_path)
+        try:
+            shutil.rmtree(dir_path)
+        except OSError as e:
+            # (something still writing into it - an analysis still running)
+            print(f"Could not delete analysis {md5}: {e}")
+            self._send_error(500, 'Could not delete the analysis - try again once it has finished')
+            return
         evict_analysis_cache(md5)
         self._send_json({'success': True})
 
@@ -1852,7 +1873,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         detection_type = params.get('type', [''])[0]
         rule_id = params.get('id', [''])[0]
         pattern = self._PLAYBOOK_ID_PATTERNS.get(detection_type)
-        if not pattern or not pattern.match(rule_id):
+        if not pattern or not pattern.fullmatch(rule_id):
             self._send_error(400, 'Invalid type or id')
             return
         self._send_json({'playbook': get_playbook(detection_type, rule_id)})
@@ -1875,7 +1896,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         detection_type = params.get('type', [''])[0]
         rule_id = params.get('id', [''])[0]
         pattern = self._AI_SUMMARY_ID_PATTERNS.get(detection_type)
-        if not pattern or not pattern.match(rule_id):
+        if not pattern or not pattern.fullmatch(rule_id):
             self._send_error(400, 'Invalid type or id')
             return
         self._send_json({'summary': get_ai_summary(detection_type, rule_id)})
@@ -2262,7 +2283,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         for reason in failures:
                             add_analysis_warning(dir_path, f'The YARA scan failed - File Alerts may be missing: {reason}')
                     except Exception as e:
-                        _set_error(dir_path, f'YARA scan failed: {e}')
+                        # (a warning: the file's analysis still completes)
+                        add_analysis_warning(dir_path, f'The YARA scan failed - File Alerts may be missing: {e}')
                         create_file_analysis_db(db_file, file_path, [], '', '', '')
                 else:
                     create_file_analysis_db(db_file, file_path, [], '', '', '')
@@ -2278,7 +2300,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _analyze_by_type(self, detected, dir_path, file_path, safe_filename):
         """Start the background analysis for a non-pcap file's detected type
-        (see _detect_file_type). Returns its phase."""
+        (see _detect_file_type). Returns its phase.
+
+        .phase is written here, before the thread starts (which writes it
+        again): written only in the thread, a second Reanalyze click
+        arriving first saw no .phase under _REANALYZE_LOCK and started a
+        second run in the same directory."""
+        _set_phase(dir_path, _ANALYSIS_PHASES[detected])
         if detected == 'email':
             self._analyze_email_file(dir_path, file_path, safe_filename)
         elif detected == 'log':
@@ -2346,8 +2374,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                             alerts = parse_zircolite_results(sigma_output)
                             insert_sigma_alerts(db_file, alerts)
                         else:
-                            # Rules missing or Zircolite failed: create empty DB so UI shows ready
+                            # Rules missing or Zircolite failed: create empty DB so UI shows ready,
+                            # saying why it's empty
                             init_empty_db(db_file)
+                            add_analysis_warning(dir_path, "The Sigma scan didn't run - no Sigma rules are installed, "
+                                                           "or Zircolite couldn't read this log - so no log events or Sigma Alerts were imported")
                     except Exception as e:
                         _set_error(dir_path, f'Sigma analysis failed: {e}')
 

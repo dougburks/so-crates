@@ -2898,8 +2898,11 @@
         // next sibling of the row it expands from (see e.g.
         // buildRowForEvent's own row + detail-row pairing).
         // Returns true if it opened the menu - the right-click listener
-        // below needs to know whether to hold back the browser's own.
-        function openDetailValuePivotMenu(event) {
+        // below needs to know whether to hold back the browser's own. It
+        // passes ignoreSelection: it already knows nothing was selected
+        // before the right-click, and the word macOS selected under the
+        // pointer isn't a selection the analyst made.
+        function openDetailValuePivotMenu(event, ignoreSelection = false) {
             const pivotEl = event.target.closest('[data-detail-pivot]');
             if (!pivotEl) return false;
             let pair;
@@ -2916,7 +2919,7 @@
             // for the selected text, not the whole value, and like a
             // transcript selection it gets no Include/Exclude/Only - a
             // fragment isn't the field's value.
-            const sel = window.getSelection();
+            const sel = ignoreSelection ? null : window.getSelection();
             const selected = sel && !sel.isCollapsed && sel.rangeCount === 1
                 && pivotEl.contains(sel.getRangeAt(0).commonAncestorContainer) ? sel.toString() : '';
             if (selected.trim() && selected !== String(value)) {
@@ -3012,7 +3015,7 @@
             if (activePivotMenuEl && activePivotMenuEl.contains(event.target)) return;
             if (event.target.closest('a[href]:not([href="#"])')) return;
             const actionEl = event.target.closest('[data-action]');
-            const opened = openDetailValuePivotMenu(event)
+            const opened = openDetailValuePivotMenu(event, true)
                 || openAggRowPivotMenu(event)
                 || (!!actionEl && ROW_TOGGLE_ACTIONS.has(actionEl.dataset.action) && handleRowCellClick(actionEl, event));
             if (opened) {
@@ -5352,6 +5355,7 @@
             document.title = 'SO-CRATES';
             closeAllModals();
             stopSharkPolling();
+            tsharkRowsPending = false;
             if (window.location.search.includes('file=') || window.location.search.includes('pcap=')) {
                 history.replaceState({}, '', window.location.pathname);
             }
@@ -10763,7 +10767,7 @@
                 // real final value immediately so assistive tech isn't
                 // stuck reading "0" or a mid-animation number.
                 return heading + `
-                    <div class="stat-card${activeClass}${s.connection ? ' stat-card-connection' : ''}${collapsedClass}" data-action="show-tab" data-section="section-${escapeHtml(s.id)}"${groupAttr}${s.title ? ` title="${escapeHtml(s.title)}"` : ''}>
+                    <div class="stat-card${activeClass}${collapsedClass}" data-action="show-tab" data-section="section-${escapeHtml(s.id)}"${groupAttr}${s.title ? ` title="${escapeHtml(s.title)}"` : ''}>
                         <div class="stat-number" style="color: ${s.color}" aria-label="${countDisplay}">0</div>
                         <div class="stat-label">${escapeHtml(s.label)}</div>${s.notInSuricata ? '<span class="stat-badge" title="From tshark: Suricata doesn\'t parse this protocol"><span class="sr-only">from tshark</span></span>' : ''}
                     </div>
@@ -10901,18 +10905,30 @@
         async function buildAcknowledgedAlertsSection() {
             const sectionEl = document.getElementById('section-acknowledged');
             if (!sectionEl || !currentMd5) return;
-            const qParam = buildSearchQuery();
+            // A reply for another analysis or an earlier search is dropped,
+            // as in buildFindingsSection
+            const md5 = currentMd5, qParam = buildSearchQuery();
             const limit = getUserQueryLimit();
-            const [alertResp, sigmaResp] = await Promise.all([
-                // (a log analysis has Sigma alerts only)
-                isLogAnalysisMode ? null
-                    : fetch(`/api/events?md5=${encodeURIComponent(currentMd5)}&type=alert&acknowledged=only&limit=${limit}${qParam}&t=${Date.now()}`),
-                fetch(`/api/sigma-alerts?md5=${encodeURIComponent(currentMd5)}&acknowledged=only&limit=${limit}${qParam}&t=${Date.now()}`)
-            ]);
-            acknowledgedAlertsCache = {
-                alert: alertResp ? await alertResp.json() : [],
-                sigmaalert: await sigmaResp.json(),
-            };
+            let cache;
+            try {
+                const [alertResp, sigmaResp] = await Promise.all([
+                    // (a log analysis has Sigma alerts only)
+                    isLogAnalysisMode ? null
+                        : fetch(`/api/events?md5=${encodeURIComponent(md5)}&type=alert&acknowledged=only&limit=${limit}${qParam}&t=${Date.now()}`),
+                    fetch(`/api/sigma-alerts?md5=${encodeURIComponent(md5)}&acknowledged=only&limit=${limit}${qParam}&t=${Date.now()}`)
+                ]);
+                cache = {
+                    alert: alertResp ? await alertResp.json() : [],
+                    sigmaalert: await sigmaResp.json(),
+                };
+            } catch (e) {
+                if (currentMd5 === md5 && buildSearchQuery() === qParam) {
+                    sectionEl.innerHTML = '<div class="section-content"><div class="no-matches">Couldn\'t load the acknowledged alerts - open the tab again to retry</div></div>';
+                }
+                return;
+            }
+            if (currentMd5 !== md5 || buildSearchQuery() !== qParam) return;
+            acknowledgedAlertsCache = cache;
             renderAcknowledgedAlertsGroups();
         }
 
@@ -13203,6 +13219,10 @@
                             body: JSON.stringify({ md5: currentMd5, name: newValue })
                         });
                         const result = await resp.json();
+                        // Left for Welcome or another analysis while it
+                        // saved (a blur from clicking away does this): the
+                        // header and title aren't this analysis's any more
+                        if (!input.isConnected) return;
                         if (resp.ok && result.success) {
                             currentFileName = result.name;
                             document.title = 'SO-CRATES - ' + currentFileName;
@@ -13213,6 +13233,7 @@
                         showToast('Could not rename analysis');
                     }
                 }
+                if (!input.isConnected) return;
                 el.innerHTML = `${FILE_ICON_SVG}${escapeHtml(currentFileName)}`;
                 el.title = currentFileName;
                 el.style.cursor = 'pointer';
@@ -13278,7 +13299,9 @@
             if (sharkFinished(status)) {
                 // (and when the capture was cut off - a partial upload, a
                 // capture stopped mid-write - that tshark read it up to there)
-                const took = (Number.isFinite(status.seconds) ? ` in ${status.seconds.toLocaleString()}s` : '')
+                // (the server rounds to whole seconds, so a quick run is 0)
+                const took = (Number.isFinite(status.seconds)
+                    ? (status.seconds < 1 ? ' in under a second' : ` in ${status.seconds.toLocaleString()}s`) : '')
                     + (status.damaged ? ' \u00b7 the capture is cut off, so its last packet wasn\u2019t read' : '');
                 return tsharkTypes.size
                     ? `${dot}tshark parsed ${tsharkTypes.size} additional protocol${tsharkTypes.size === 1 ? '' : 's'}${took}`
@@ -13343,9 +13366,14 @@
             if (!sharkClockTimer) sharkClockTimer = setInterval(tickSharkClock, 1000);
         }
 
+        // Bumped on every stop, so a request already in flight when the
+        // analyst left (for Welcome, where currentMd5 keeps its value)
+        // can't start polling again when its reply lands.
+        var sharkPollGeneration = 0;
         function stopSharkPolling() {
             if (sharkPollTimer) clearTimeout(sharkPollTimer);
             sharkPollTimer = null;
+            sharkPollGeneration++;
         }
 
         // Fetches (or, with start, requests) this analysis's tshark status,
@@ -13356,6 +13384,7 @@
         // is dropped.
         async function refreshSharkStatus(md5, start) {
             stopSharkPolling();
+            const generation = sharkPollGeneration;
             const wasBusy = sharkIsBusy(sharkStatus);
             let status;
             try {
@@ -13366,7 +13395,7 @@
             } catch (e) {
                 status = {status: 'error', message: 'Could not reach the server'};
             }
-            if (md5 !== currentMd5) return;
+            if (md5 !== currentMd5 || generation !== sharkPollGeneration) return;
             sharkStatus = status;
             updateTsharkLine();
             if (sharkIsBusy(status)) {

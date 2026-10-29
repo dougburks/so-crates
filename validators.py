@@ -29,6 +29,7 @@ BLOCKED_NETWORKS = [
     # listing here: it's where Tailscale tailnets and ISP-internal hosts live.
     ipaddress.ip_network('100.64.0.0/10'),
 ]
+_NAT64_NETWORK = ipaddress.ip_network('64:ff9b::/96')
 
 
 def _ip_is_blocked(ip):
@@ -38,12 +39,19 @@ def _ip_is_blocked(ip):
     network list could miss (0.0.0.0 -> localhost on Linux, fe80::/10,
     multicast, reserved); the BLOCKED_NETWORKS loop is kept as an explicit,
     version-independent floor, and is the only thing that catches CGNAT.
-    An IPv4-mapped IPv6 address (::ffff:a.b.c.d) is judged as the IPv4
-    address it maps to, so it can't route around that list.
+    An IPv6 address carrying an IPv4 one - mapped (::ffff:a.b.c.d), 6to4
+    (2002:aabb:ccdd::) or NAT64 (64:ff9b::a.b.c.d) - is judged as that
+    IPv4 address too, so it can't route around that list on a host with
+    6to4 or NAT64 routing.
     """
     mapped = getattr(ip, 'ipv4_mapped', None)
     if mapped is not None:
         return _ip_is_blocked(mapped)
+    sixtofour = getattr(ip, 'sixtofour', None)
+    if sixtofour is not None and _ip_is_blocked(sixtofour):
+        return True
+    if ip.version == 6 and ip in _NAT64_NETWORK and _ip_is_blocked(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)):
+        return True
     if (ip.is_unspecified or ip.is_loopback or ip.is_link_local
             or ip.is_reserved or ip.is_multicast or ip.is_private):
         return True
@@ -77,6 +85,8 @@ def validate_port(port_str):
 
 RESERVED_FILENAMES = {
     'events.db', 'eve.json', 'name.txt', 'notes.txt', '.meta', '.phase', '.error', '.warnings',
+    # SQLite's files beside events.db (WAL mode - see db.py)
+    'events.db-wal', 'events.db-shm',
     # Analyzer output artifacts: an upload with one of these names would be
     # overwritten mid-scan (result spoofing) or deleted by reanalyze's
     # artifact sweep. Keep in sync with PCAP_ANALYSIS_ARTIFACTS /

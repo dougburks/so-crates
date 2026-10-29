@@ -2917,6 +2917,37 @@ bright_magenta = "#D9B9D9"
         status, _ = self._get('/api/ascii-stream?src=1.2.3.4')
         self.assertEqual(status, 400)
 
+    def _stream_analysis(self, md5):
+        dir_path = os.path.join(server.DATA_DIR, md5)
+        os.makedirs(dir_path, exist_ok=True)
+        with open(os.path.join(dir_path, 'capture.pcap'), 'wb') as f:
+            f.write(b'\xd4\xc3\xb2\xa1' + b'\x00' * 20)
+        return f'src=1.2.3.4&sport=80&dst=5.6.7.8&dport=443&md5={md5}'
+
+    def test_hexdump_stops_at_its_packet_limit(self):
+        """Stopped at MAX_HEXDUMP_PACKETS, the next packet's header alone
+        isn't sent as one more, empty packet."""
+        query = self._stream_analysis('b' * 32)
+        out = ''.join(f'12:00:0{i} IP 1.2.3.4.80 > 5.6.7.8.443: tcp 4\n\t0x0000:  4500 0028  E..(\n' for i in range(3))
+        with unittest.mock.patch.object(server.config, 'MAX_HEXDUMP_PACKETS', 2), \
+                unittest.mock.patch('socrates._run_capped', return_value=(0, out, False)):
+            status, body = self._get('/api/hexdump-stream?' + query)
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(len(data['packets']), 2)
+        self.assertTrue(all(p['lines'] for p in data['packets']))
+        self.assertTrue(data['truncated'])
+
+    def test_unreadable_capture_is_an_error_not_an_empty_stream(self):
+        """tcpdump failing to read the capture at all (no output) is a 500,
+        not an empty transcript or 'No payload found'."""
+        query = self._stream_analysis('c' * 32)
+        with unittest.mock.patch('socrates._run_capped', return_value=(1, b'', False)):
+            for path in ('/api/ascii-stream?', '/api/raw-stream?direction=src&'):
+                status, body = self._get(path + query)
+                self.assertEqual(status, 500, path)
+                self.assertIn("Couldn't read the capture", body)
+
     def test_hexdump_stream_requires_md5(self):
         status, _ = self._get('/api/hexdump-stream?src=1.2.3.4&sport=80&dst=5.6.7.8&dport=443')
         self.assertEqual(status, 400)
@@ -3606,24 +3637,24 @@ bright_magenta = "#D9B9D9"
     @unittest.mock.patch('socrates.setup_yara_rules', return_value='/dummy/rules.yar')
     @unittest.mock.patch('socrates.check_yara_executable', return_value=True)
     @unittest.mock.patch('socrates.scan_single_file', side_effect=Exception('YARA fail'))
-    def test_analyze_standalone_file_yara_error_writes_error(self, mock_scan, mock_yara_exec, mock_rules):
-        """Standalone file analysis with YARA failure must write .error and create empty DB."""
+    def test_analyze_standalone_file_yara_error_warns(self, mock_scan, mock_yara_exec, mock_rules):
+        """Standalone file analysis with YARA failure must warn (not fail the
+        analysis - .error would show "Analysis failed") and create an empty DB."""
         file_data = b'MZ' + b'\x00' * 62 + b'YARA_ERROR_TEST'
         status, body = self._post_multipart('/api/upload', 'test.exe', file_data)
         self.assertEqual(status, 200)
         data = json.loads(body)
         md5 = data['md5']
         dir_path = os.path.join(server.DATA_DIR, md5)
-        error_path = os.path.join(dir_path, '.error')
+        warnings_path = os.path.join(dir_path, '.warnings')
         db_path = os.path.join(dir_path, 'events.db')
         for _ in range(30):
             time.sleep(0.2)
-            if os.path.exists(error_path):
+            if os.path.exists(warnings_path) and not os.path.exists(os.path.join(dir_path, '.phase')):
                 break
-        self.assertTrue(os.path.exists(error_path), '.error must be written when YARA scan fails')
-        with open(error_path, 'r') as f:
-            error_msg = f.read()
-        self.assertIn('YARA scan failed', error_msg)
+        self.assertFalse(os.path.exists(os.path.join(dir_path, '.error')), 'a failed YARA scan must not fail the analysis')
+        with open(warnings_path, 'r') as f:
+            self.assertIn('The YARA scan failed', f.read())
         self.assertTrue(os.path.exists(db_path), 'events.db must be created with empty matches when YARA fails')
 
     @unittest.mock.patch('socrates.setup_yara_rules', return_value='/dummy/rules.yar')
@@ -5664,12 +5695,19 @@ class TestSuricataProcessingLock(unittest.TestCase):
         self.assertIn("def _clear_error(dir_path):", content,
                       '_clear_error helper must exist in suricata module')
 
-    def test_error_set_on_yara_failure(self):
+    def test_warning_not_error_on_yara_failure(self):
+        """A failed YARA scan of extracted files (or tshark merge) doesn't
+        fail the analysis - it's a warning, while .error would show it as
+        "Analysis failed" with its results still to come."""
         with open(SURICATA_FILE, 'r') as f:
             content = f.read()
         on_done = content.split("def on_suricata_done(returncode=0):")[1].split("\n    try:")[0]
-        self.assertIn("_set_error", on_done,
-                      'YARA failure must write error file')
+        yara = on_done.split("run_yara_pipeline(")[1].split("_set_phase(dir_path, 'importing')")[0]
+        self.assertIn("add_analysis_warning(", yara)
+        self.assertNotIn("_set_error", yara)
+        merge = on_done.split("shark_analyzer.merge(dir_path)")[1]
+        self.assertIn("add_analysis_warning(", merge)
+        self.assertNotIn("_set_error", merge)
 
     def test_error_set_on_db_failure(self):
         with open(SURICATA_FILE, 'r') as f:
@@ -5835,7 +5873,7 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         with open(STORAGE_FILE, 'r') as f:
             storage_content = f.read()
         # Artifact lists are centralized in storage.py's module-level constants
-        self.assertIn("PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', '.phase', '.error', '.warnings', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json', 'fast.log', 'stats.log', 'suricata.log',", storage_content,
+        self.assertIn("PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', 'events.db-wal', 'events.db-shm', '.phase', '.error', '.warnings', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json', 'fast.log', 'stats.log', 'suricata.log',", storage_content,
                       'PCAP artifact list must be centralized in PCAP_ANALYSIS_ARTIFACTS')
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
         # The actual per-artifact loop lives in the shared _remove_artifacts

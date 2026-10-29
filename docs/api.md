@@ -260,7 +260,7 @@ Unfiltered (no `q`) responses are cached server-side per `(md5, type)`, same as 
 
 ---
 
-The four stream endpoints below (`download-stream`, `ascii-stream`, `hexdump-stream`, `raw-stream`) share their parameter checks: `400` for an invalid IP, port or MD5, `404` if the analysis has no PCAP, and `500` if the packet tool times out - in addition to each one's own errors.
+The four stream endpoints below (`download-stream`, `ascii-stream`, `hexdump-stream`, `raw-stream`) share their parameter checks: `400` for an invalid IP, port or MD5, `404` if the analysis has no PCAP, and `500` if the packet tool times out or (`ascii-stream`, `raw-stream`) can't read the capture - in addition to each one's own errors.
 
 ### `GET /api/download-stream`
 
@@ -426,7 +426,7 @@ or, if analysis (Suricata/YARA/Zircolite/email parsing) failed:
 
 `meta` is present whenever `.meta` exists for the analysis (written after the file type is detected) and is omitted otherwise; it's absent entirely from the `error` response.
 
-A `ready` analysis can also have `warnings`, a list of what went wrong without failing it - for now, a YARA scan that failed or timed out, so its File Alerts may be missing (e.g. `"The YARA scan failed - File Alerts may be missing: <reason>"`; the wording varies with what was scanned). Omitted when there are none.
+A `ready` analysis can also have `warnings`, a list of what went wrong without failing it - a YARA scan that failed or timed out, so its File Alerts may be missing (e.g. `"The YARA scan failed - File Alerts may be missing: <reason>"`; the wording varies with what was scanned), tshark's rows failing to join a PCAP's, or a log's Sigma scan not running. Omitted when there are none.
 
 `hasRowNotes` is `true` if the analysis has at least one row-level note, and always `false` while it isn't ready (see `POST /api/row-note`) - used by the reanalyze confirmation dialog to conditionally warn that reanalyzing deletes them. This field is added only on this GET route, not on the identically-shaped `POST /api/check-status` response below - that endpoint is polled every 2 seconds during active processing, and the extra lookup has no reason to run that often.
 
@@ -723,7 +723,7 @@ Deletes a single historical analysis (removes the entire MD5 directory).
 {"success": true}
 ```
 
-**Errors:** `400` for invalid MD5 or unsafe path. `404` if analysis not found.
+**Errors:** `400` for invalid MD5 or unsafe path. `404` if analysis not found. `500` if the directory couldn't be removed (something still writing into it - an analysis still running).
 
 ---
 

@@ -1726,12 +1726,6 @@ def set_enabled(data_dir, on):
     os.replace(tmp, path)
 
 
-def run_seconds(db_path):
-    """How long the run that built a shark.db took, or None if it didn't
-    record that."""
-    return _run_info(db_path)[0]
-
-
 def _run_info(db_path):
     """(seconds, damaged) of the run that built a shark.db - (None, False)
     for what it didn't record."""
