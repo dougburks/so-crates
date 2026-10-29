@@ -2173,6 +2173,10 @@ class TestAnalyze(unittest.TestCase):
         self.pcap = os.path.join(self.dir, 'sample.pcap')
         with open(self.pcap, 'wb') as f:
             f.write(build_pcap_sample())
+        # Server-wide, learned from a run - each test starts as a new server
+        patcher = mock.patch.object(shark_analyzer, '_read_from_copy', False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         shutil.rmtree(self.dir, ignore_errors=True)
@@ -2261,6 +2265,39 @@ class TestAnalyze(unittest.TestCase):
         self.assertIn('even from a copy in', status['message'])
         self.assertIn('AppArmor', status['message'])
         self.assertEqual(self._left_in_tmp(), [])
+
+    def test_once_tshark_is_refused_in_place_later_runs_start_from_the_copy(self):
+        """REGRESSION: every run tried the capture in place first, so on a
+        host where AppArmor confines tshark, each one was refused - a
+        DENIED line in the kernel's log - before reading the copy."""
+        with mock.patch.dict(os.environ, self._denying_tshark(self.dir)):
+            shark_analyzer.analyze(self.dir, self.pcap)
+            self.assertTrue(shark_analyzer._read_from_copy)
+            os.unlink(shark_analyzer.shark_db_path(self.dir))
+            shark_analyzer.analyze(self.dir, self.pcap)
+        with open(self.denials) as f:
+            self.assertEqual(f.read().split(), [self.pcap], 'refused once, for the first run only')
+        self.assertEqual(shark_analyzer.status(self.dir, self.pcap)['status'], 'ready')
+        self.assertEqual(self._left_in_tmp(), [])
+
+    def test_a_run_tshark_may_read_in_place_doesnt_switch_to_copies(self):
+        with mock.patch.dict(os.environ, self._denying_tshark(os.path.join(self.dir, 'elsewhere'))):
+            shark_analyzer.analyze(self.dir, self.pcap)
+        self.assertFalse(shark_analyzer._read_from_copy)
+        self.assertEqual(shark_analyzer.status(self.dir, self.pcap)['status'], 'ready')
+
+    def test_a_killed_run_leaves_nothing_in_tmp(self):
+        """REGRESSION: a run killed (a cancel, the memory watchdog) left
+        its second passes' copies of frames in /tmp - the child's own
+        temp folders, which only the child removed. They're in the run's
+        folder now, which analyze removes however the child ends."""
+        child = ['sh', '-c', 'mkdir "$TMPDIR/shark-abcd1234" && echo frames > "$TMPDIR/shark-abcd1234/subset" '
+                 '&& kill -9 $$']
+        with mock.patch.dict(os.environ, self._denying_tshark('')), \
+                mock.patch.object(shark_analyzer, '_child_command', return_value=child):
+            shark_analyzer.analyze(self.dir, self.pcap)
+        self.assertEqual(self._left_in_tmp(), [])
+        self.assertIn('killed', shark_analyzer.status(self.dir, self.pcap)['message'])
 
     def test_the_capture_is_copied_where_it_cant_be_linked_if_there_is_room(self):
         copy_dir = tempfile.mkdtemp()

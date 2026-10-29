@@ -488,6 +488,21 @@ class TestResolveSafeIps(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validators.resolve_safe_ips('v6mapped-private.example.com')
 
+    def test_rejects_6to4_and_nat64_carrying_a_private_ipv4(self):
+        """6to4 (2002::/16) and NAT64 (64:ff9b::/96) addresses are judged by
+        the IPv4 address they carry, not only by Python's own classes for
+        them (which differ between versions - 3.13 already calls both
+        prefixes private or reserved, so those are switched off here)."""
+        import ipaddress
+        off = unittest.mock.PropertyMock(return_value=False)
+        with unittest.mock.patch.object(ipaddress.IPv6Address, 'is_private', off), \
+                unittest.mock.patch.object(ipaddress.IPv6Address, 'is_reserved', off), \
+                unittest.mock.patch.object(ipaddress.IPv6Address, 'is_global', unittest.mock.PropertyMock(return_value=True)):
+            for addr in ('2002:a00:1::1', '2002:7f00:1::1', '64:ff9b::10.0.0.1', '64:ff9b::127.0.0.1', '64:ff9b::100.64.0.1'):
+                self.assertTrue(validators._ip_is_blocked(ipaddress.ip_address(addr)), addr)
+            for addr in ('2002:808:808::1', '64:ff9b::8.8.8.8'):
+                self.assertFalse(validators._ip_is_blocked(ipaddress.ip_address(addr)), addr)
+
     def test_rejects_ipv4_compatible_loopback(self):
         """::127.0.0.1 (IPv4-compatible) must be blocked."""
         with unittest.mock.patch('socket.getaddrinfo', return_value=self._fake_addrinfo('::127.0.0.1')):

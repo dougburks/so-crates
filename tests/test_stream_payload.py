@@ -99,6 +99,59 @@ class TestRunFollowRawAgainstTshark(unittest.TestCase):
         self.assertEqual(self._follow('10.0.0.1', '40000', '10.0.0.2', '80', 'dst', max_bytes=100),
                          (b'', True))
 
+    def test_transcript_each_direction_without_the_retransmission(self):
+        """The ASCII transcript: one line per payload packet, directions
+        by source address, the retransmitted response segment once."""
+        lines = stream_payload.transcript_lines(_run, self.pcap, '10.0.0.1', '40000', '10.0.0.2', '80', 'tcp',
+                                                max_bytes=10 * 1024 * 1024, timeout=30)
+        sent = ''.join(l['text'] for l in lines if l['direction'] == 'src')
+        received = ''.join(l['text'] for l in lines if l['direction'] == 'dst')
+        self.assertEqual(sent, HTTP_REQUEST.decode())
+        # (the response's body is every byte value - only the printable ones survive)
+        self.assertTrue(received.startswith('HTTP/1.1 200 OK\r\n\r\n'))
+        self.assertEqual(received.count('HTTP/1.1 200 OK'), 1, 'the retransmitted segment must appear once')
+        self.assertIn(' !"#$%&', received)
+
+    def test_transcript_ipv6(self):
+        lines = stream_payload.transcript_lines(_run, self.pcap, '2001:db8::1', '40001', '2001:db8::2', '8080', 'tcp',
+                                                max_bytes=10 * 1024 * 1024, timeout=30)
+        self.assertTrue(''.join(l['text'] for l in lines if l['direction'] == 'dst').startswith('HTTP/1.1 200 OK'))
+
+
+class TestParseTranscript(unittest.TestCase):
+    def test_unprintable_bytes_become_dots_and_whitespace_is_kept(self):
+        output = '10.0.0.1\t47:45:54:00:ff:0d:0a\n10.0.0.2\t20\n10.0.0.1\t\n'
+        self.assertEqual(stream_payload.parse_transcript(output, '10.0.0.1'),
+                         [{'text': 'GET..\r\n', 'direction': 'src'}, {'text': ' ', 'direction': 'dst'}])
+
+    def test_expanded_ipv6_source_matches_tsharks_compressed_form(self):
+        lines = stream_payload.parse_transcript('2001:db8::1\t41\n', '2001:0db8:0000:0000:0000:0000:0000:0001')
+        self.assertEqual(lines, [{'text': 'A', 'direction': 'src'}])
+
+
+class TestParseHexdump(unittest.TestCase):
+    @staticmethod
+    def _output(n):
+        return ''.join(f'12:00:0{i} IP 10.0.0.1.80 > 10.0.0.2.443: tcp 4\n\t0x0000:  4500 0028  E..(\n'
+                       for i in range(n))
+
+    def test_packets_with_their_hex_lines(self):
+        packets, truncated = stream_payload.parse_hexdump(self._output(2), 10, 10000)
+        self.assertEqual(packets, [{'header': '12:00:00 IP 10.0.0.1.80 > 10.0.0.2.443: tcp 4', 'lines': ['0x0000:  4500 0028  E..(']},
+                                   {'header': '12:00:01 IP 10.0.0.1.80 > 10.0.0.2.443: tcp 4', 'lines': ['0x0000:  4500 0028  E..(']}])
+        self.assertFalse(truncated)
+
+    def test_stops_at_the_packet_limit_without_an_empty_extra(self):
+        packets, truncated = stream_payload.parse_hexdump(self._output(3), 2, 10000)
+        self.assertEqual(len(packets), 2)
+        self.assertTrue(all(p['lines'] for p in packets))
+        self.assertTrue(truncated)
+
+    def test_stops_at_the_character_limit(self):
+        packets, truncated = stream_payload.parse_hexdump(self._output(3), 10, 30)
+        self.assertEqual(len(packets), 2)
+        self.assertTrue(truncated)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

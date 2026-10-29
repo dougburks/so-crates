@@ -26,7 +26,8 @@ Analysis View (analysis loaded)
   ├── File Info card (binary-file analyses only)
   ├── Filter Bar (active search and filters as removable chips)
   ├── Stats Grid (clickable event-type cards, shows the filtered count alone when a filter is active - see `buildStats()` in filtering.md;
-  │               a PCAP analysis's cards are in Triage, Protocol records and Connections sections, All Events last in Triage)
+  │               a PCAP analysis's cards are in Triage, Protocol records and Connections panels
+  │               that share rows, All Events last in Triage; every card one width and height)
   ├── Sankey Diagram (collapsible section - Source IP → Dest IP → Dest Port, reflects current filters)
   ├── Aggregation Tables (collapsible section - frequency counts per column)
   └── Data Table (the selected tab's rows; a row expands into its detail panel)

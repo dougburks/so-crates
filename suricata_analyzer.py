@@ -10,6 +10,7 @@ import time
 
 import config
 from db import create_sqlite_db
+from storage import add_analysis_warning
 import shark_analyzer
 from validators import is_host_reachable, is_epoch_stale, gunzip_atomically
 from yara_analyzer import run_yara_pipeline
@@ -903,10 +904,13 @@ def spawn_suricata(dir_path, pcap_path, suricata_config_path=None, data_dir=None
     def on_suricata_done(returncode=0):
         # Phase 2: Run YARA scan on extracted files
         _set_phase(dir_path, 'files')
+        # A failed scan or tshark merge is a warning, not .error: the
+        # analysis itself still completes, and .error would show it as
+        # failed (until a status poll cleared it as stale)
         try:
             run_yara_pipeline(dir_path, data_dir=data_dir)
         except Exception as e:
-            _set_error(dir_path, f'YARA scan failed: {e}')
+            add_analysis_warning(dir_path, f'The YARA scan of extracted files failed - File Alerts may be missing: {e}')
         # Phase 3: Build SQLite database
         _set_phase(dir_path, 'importing')
         eve_file = os.path.join(dir_path, 'eve.json')
@@ -936,7 +940,7 @@ def spawn_suricata(dir_path, pcap_path, suricata_config_path=None, data_dir=None
         try:
             shark_analyzer.merge(dir_path)
         except Exception as e:
-            _set_error(dir_path, f'Adding tshark protocols failed: {e}')
+            add_analysis_warning(dir_path, f'Adding tshark protocols failed: {e}')
 
     try:
         proc = subprocess.Popen(
@@ -1048,3 +1052,59 @@ def _clear_error(dir_path):
             os.unlink(error_file)
     except OSError:
         pass
+
+
+def _fresh(path):
+    """Whether path exists and is no older than config.STALE_THRESHOLD_SECONDS
+    - removing it when it's older: a .phase or .error that old was left
+    by a server that died mid-run."""
+    try:
+        age = time.time() - os.path.getmtime(path)
+    except OSError:
+        return False
+    if age > config.STALE_THRESHOLD_SECONDS:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def read_error(dir_path):
+    """The analysis's error message, or None without one (a stale .error is
+    removed). Not yet redacted of server paths - the server does that."""
+    error_file = os.path.join(dir_path, '.error')
+    if not _fresh(error_file):
+        return None
+    try:
+        with open(error_file, 'r') as f:
+            return f.read().strip()
+    except OSError:
+        return 'Analysis failed'
+
+
+def read_phase(dir_path):
+    """The analysis's current phase ('network', 'logs'...), '' if .phase
+    can't be read, or None when it isn't being analyzed (a stale .phase is
+    removed)."""
+    phase_file = os.path.join(dir_path, '.phase')
+    if not _fresh(phase_file):
+        return None
+    try:
+        with open(phase_file, 'r') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
+def analysis_running(dir_path):
+    """Whether an analysis is being analyzed now, so it mustn't be deleted:
+    Suricata, Zircolite or the email analyzer would go on writing into its
+    folder - or recreate it, bringing the deleted analysis back. A .phase
+    older than the status check's stale threshold is from a server that
+    died mid-run, and doesn't count (it's left for the status check)."""
+    try:
+        return time.time() - os.path.getmtime(os.path.join(dir_path, '.phase')) <= config.STALE_THRESHOLD_SECONDS
+    except OSError:
+        return False

@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Exact-byte stream payloads for SO-CRATES.
+"""Stream payloads for SO-CRATES: one flow's packets, as exact bytes or as
+text to read.
 
-The ASCII transcript (socrates.py's _extract_payload_lines) is built for
-reading: it decodes each packet as UTF-8 and turns non-printable bytes into
-'.', so it can't feed anything that needs the real bytes - an XOR key,
-gzip data, shellcode. This module reassembles a flow's payload exactly,
-per direction, via tshark's "follow ... raw" mode, which also handles TCP
-retransmissions and out-of-order segments (verified against a capture
-with a retransmitted segment: it appears once, not twice).
+The ASCII transcript (transcript_lines) and the hexdump (parse_hexdump,
+of tcpdump -X) are built for reading: the transcript decodes each packet
+as UTF-8 and turns non-printable bytes into '.', so it can't feed
+anything that needs the real bytes - an XOR key, gzip data, shellcode.
+run_follow_raw reassembles a flow's payload exactly, per direction, via
+tshark's "follow ... raw" mode, which also handles TCP retransmissions
+and out-of-order segments (verified against a capture with a
+retransmitted segment: it appears once, not twice).
+
+Carving the flow out of the capture first stays in socrates.py's
+handlers; they pass in their _run_capped, so its size cap applies here.
 """
 
 import ipaddress
@@ -109,3 +114,101 @@ def run_follow_raw(run_capped, pcap, src, sport, dst, dport, direction, max_byte
         if payload:
             return payload, False
     return b'', False
+
+
+def transcript_command(pcap, src, sport, dst, dport, proto):
+    """The tshark command printing each packet's source address and payload
+    (hex) for one flow - src/dst validated IPs, sport/dport validated
+    ports."""
+    # tshark's ip.* fields don't match IPv6 at all ("not a valid
+    # hostname or IPv4 address", silently giving an empty transcript) -
+    # IPv6 flows need the ipv6.* fields instead.
+    family = 'ipv6' if ipaddress.ip_address(src).version == 6 else 'ip'
+    display_filter = (f'{family}.addr == {src} && {family}.addr == {dst} && '
+                      f'{proto}.port == {sport} && {proto}.port == {dport}')
+    if proto == 'tcp':
+        # The transcript joins a TCP stream's segments into one byte
+        # stream, so a retransmitted segment would be spliced into the
+        # middle of a line rather than show as a harmless duplicate.
+        display_filter += ' && !tcp.analysis.retransmission'
+    return ['tshark', '-r', pcap, '-Y', display_filter,
+            '-T', 'fields', '-e', f'{family}.src', '-e', f'{proto}.payload']
+
+
+def parse_transcript(output, src):
+    """transcript_command's output -> [{'text', 'direction'}], one per
+    packet with a payload: printable ASCII (and newlines/tabs) kept, every
+    other byte '.', direction 'src' for packets from src."""
+    src_addr = ipaddress.ip_address(src)
+    lines = []
+    for line in output.strip().split('\n'):
+        if not line.strip():
+            continue
+        parts = line.split('\t')
+        if len(parts) < 2:
+            continue
+        packet_src = parts[0].strip()
+        payload_hex = parts[1].replace(':', '')
+        if payload_hex:
+            try:
+                payload_bytes = bytes.fromhex(payload_hex)
+                payload_str = payload_bytes.decode('utf-8', errors='replace')
+                cleaned = ''.join(c if c in '\n\r\t' or 32 <= ord(c) < 127 else '.' for c in payload_str)
+                # Whitespace-only payloads are kept: an interactive
+                # session sends Enter or a space as its own segment, and
+                # dropping it ran the neighboring commands together once
+                # the transcript joins segments.
+                # Compared as addresses, not strings: Suricata logs IPv6
+                # fully expanded, tshark prints it compressed.
+                direction = 'src' if ipaddress.ip_address(packet_src) == src_addr else 'dst'
+                lines.append({'text': cleaned, 'direction': direction})
+            except ValueError:
+                pass
+    return lines
+
+
+def transcript_lines(run_capped, pcap, src, sport, dst, dport, proto, max_bytes, timeout):
+    """The ASCII transcript of one flow over proto ('tcp' or 'udp'):
+    parse_transcript of transcript_command, read through run_capped
+    (socrates.py's _run_capped, as for run_follow_raw) up to max_bytes -
+    the response is trimmed far below that, so anything past it could
+    never be shown anyway. Raises subprocess.TimeoutExpired."""
+    _, output, _ = run_capped(transcript_command(pcap, src, sport, dst, dport, proto),
+                              max_bytes=max_bytes, timeout=timeout, text=True)
+    return parse_transcript(output, src)
+
+
+def parse_hexdump(output, max_packets, max_chars):
+    """tcpdump -X's output -> ([{'header', 'lines'}], truncated): one entry
+    per packet, its header line and its hex lines, stopping at max_packets
+    packets or max_chars characters of hex lines."""
+    packets = []
+    current_packet = None
+    total_chars = 0
+    truncated = False
+
+    for line in output.split('\n'):
+        if not line.strip():
+            if current_packet:
+                packets.append(current_packet)
+                current_packet = None
+            continue
+
+        if line.startswith('\t0x'):
+            if current_packet:
+                current_packet['lines'].append(line.strip())
+                total_chars += len(line)
+        else:
+            if current_packet:
+                packets.append(current_packet)
+            current_packet = {'header': line.strip(), 'lines': []}
+
+        if len(packets) >= max_packets or total_chars > max_chars:
+            truncated = True
+            break
+
+    # (stopped at the packet limit, current_packet is the next
+    # packet's header alone - one more than the limit, and empty)
+    if current_packet and len(packets) < max_packets:
+        packets.append(current_packet)
+    return packets, truncated

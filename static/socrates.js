@@ -2897,14 +2897,19 @@
         // collapsed row instead: every detail-row is rendered as the very
         // next sibling of the row it expands from (see e.g.
         // buildRowForEvent's own row + detail-row pairing).
-        document.addEventListener('click', function(event) {
+        // Returns true if it opened the menu - the right-click listener
+        // below needs to know whether to hold back the browser's own. It
+        // passes ignoreSelection: it already knows nothing was selected
+        // before the right-click, and the word macOS selected under the
+        // pointer isn't a selection the analyst made.
+        function openDetailValuePivotMenu(event, ignoreSelection = false) {
             const pivotEl = event.target.closest('[data-detail-pivot]');
-            if (!pivotEl) return;
+            if (!pivotEl) return false;
             let pair;
             try {
                 pair = JSON.parse(decodeURIComponent(pivotEl.dataset.detailPivot));
             } catch (e) {
-                return;
+                return false;
             }
             const [label, value, isDynamicField] = pair;
             const detailRow = pivotEl.closest('tr.detail-row');
@@ -2914,13 +2919,13 @@
             // for the selected text, not the whole value, and like a
             // transcript selection it gets no Include/Exclude/Only - a
             // fragment isn't the field's value.
-            const sel = window.getSelection();
+            const sel = ignoreSelection ? null : window.getSelection();
             const selected = sel && !sel.isCollapsed && sel.rangeCount === 1
                 && pivotEl.contains(sel.getRangeAt(0).commonAncestorContainer) ? sel.toString() : '';
             if (selected.trim() && selected !== String(value)) {
                 event.stopPropagation();
                 showPivotMenu(event, null, `${label} (selection)`, selected, true, null, collapsedRow ? collapsedRow.dataset.communityId : null);
-                return;
+                return true;
             }
             const eventType = collapsedRow ? collapsedRow.dataset.eventType : null;
             const columns = detailColumnsForEventType(eventType);
@@ -2958,25 +2963,68 @@
             const trimmed = !eventType || !mappedColumn;
             event.stopPropagation();
             showPivotMenu(event, eventType ? 'section-' + eventType : null, mappedColumn || label, value, trimmed, null, collapsedRow ? collapsedRow.dataset.communityId : null);
-        });
+            return true;
+        }
+        document.addEventListener('click', openDetailValuePivotMenu);
 
         // Aggregation-table rows (see _renderAggTablesHtml) always carry a
         // real column - they're literally grouped by it - so this always
         // opens the full menu, unlike the detail-panel listener above.
         // Delegated for the same reason: _renderAggTablesHtml returns a
         // plain HTML string, and val is arbitrary field content.
-        document.addEventListener('click', function(event) {
+        function openAggRowPivotMenu(event) {
             const row = event.target.closest('tr.agg-row[data-agg-pivot]');
-            if (!row) return;
+            if (!row) return false;
             let triple;
             try {
                 triple = JSON.parse(decodeURIComponent(row.dataset.aggPivot));
             } catch (e) {
-                return;
+                return false;
             }
             const [sectionId, col, value] = triple;
             event.stopPropagation();
             showPivotMenu(event, sectionId, col, value, false);
+            return true;
+        }
+        document.addEventListener('click', openAggRowPivotMenu);
+
+        // Right-click opens the same pivot menu a left-click does, on
+        // anything a left-click opens it from: a table row's value, a
+        // detail-panel value, an aggregation row. Only there - anywhere
+        // else (a row's Time column or an empty cell, padding, the rest of
+        // the page) the browser's own menu shows, and a right-click never
+        // expands or collapses a row. The browser's menu also wins on a
+        // link (open in a new tab), with text selected (Copy), and with
+        // Shift held, so it's always one modifier away.
+        //
+        // Whether text was selected is read at mousedown, before the
+        // browser's own handling of it: macOS selects the word under the
+        // pointer on a right-click, so by contextmenu every value would
+        // look like a selection. That word's selection is cleared when
+        // our menu opens instead.
+        const ROW_TOGGLE_ACTIONS = new Set(['toggle-row', 'toggle-log-row', 'toggle-sigma-row']);
+        let selectionAtMousedown = false;
+        document.addEventListener('mousedown', () => {
+            const sel = window.getSelection();
+            selectionAtMousedown = !!(sel && !sel.isCollapsed && sel.toString().trim());
+        }, true);
+        document.addEventListener('contextmenu', event => {
+            const hadSelection = selectionAtMousedown;
+            selectionAtMousedown = false;
+            if (event.shiftKey || hadSelection) return;
+            if (activePivotMenuEl && activePivotMenuEl.contains(event.target)) return;
+            if (event.target.closest('a[href]:not([href="#"])')) return;
+            const actionEl = event.target.closest('[data-action]');
+            const opened = openDetailValuePivotMenu(event, true)
+                || openAggRowPivotMenu(event)
+                || (!!actionEl && ROW_TOGGLE_ACTIONS.has(actionEl.dataset.action) && handleRowCellClick(actionEl, event));
+            if (opened) {
+                event.preventDefault();
+                const sel = window.getSelection();
+                if (sel) sel.removeAllRanges();
+            } else {
+                closePivotMenu();
+            }
         });
 
         // Include/Exclude/Only for one row-cell's value (see
@@ -5307,6 +5355,7 @@
             document.title = 'SO-CRATES';
             closeAllModals();
             stopSharkPolling();
+            tsharkRowsPending = false;
             if (window.location.search.includes('file=') || window.location.search.includes('pcap=')) {
                 history.replaceState({}, '', window.location.pathname);
             }
@@ -5880,14 +5929,14 @@
             return true;
         }
 
-        // .stats-grid is a responsive CSS grid (repeat(auto-fit,
-        // minmax(140px, 1fr))) with no fixed column count - mirrors
+        // .stats-grid (or, in sections, each panel's .stats-group-cards)
+        // is a responsive CSS grid (repeat(auto-fit, ...)) with no fixed
+        // column count - mirrors
         // themeTileGridColumnCount()'s own technique of reading the
         // browser's already-resolved column list back via
         // getComputedStyle rather than trying to compute it by hand from
         // container width/card width.
-        function statsGridColumnCount() {
-            const grid = document.getElementById('statsGrid');
+        function statsGridColumnCount(grid = document.getElementById('statsGrid')) {
             if (!grid) return 1;
             const columns = getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length;
             return columns > 0 ? columns : 1;
@@ -5927,22 +5976,22 @@
                 : document.querySelector('.stat-card.tab-active');
             if (!referenceCard) return [];
             const cards = Array.from(document.querySelectorAll('#statsGrid .stat-card:not(.stat-card-collapsed)'));
-            const columnCount = statsGridColumnCount();
             // The open tab's card in a section the viewer collapsed: the
             // grid is still reachable, from its first card showing
             if (!cards.includes(referenceCard) && referenceCard.classList.contains('stat-card-collapsed')) referenceCard = cards[0];
             if (!cards.includes(referenceCard)) return [];
-            // Each section's cards start a fresh row under its heading (see
-            // STAT_GROUPS), so their columns count from the section's first
-            const place = new Map();
-            let n = 0;
-            for (const el of document.getElementById('statsGrid').children) {
-                if (el.classList.contains('stats-grid-heading')) n = 0;
-                else if (el.classList.contains('stat-card') && !el.classList.contains('stat-card-collapsed')) place.set(el, n++);
-            }
-            const columnOf = c => place.get(c) % columnCount;
-            const column = columnOf(referenceCard);
-            return cards.filter(c => columnOf(c) === column);
+            // In sections each panel is a grid of its own (see STAT_GROUPS),
+            // so a card's column counts from its panel's first card, in that
+            // panel's columns; Down/Up walks that column through every
+            // section in turn
+            const columnOf = new Map();
+            const containers = [...new Set(cards.map(c => c.parentElement))];
+            containers.forEach(container => {
+                const columnCount = statsGridColumnCount(container);
+                cards.filter(c => c.parentElement === container).forEach((c, i) => columnOf.set(c, i % columnCount));
+            });
+            const column = columnOf.get(referenceCard);
+            return cards.filter(c => columnOf.get(c) === column);
         }
 
         // True for the controls that behave as one horizontal group within
@@ -10451,13 +10500,17 @@
             requestAnimationFrame(tick);
         }
 
-        // A PCAP analysis's cards come in three sections, each under a
-        // heading on a row of its own: triage (the alert cards, the views
+        // A PCAP analysis's cards come in three sections, each a panel
+        // with its heading on top: triage (the alert cards, the views
         // that pick out what's worth a look, and All Events - the way into
         // everything), then the protocol records, then the connections -
         // Suricata's flows and tshark's connection cards, which list
         // connections the same way. STAT_GROUPS is in that order;
-        // statGroup() says which a card is in.
+        // statGroup() says which a card is in. The panels share rows, each
+        // as wide as its share of the cards (--cards), so a section of
+        // three cards sits beside the next rather than leaving the rest of
+        // its row empty; one with too many cards for what's left of a row
+        // starts the next.
         const STAT_GROUPS = [
             { heading: 'Triage', note: 'alerts, what the records show is worth a look, and every event in one view' },
             { heading: 'Protocol records', note: 'what Suricata and tshark parsed from the traffic' },
@@ -10494,14 +10547,15 @@
         }
 
         // The Protocol records heading also ends with tshark's finished
-        // line, once there is one (see updateTsharkLine)
+        // line, once there is one (see updateTsharkLine). The section's
+        // note is the heading's tooltip - spelled out on the heading, it
+        // made the panel as wide as the note, not as its cards.
         function statGroupHeadingHtml(group, collapsed, cardCount) {
             const g = STAT_GROUPS[group];
-            return `<div class="stats-grid-heading${collapsed ? ' collapsed' : ''}" data-action="toggle-stat-group" data-group="${group}">`
+            return `<div class="stats-grid-heading${collapsed ? ' collapsed' : ''}" data-action="toggle-stat-group" data-group="${group}" title="${escapeHtml(g.note)}">`
                 + `<button type="button" class="stats-grid-heading-toggle" aria-expanded="${!collapsed}">`
                 + `<span class="stats-grid-heading-arrow" aria-hidden="true">${collapsed ? '▸' : '▾'}</span>`
                 + `<span class="stats-grid-heading-label">${g.heading}</span></button>`
-                + `<span class="stats-grid-heading-note">${escapeHtml(g.note)}</span>`
                 + `<span class="stats-grid-heading-summary"${collapsed ? '' : ' hidden'}>${statGroupSummary(cardCount)}</span>`
                 + (group === 1 ? '<span id="tsharkHeadingStatus" class="stats-grid-heading-aside" aria-live="polite" hidden></span>' : '')
                 + '</div>';
@@ -10516,6 +10570,7 @@
             const cards = grid.querySelectorAll(`.stat-card[data-stat-group="${group}"]`);
             cards.forEach(c => c.classList.toggle('stat-card-collapsed', collapsed));
             heading.classList.toggle('collapsed', collapsed);
+            heading.parentElement.classList.toggle('collapsed', collapsed);
             heading.querySelector('.stats-grid-heading-toggle').setAttribute('aria-expanded', String(!collapsed));
             heading.querySelector('.stats-grid-heading-arrow').textContent = collapsed ? '▸' : '▾';
             heading.querySelector('.stats-grid-heading-summary').hidden = !collapsed;
@@ -10524,10 +10579,10 @@
                     c.classList.remove('keyboard-selected');
                     if (verticalNavSelection === c) verticalNavSelection = null;
                 });
-            } else {
-                // Labels hidden while collapsed couldn't be measured
-                fitStatLabels(grid);
             }
+            // Labels hidden while collapsed couldn't be measured, and the
+            // other panels in its row widen or narrow with it
+            fitStatLabels(grid);
         }
 
         function toggleStatGroup(heading) {
@@ -10685,8 +10740,16 @@
                 ? Object.keys(groupCards).map(Number).filter(g => g !== activeGroup && statGroupCollapsed(g, groupCards[g]))
                 : []);
             let lastGroup = null;
+            grid.classList.toggle('stats-grid-grouped', showHeadings);
             grid.innerHTML = visibleStats.map(s => {
-                const heading = showHeadings && s.group !== lastGroup ? statGroupHeadingHtml(s.group, collapsedGroups.has(s.group), groupCards[s.group]) : '';
+                let heading = '';
+                if (showHeadings && s.group !== lastGroup) {
+                    const collapsed = collapsedGroups.has(s.group);
+                    heading = (lastGroup === null ? '' : '</div></div>')
+                        + `<div class="stats-group${collapsed ? ' collapsed' : ''}" data-group="${s.group}" style="--cards: ${groupCards[s.group]}">`
+                        + statGroupHeadingHtml(s.group, collapsed, groupCards[s.group])
+                        + '<div class="stats-group-cards">';
+                }
                 lastGroup = s.group;
                 const collapsedClass = collapsedGroups.has(s.group) ? ' stat-card-collapsed' : '';
                 const groupAttr = s.group !== undefined ? ` data-stat-group="${s.group}"` : '';
@@ -10704,12 +10767,12 @@
                 // real final value immediately so assistive tech isn't
                 // stuck reading "0" or a mid-animation number.
                 return heading + `
-                    <div class="stat-card${activeClass}${s.connection ? ' stat-card-connection' : ''}${collapsedClass}" data-action="show-tab" data-section="section-${escapeHtml(s.id)}"${groupAttr}${s.title ? ` title="${escapeHtml(s.title)}"` : ''}>
+                    <div class="stat-card${activeClass}${collapsedClass}" data-action="show-tab" data-section="section-${escapeHtml(s.id)}"${groupAttr}${s.title ? ` title="${escapeHtml(s.title)}"` : ''}>
                         <div class="stat-number" style="color: ${s.color}" aria-label="${countDisplay}">0</div>
                         <div class="stat-label">${escapeHtml(s.label)}</div>${s.notInSuricata ? '<span class="stat-badge" title="From tshark: Suricata doesn\'t parse this protocol"><span class="sr-only">from tshark</span></span>' : ''}
                     </div>
                 `;
-            }).join('');
+            }).join('') + (showHeadings ? '</div></div>' : '');
             const numberEls = grid.querySelectorAll('.stat-number');
             visibleStats.forEach((s, i) => animateStatNumber(numberEls[i], s.count));
             // The new Protocol records heading takes tshark's finished line
@@ -10842,18 +10905,30 @@
         async function buildAcknowledgedAlertsSection() {
             const sectionEl = document.getElementById('section-acknowledged');
             if (!sectionEl || !currentMd5) return;
-            const qParam = buildSearchQuery();
+            // A reply for another analysis or an earlier search is dropped,
+            // as in buildFindingsSection
+            const md5 = currentMd5, qParam = buildSearchQuery();
             const limit = getUserQueryLimit();
-            const [alertResp, sigmaResp] = await Promise.all([
-                // (a log analysis has Sigma alerts only)
-                isLogAnalysisMode ? null
-                    : fetch(`/api/events?md5=${encodeURIComponent(currentMd5)}&type=alert&acknowledged=only&limit=${limit}${qParam}&t=${Date.now()}`),
-                fetch(`/api/sigma-alerts?md5=${encodeURIComponent(currentMd5)}&acknowledged=only&limit=${limit}${qParam}&t=${Date.now()}`)
-            ]);
-            acknowledgedAlertsCache = {
-                alert: alertResp ? await alertResp.json() : [],
-                sigmaalert: await sigmaResp.json(),
-            };
+            let cache;
+            try {
+                const [alertResp, sigmaResp] = await Promise.all([
+                    // (a log analysis has Sigma alerts only)
+                    isLogAnalysisMode ? null
+                        : fetch(`/api/events?md5=${encodeURIComponent(md5)}&type=alert&acknowledged=only&limit=${limit}${qParam}&t=${Date.now()}`),
+                    fetch(`/api/sigma-alerts?md5=${encodeURIComponent(md5)}&acknowledged=only&limit=${limit}${qParam}&t=${Date.now()}`)
+                ]);
+                cache = {
+                    alert: alertResp ? await alertResp.json() : [],
+                    sigmaalert: await sigmaResp.json(),
+                };
+            } catch (e) {
+                if (currentMd5 === md5 && buildSearchQuery() === qParam) {
+                    sectionEl.innerHTML = '<div class="section-content"><div class="no-matches">Couldn\'t load the acknowledged alerts - open the tab again to retry</div></div>';
+                }
+                return;
+            }
+            if (currentMd5 !== md5 || buildSearchQuery() !== qParam) return;
+            acknowledgedAlertsCache = cache;
             renderAcknowledgedAlertsGroups();
         }
 
@@ -13144,6 +13219,10 @@
                             body: JSON.stringify({ md5: currentMd5, name: newValue })
                         });
                         const result = await resp.json();
+                        // Left for Welcome or another analysis while it
+                        // saved (a blur from clicking away does this): the
+                        // header and title aren't this analysis's any more
+                        if (!input.isConnected) return;
                         if (resp.ok && result.success) {
                             currentFileName = result.name;
                             document.title = 'SO-CRATES - ' + currentFileName;
@@ -13154,6 +13233,7 @@
                         showToast('Could not rename analysis');
                     }
                 }
+                if (!input.isConnected) return;
                 el.innerHTML = `${FILE_ICON_SVG}${escapeHtml(currentFileName)}`;
                 el.title = currentFileName;
                 el.style.cursor = 'pointer';
@@ -13219,7 +13299,9 @@
             if (sharkFinished(status)) {
                 // (and when the capture was cut off - a partial upload, a
                 // capture stopped mid-write - that tshark read it up to there)
-                const took = (Number.isFinite(status.seconds) ? ` in ${status.seconds.toLocaleString()}s` : '')
+                // (the server rounds to whole seconds, so a quick run is 0)
+                const took = (Number.isFinite(status.seconds)
+                    ? (status.seconds < 1 ? ' in under a second' : ` in ${status.seconds.toLocaleString()}s`) : '')
                     + (status.damaged ? ' \u00b7 the capture is cut off, so its last packet wasn\u2019t read' : '');
                 return tsharkTypes.size
                     ? `${dot}tshark parsed ${tsharkTypes.size} additional protocol${tsharkTypes.size === 1 ? '' : 's'}${took}`
@@ -13284,9 +13366,14 @@
             if (!sharkClockTimer) sharkClockTimer = setInterval(tickSharkClock, 1000);
         }
 
+        // Bumped on every stop, so a request already in flight when the
+        // analyst left (for Welcome, where currentMd5 keeps its value)
+        // can't start polling again when its reply lands.
+        var sharkPollGeneration = 0;
         function stopSharkPolling() {
             if (sharkPollTimer) clearTimeout(sharkPollTimer);
             sharkPollTimer = null;
+            sharkPollGeneration++;
         }
 
         // Fetches (or, with start, requests) this analysis's tshark status,
@@ -13297,6 +13384,7 @@
         // is dropped.
         async function refreshSharkStatus(md5, start) {
             stopSharkPolling();
+            const generation = sharkPollGeneration;
             const wasBusy = sharkIsBusy(sharkStatus);
             let status;
             try {
@@ -13307,7 +13395,7 @@
             } catch (e) {
                 status = {status: 'error', message: 'Could not reach the server'};
             }
-            if (md5 !== currentMd5) return;
+            if (md5 !== currentMd5 || generation !== sharkPollGeneration) return;
             sharkStatus = status;
             updateTsharkLine();
             if (sharkIsBusy(status)) {
@@ -14184,6 +14272,9 @@
                     tabDataCache = {};
                     bumpFetchGeneration();
                     showWelcome();
+                    if (result.skipped) {
+                        showToast(`${result.skipped.toLocaleString()} ${result.skipped === 1 ? 'analysis' : 'analyses'} still running ${result.skipped === 1 ? 'was' : 'were'} left - delete ${result.skipped === 1 ? 'it' : 'them'} once finished`);
+                    }
                 } else {
                     showError(result.error || 'Could not delete analyses');
                 }

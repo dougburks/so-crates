@@ -403,14 +403,15 @@ class TestHTMLStructure(unittest.TestCase):
 
 class TestCSSLayout(unittest.TestCase):
     def test_stats_grid_columns(self):
-        match = re.search(r'grid-template-columns:\s*repeat\(([^)]+)\)', CSS_CONTENT)
-        self.assertIsNotNone(match, "stats-grid should have grid-template-columns")
-        if match:
-            columns = match.group(1)
-            self.assertIn('auto-fit', columns,
-                          'stats-grid must use auto-fit for responsive wrapping')
-            self.assertIn('minmax', columns,
-                          'stats-grid must use minmax for responsive column sizing')
+        """Every card one width, wrapping to fit - in a section's panel
+        too - so no card reads larger than another"""
+        grid = re.search(r'\.stats-grid \{[^}]*grid-template-columns:\s*repeat\(([^)]+)\)', CSS_CONTENT)
+        panel = re.search(r'\.stats-group-cards \{[^}]*grid-template-columns:\s*repeat\(([^)]+)\)', CSS_CONTENT)
+        self.assertIsNotNone(grid, "stats-grid should have grid-template-columns")
+        self.assertIsNotNone(panel, "a section panel's cards should have grid-template-columns")
+        self.assertRegex(grid.group(1), r'^auto-fill, \d+px$', 'stats-grid must wrap fixed-width cards')
+        self.assertEqual(panel.group(1), grid.group(1), "a panel's cards must be the same width as the grid's")
+        self.assertRegex(CSS_CONTENT, r'\.stat-number \{ font-size: [\d.]+rem;', 'one number size on every card')
 
     def test_stats_grid_gap(self):
         self.assertIn('gap:', CSS_CONTENT)
@@ -6083,9 +6084,35 @@ class TestFiltering(unittest.TestCase):
     def test_about_modal_has_made_with_heart_line(self):
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
         self.assertIn('Made with', about_block)
-        self.assertIn('by defenders for defenders', about_block)
+        self.assertIn('by defenders, for defenders', about_block)
         self.assertIn('<svg', about_block.split('Made with')[1].split('by defenders')[0],
                       'the heart must be an inline SVG icon (matching the app\'s icon style), not an emoji')
+        self.assertIn('white-space: nowrap', about_block.split('Made with')[0].rsplit('<div', 1)[-1])
+
+    def test_about_modal_share_links(self):
+        """The share request sits right under the "Made with" line, and
+        each network is a plain link that opens a new tab - no share
+        widgets or third-party scripts, so nothing loads until a click."""
+        about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
+        share = about_block.split('id="aboutShare"')[1].split('</div>')[0]
+        self.assertIn('If you like SO-CRATES, please share it on', share)
+        links = re.findall(r'<a href="([^"]+)"([^>]*)>([^<]+)</a>', share)
+        self.assertEqual([label for _, _, label in links], ['X', 'LinkedIn', 'Bluesky'])
+        for href, attrs, label in links:
+            self.assertIn('so-crates.org', href.replace('%2F', '/').replace('%3A', ':'), label)
+            self.assertIn('target="_blank"', attrs, label)
+            self.assertIn('rel="noopener noreferrer"', attrs, label)
+        self.assertTrue(links[0][0].startswith('https://x.com/intent/post?'))
+        # On X a share credits the developer and mentions the sponsor
+        self.assertIn('&amp;via=dougburks', links[0][0])
+        self.assertIn('%40SecurityOnion', links[0][0])
+        # Bluesky has no via - both are mentioned in the text
+        self.assertIn('%40securityonion.bsky.social', links[2][0])
+        self.assertIn('via%20%40dougburks.bsky.social', links[2][0])
+        self.assertTrue(links[1][0].startswith('https://www.linkedin.com/sharing/share-offsite/?'))
+        self.assertTrue(links[2][0].startswith('https://bsky.app/intent/compose?'))
+        self.assertLess(about_block.index('by defenders, for defenders'), about_block.index('id="aboutShare"'))
+        self.assertLess(about_block.index('id="aboutShare"'), about_block.index('href="https://so-crates.org"'))
 
     def test_about_modal_has_sponsor_line(self):
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
@@ -6101,10 +6128,12 @@ class TestFiltering(unittest.TestCase):
         """REGRESSION: these were originally two separate lines; measured
         against the modal's actual width there was enough room to combine
         them into one, hyphen-separated line - must not regress back to
-        two separate <div> blocks."""
+        two separate <div> blocks. (5.1.0 tried the sponsor on a line of
+        its own, under the share request and then under the links, and
+        kept it here.)"""
         about_block = HTML_CONTENT.split('id="aboutModal"')[1].split('id="themesModal"')[0]
         made_with_block = about_block.split('Made with')[1].split('</div>')[0]
-        self.assertIn('by defenders for defenders - Sponsored by', made_with_block)
+        self.assertIn('by defenders, for defenders - Sponsored by', made_with_block)
         self.assertIn('href="https://securityonion.com"', made_with_block)
         self.assertIn('white-space: nowrap', about_block.split('Made with')[0].rsplit('<div', 1)[-1])
 
@@ -8999,6 +9028,133 @@ class TestAggregationPivotMenu(unittest.TestCase):
         self.assertFalse(result['menuOpen'], 'clicking the (empty) bucket must not open a pivot menu')
 
 
+class TestRightClickPivotMenu(unittest.TestCase):
+    """A right-click opens the pivot menu wherever a left-click does - a
+    table row's value, a detail-panel value, an aggregation row - and
+    holds back the browser's own menu only then. Anywhere else, on a
+    link, with text selected or with Shift held, the browser's menu
+    shows, and a right-click never expands or collapses a row."""
+
+    SETUP = TestPivotMenu._row_html(None) + '''
+        function rightClick(el, opts) {
+            opts = opts || {};
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 }));
+            var ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2,
+                                                     shiftKey: !!opts.shift, clientX: 5, clientY: 5 });
+            el.dispatchEvent(ev);
+            var out = { menuOpen: !!document.querySelector('.pivot-menu'),
+                        browserMenuHeld: ev.defaultPrevented,
+                        rowExpanded: tr.classList.contains('expanded-row') };
+            var label = document.querySelector('.pivot-menu-label');
+            out.label = label ? label.textContent : null;
+            closePivotMenu();
+            return out;
+        }
+    '''
+
+    def test_row_value_opens_menu_instead_of_browser_menu(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            window.__jsdom_result = rightClick(tr.children[2]); // Source IP
+        ''')
+        self.assertTrue(result['menuOpen'])
+        self.assertTrue(result['browserMenuHeld'])
+        self.assertIn('1.1.1.1', result['label'])
+        self.assertFalse(result['rowExpanded'])
+
+    def test_cell_without_a_value_leaves_row_and_browser_menu_alone(self):
+        """The Time column has no pivot value: a left-click there expands
+        the row, a right-click must not."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            window.__jsdom_result = rightClick(tr.querySelector('td.timestamp') || tr.children[0]);
+        ''')
+        self.assertFalse(result['menuOpen'])
+        self.assertFalse(result['browserMenuHeld'])
+        self.assertFalse(result['rowExpanded'], 'a right-click must never expand a row')
+
+    def test_shift_and_selection_keep_the_browser_menu(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            var cell = tr.children[2];
+            var shifted = rightClick(cell, { shift: true });
+            var r = document.createRange();
+            r.selectNodeContents(cell);
+            getSelection().removeAllRanges(); getSelection().addRange(r);
+            var selected = rightClick(cell);
+            getSelection().removeAllRanges();
+            var plain = rightClick(cell);
+            window.__jsdom_result = { shifted: shifted, selected: selected, plain: plain };
+        ''')
+        for case in ('shifted', 'selected'):
+            self.assertFalse(result[case]['menuOpen'], case)
+            self.assertFalse(result[case]['browserMenuHeld'], case)
+        self.assertTrue(result['plain']['menuOpen'], 'a selection only counts for the right-click it was there for')
+
+    def test_link_in_a_row_keeps_the_browser_menu(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            tr.children[2].innerHTML = '<a href="https://attack.mitre.org/techniques/T1059/" data-action="stop-propagation">T1059</a>';
+            window.__jsdom_result = rightClick(tr.children[2].querySelector('a'));
+        ''')
+        self.assertFalse(result['menuOpen'])
+        self.assertFalse(result['browserMenuHeld'])
+
+    def test_right_click_elsewhere_closes_an_open_menu(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            tr.children[2].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            var before = !!document.querySelector('.pivot-menu');
+            document.body.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }));
+            window.__jsdom_result = { before: before, after: !!document.querySelector('.pivot-menu') };
+        ''')
+        self.assertTrue(result['before'])
+        self.assertFalse(result['after'])
+
+    def test_detail_value_and_aggregation_row(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            var t2 = document.createElement('table');
+            t2.innerHTML = '<tbody><tr data-event-type="http"><td></td></tr>'
+                + '<tr class="detail-row visible"><td>' + htmlRowText('URL', '/api/v2/telemetry') + '</td></tr></tbody>';
+            document.body.appendChild(t2);
+            var detail = rightClick(t2.querySelector('.detail-value-pivot'));
+            var div = document.createElement('div');
+            div.innerHTML = _renderAggTablesHtml({ Protocol: { TCP: 5 } }, ['Protocol'], 'section-dns');
+            document.body.appendChild(div);
+            var agg = rightClick(div.querySelector('.agg-row'));
+            window.__jsdom_result = { detail: detail, agg: agg };
+        ''')
+        self.assertTrue(result['detail']['browserMenuHeld'])
+        self.assertEqual(result['detail']['label'], 'URL: /api/v2/telemetry')
+        self.assertTrue(result['agg']['browserMenuHeld'])
+        self.assertIn('TCP', result['agg']['label'])
+
+    def test_macos_word_selection_doesnt_shrink_a_detail_value_menu(self):
+        """macOS selects the word under the pointer between mousedown and
+        contextmenu: the menu is still for the whole value, with
+        Include/Exclude/Only, not '(selection)' for that one word."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.SETUP + '''
+            var t2 = document.createElement('table');
+            t2.innerHTML = '<tbody><tr data-event-type="http"><td></td></tr>'
+                + '<tr class="detail-row visible"><td>' + htmlRowText('URL', '/api/v2/telemetry') + '</td></tr></tbody>';
+            document.body.appendChild(t2);
+            var el = t2.querySelector('.detail-value-pivot');
+            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 }));
+            var text = el.firstChild.nodeType === 3 ? el.firstChild : el.querySelector('*').firstChild;
+            var r = document.createRange();
+            r.setStart(text, 1); r.setEnd(text, 4);  // 'api', as macOS would
+            getSelection().removeAllRanges(); getSelection().addRange(r);
+            el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 }));
+            var label = document.querySelector('.pivot-menu-label');
+            window.__jsdom_result = { label: label ? label.textContent : null,
+                                      include: !!document.querySelector('[data-pivot-action="include"]') };
+        ''')
+        self.assertEqual(result['label'], 'URL: /api/v2/telemetry')
+        self.assertTrue(result['include'])
+
+
 class TestAggregationPagination(unittest.TestCase):
     """Aggregation Tables' Prev/Next pagination (AGG_PAGE_SIZE, fixed at
     CONFIG.AGGREGATION_TOP_N) - matches Security Onion's own aggregation-
@@ -10556,7 +10712,7 @@ class TestRenameAnalysis(unittest.TestCase):
         """REGRESSION: after renaming an analysis, reopening it from the
         Previous Analyses list (loadAnalysis()) reverted the header back to
         the original filename. /api/load-analysis's file_name already comes
-        from _resolve_display_name() (name.txt first - the renamed value),
+        from storage.resolve_display_name() (name.txt first - the renamed value),
         but loadAnalysis() then unconditionally overwrote currentFileName
         with analysisStatus.meta.extracted (the ORIGINAL upload-time
         filename, never touched by a rename) whenever that field was
@@ -21904,6 +22060,7 @@ class TestTsharkUI(unittest.TestCase):
                 one: shown({status: 'ready', merged: true}, ['nbns']),
                 damaged: shown({status: 'ready', merged: true, seconds: 9, damaged: true}, ['nbns']),
                 none: shown({status: 'ready', merged: true, seconds: 3}),
+                quick: shown({status: 'ready', merged: true, seconds: 0}),
                 merging: shown({status: 'ready', merged: false}),
                 running: shown({status: 'running', elapsed: 5}),
                 queued: shown({status: 'queued', position: 1}),
@@ -21918,6 +22075,8 @@ class TestTsharkUI(unittest.TestCase):
         self.assertEqual(result['damaged']['text'],
                          'tshark parsed 1 additional protocol in 9s \u00b7 the capture is cut off, so its last packet wasn\u2019t read')
         self.assertEqual((result['none']['text'], result['none']['dot']), ('tshark found no additional protocols in 3s', False))
+        self.assertEqual(result['quick']['text'], 'tshark found no additional protocols in under a second',
+                         "the server rounds to whole seconds - a quick run isn't 'in 0s'")
         self.assertEqual(result['merging']['text'], 'tshark is parsing additional protocols\u2026')
         self.assertEqual((result['running']['text'], result['running']['dot']), ('tshark is parsing additional protocols\u2026 5s', False))
         self.assertIn('waiting for another capture', result['queued']['text'])
@@ -22108,9 +22267,9 @@ class TestTsharkUI(unittest.TestCase):
     def test_cards_come_in_sections_under_headings_of_their_own(self):
         """A PCAP analysis's cards come in three sections - triage, the
         protocol records, the connections (Flows, then tshark's connection
-        cards) - each under a heading on a row of its own. (REGRESSION: the
-        connection cards' alphabetical run (BFD...) after the record
-        types' (...TLS) read as the cards sorted wrong.)"""
+        cards) - each a panel with its heading on top, sized by its cards.
+        (REGRESSION: the connection cards' alphabetical run (BFD...) after
+        the record types' (...TLS) read as the cards sorted wrong.)"""
         from tests.jsdom_helper import js_statements
         result = js_statements("""
             await new Promise(function(r) { setTimeout(r, 100); });
@@ -22133,9 +22292,12 @@ class TestTsharkUI(unittest.TestCase):
             await new Promise(function(r) { setTimeout(r, 200); });
             buildStats();
             var grid = document.getElementById('statsGrid');
-            var order = [...grid.children].map(el => el.classList.contains('stats-grid-heading') ? 'HEADING ' + el.querySelector('.stats-grid-heading-label').textContent
+            var order = [...grid.querySelectorAll('.stats-grid-heading, .stat-card')].map(el => el.classList.contains('stats-grid-heading') ? 'HEADING ' + el.querySelector('.stats-grid-heading-label').textContent
                 : el.querySelector('.stat-label').textContent);
-            // a 3-column grid: each section starts a row of its own
+            var panels = [...grid.children].map(p => [p.className, p.style.getPropertyValue('--cards'),
+                p.firstElementChild.classList.contains('stats-grid-heading'), p.querySelectorAll('.stats-group-cards > .stat-card').length]);
+            var groupedClass = grid.classList.contains('stats-grid-grouped');
+            // 3-column panels: each counts its columns from its first card
             window.statsGridColumnCount = function() { return 3; };
             // (the active card - a test can't set verticalNavSelection)
             var column = function(label) {
@@ -22144,18 +22306,21 @@ class TestTsharkUI(unittest.TestCase):
             };
             var columns = {bfd: column('BFD'), flows: column('Flows'), dns: column('DNS Queries')};
             var all = grid.querySelector('[data-section="section-all"]');
-            var notes = [...grid.querySelectorAll('.stats-grid-heading')].map(h => h.textContent);
+            var notes = [...grid.querySelectorAll('.stats-grid-heading')].map(h => h.title);
             var probedTitle = grid.querySelector('[data-section="section-conn__probed"]').title;
             buildStats({tls: 2, alert: 1, http: 5, flow: 40});      // a filter that leaves no connection rows
-            window.__jsdom_result = {order: order, columns: columns, notes: notes, probedTitle: probedTitle,
+            window.__jsdom_result = {order: order, panels: panels, groupedClass: groupedClass, columns: columns, notes: notes, probedTitle: probedTitle,
                                      allTitle: all.title, allTitleWithoutConnections: grid.querySelector('[data-section="section-all"]').title};
         """)
         self.assertEqual(result['order'], [
             'HEADING Triage', 'Network Alerts', 'Anomalies', 'Findings', 'DNS Heuristics', 'Acknowledged Alerts', 'All Events',
             'HEADING Protocol records', 'DNS Queries', 'HTTP', 'TLS',
             'HEADING Connections', 'Flows', 'BFD', 'XDMCP', 'Probed Only'])
+        self.assertTrue(result['groupedClass'])
+        self.assertEqual(result['panels'], [['stats-group', '6', True, 6], ['stats-group', '3', True, 3], ['stats-group', '4', True, 4]],
+                         'a panel per section, its heading first, sized by its cards')
         self.assertEqual(result['columns']['flows'], ['Network Alerts', 'DNS Heuristics', 'DNS Queries', 'Flows', 'Probed Only'],
-                         "each section's columns count from its own first card")
+                         "each panel's columns count from its own first card, and Down/Up walks the column through every section")
         self.assertEqual(result['columns']['bfd'], ['Anomalies', 'Acknowledged Alerts', 'HTTP', 'BFD'])
         self.assertIn('worth a look', result['notes'][0])
         self.assertIn("Suricata's flows", result['notes'][2])

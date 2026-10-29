@@ -42,6 +42,8 @@ All analyzed files are stored in `~/socrates-data/`. It holds a set of shared ru
     fast.log, stats.log, suricata.log  # Suricata's own log output (PCAP only)
 ```
 
+This lists the main files, not every one. [Data Storage](architecture/data-storage.md) has the full layout, including the files an analysis keeps while it runs and what tshark and stream views put in `/tmp`.
+
 ## Configuration Constants
 
 | Constant | Default | Description |

@@ -1,5 +1,74 @@
 # Release Notes
 
+## 5.1.0
+
+### Improvements
+
+- **Right-click opens the pivot menu**, the same menu a click opens, on
+  a value in a table row, an expanded row's detail panel, or an
+  aggregation table. Anywhere else - and on a link, with text selected,
+  or with Shift held - the browser's own menu shows, and a right-click
+  never expands or collapses a row. Suggested by crystalstorm466
+- **Findings flag a TLS certificate from a compromised CA** (high
+  severity): one issued by any of the eight eMudhra intermediates whose
+  private keys turned out to be recoverable (revoked in October 2026).
+  They never issued a real certificate, so any one seen is a forgery made
+  with a recovered key. ET Open has no rule for it. It reads Suricata's
+  TLS records, so it covers older analyses too, and TLS 1.2 and earlier
+- **The stat cards take less room.** Triage, Protocol records and
+  Connections are each a panel now, sized to its cards, and the panels
+  share rows - a section of three cards sits beside the next instead of
+  leaving the rest of its row empty, and a heading no longer takes a row
+  of its own (hover it for what its section holds). The cards are
+  smaller, and all one size, in every section
+- **The About modal** asks you to share SO-CRATES if you like it, with
+  links that open a post to X, LinkedIn or Bluesky in a new tab (nothing
+  loads from those sites until you click)
+
+### Fixes
+
+- The Findings rule for a TLS certificate expired or not yet valid
+  compared the certificate's dates (UTC) with the connection's time in
+  the server's own zone, so a server not on UTC - one run outside the
+  container - misjudged a certificate within a few hours of its start or
+  end. The connection's time is now taken in UTC
+- A tshark run that was cancelled (reanalyzing or deleting an analysis
+  while it ran) or stopped for using too much memory left its copies of
+  the capture's frames in `/tmp` - often RAM. Everything a run puts in
+  `/tmp` is now in one folder the server removes however the run ends,
+  and at startup it removes what a server that died left there
+- Where AppArmor confines tshark (5.0.1), only the first tshark run after
+  the server starts tries the capture in place; later runs read the copy
+  in `/tmp` straight away, so the kernel's log gets one "DENIED" line per
+  server start rather than one per capture
+- A failed YARA scan, or tshark's rows failing to join, showed the whole
+  analysis as "Analysis failed" while its results were still on the way
+  (until it flipped to ready minutes later). Both are a warning on the
+  analysis now, as other partial failures already were. A log Zircolite
+  couldn't read, or one analyzed with no Sigma rules installed, now says
+  so instead of opening empty without a word
+- Two quick clicks on **Reanalyze** for a log, email or file could start
+  two analyses in the same folder; the second click now gets "already in
+  progress", as a PCAP's always did
+- Going back to the main screen while tshark was still running could
+  bring the analysis's "Loading events..." back over it when tshark
+  finished; renaming an analysis and then clicking the logo could put
+  its name back in the header; and **Acknowledged Alerts** could show
+  the results of an earlier search when a slower reply landed last
+- A stream's **ASCII Transcript** or **Send to CyberChef** on a capture
+  tcpdump can't read said there was nothing there; it says the capture
+  couldn't be read. **Hexdump** showed one empty packet past its limit
+- **Reanalyze** on a PCAP whose tshark rows were joining it at that moment
+  could lose Suricata's results, leaving only tshark's; it now waits for
+  them to finish joining
+- An analysis still being analyzed can't be deleted any more (its run
+  went on writing into the folder, and could bring it back); **Delete
+  All** leaves it and says how many it left
+- **Load from URL** also refuses an IPv6 address that carries a private
+  IPv4 one (6to4, NAT64), on Python versions that don't already block
+  those ranges
+- tshark's note says "in under a second" rather than "in 0s"
+
 ## 5.0.1
 
 ### Fixes

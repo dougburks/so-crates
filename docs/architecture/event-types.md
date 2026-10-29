@@ -45,6 +45,8 @@
 | `protocol_decode` | Suricata's built-in protocol-command-decode alerts, reclassified out of `alert` - labeled "Decoder Alerts" in the UI (synthetic - see note below) | `alert.signature`, `alert.severity`, `alert.category`, `alert.rule` |
 | `stats` | Suricata internal stats | (excluded from display) |
 
+For a PCAP, tshark adds records for protocols Suricata doesn't parse or logs nothing about (LLMNR, NBNS, S7comm, BACnet and more), connection rows (`conn_<protocol>`), TLS failures (`tls_failure`) and tunnels (`tunnel`). They aren't listed here, since the list grows with each release - see [Protocols from tshark](../usage/exploring-results.md#protocols-from-tshark), and `shark_protocols.PROTOCOLS` for the current set.
+
 **Note on Suricata 8 / DNS logging:** this app now runs on Suricata 8.0.7
 (upgraded from 7.0.10 via Debian's `trixie-backports`). `enip`/`ntp` eve
 logging (previously unavailable - Suricata 7.0.10 had no output module for
