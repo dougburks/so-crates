@@ -17,7 +17,8 @@ import urllib.error
 import urllib.request
 
 import config
-from db import import_log_events
+from db import import_log_events, init_empty_db, insert_sigma_alerts
+from storage import add_analysis_warning
 from validators import is_host_reachable, is_file_stale, gunzip_atomically
 
 ZIRCOLITE_RULES_URLS = {
@@ -577,3 +578,38 @@ def run_sigma_pipeline(dir_path, log_path, data_dir=None):
     if success and os.path.exists(temp_db):
         return True, temp_db
     return success, None
+
+
+def analyze_log_file(dir_path, log_path, data_dir):
+    """A log upload's analysis: run Zircolite's Sigma rules over it and
+    import its events and Sigma alerts into the analysis's events.db.
+    Returns an error for the analysis's .error (Zircolite not installed,
+    or the run raising), or None. Rules missing, or Zircolite unable to
+    read the log, leave an empty events.db and say why in a warning."""
+    db_file = os.path.join(dir_path, 'events.db')
+    if not is_zircolite_available():
+        init_empty_db(db_file)
+        return ('Sigma analysis unavailable — Zircolite is not installed. '
+                f'Install with: pip3 install zircolite=={config.ZIRCOLITE_VERSION}')
+    try:
+        success, zircolite_db = run_sigma_pipeline(dir_path, log_path, data_dir=data_dir)
+        if success:
+            # Import all log events from Zircolite's unified DB
+            if zircolite_db and os.path.exists(zircolite_db):
+                import_zircolite_logs(zircolite_db, db_file)
+                try:
+                    os.unlink(zircolite_db)
+                except OSError:
+                    pass
+            # Import sigma alerts
+            alerts = parse_zircolite_results(os.path.join(dir_path, 'sigma_matches.json'))
+            insert_sigma_alerts(db_file, alerts)
+        else:
+            # Rules missing or Zircolite failed: an empty DB so the UI shows
+            # ready, saying why it's empty
+            init_empty_db(db_file)
+            add_analysis_warning(dir_path, "The Sigma scan didn't run - no Sigma rules are installed, "
+                                           "or Zircolite couldn't read this log - so no log events or Sigma Alerts were imported")
+    except Exception as e:
+        return f'Sigma analysis failed: {e}'
+    return None

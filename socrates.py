@@ -16,14 +16,13 @@ import urllib.request
 import urllib.error
 import re
 import tempfile
-import time
 import shutil
 import sys
 import threading
 
 from db import (
     get_event_count_sqlite, get_event_types_sqlite, query_events_sqlite_json,
-    create_file_analysis_db, create_email_analysis_db, insert_sigma_alerts, init_empty_db,
+    create_email_analysis_db,
     query_sigma_alerts_sqlite, get_sigma_stats_sqlite,
     get_sigma_alert_count_sqlite, get_event_date_range_sqlite,
     get_sankey_data_sqlite, get_aggregation_data_sqlite, get_aggregation_totals_sqlite,
@@ -43,6 +42,7 @@ from storage import (
     upload_tmp_dir, cleanup_upload_tmp_dir, cleanup_stale_tmp, remove_imported_eve_files, resolve_upload_size_limit, extract_zip_contents,
     hash_file, hash_file_with_prefix, is_pcap_path, write_meta, read_meta, find_pcap_file,
     add_analysis_warning, read_analysis_warnings,
+    non_artifact_files, resolve_display_name, remove_artifacts, restore_meta, finished_analysis_dirs,
 )
 from analysis_cache import (
     SANKEY_CACHE, AGGREGATION_CACHE, AGGREGATION_TOTALS_CACHE, ALL_CACHES, CACHE_LOCK,
@@ -50,19 +50,21 @@ from analysis_cache import (
 )
 from suricata_analyzer import (
     check_executables, setup_suricata_config, spawn_suricata,
-    _set_error, _set_phase, _clear_phase, get_suricata_rules_info,
+    _set_error, _set_phase, _clear_phase, read_error, read_phase, analysis_running,
+    get_suricata_rules_info,
     get_suricata_enabled_sources, get_suricata_show_protocol_decode_alerts,
     SURICATA_RULE_SOURCES, BAKED_IN_SURICATA_SOURCES,
     DEFAULT_SURICATA_SOURCES, find_extracted_file,
 )
-from stream_payload import DIRECTIONS as STREAM_DIRECTIONS, run_follow_raw
+from stream_payload import DIRECTIONS as STREAM_DIRECTIONS, run_follow_raw, transcript_lines, parse_hexdump
 from suricata_sid_ranges import (
     SURICATA_SID_RANGES, SURICATA_BUILTIN_SID_RANGES, SURICATA_BUILTIN_LABEL,
 )
-from yara_analyzer import check_yara_executable, setup_yara_rules, scan_single_file, get_yara_rules_info
+from yara_analyzer import (
+    check_yara_executable, setup_yara_rules, scan_single_file, get_yara_rules_info, analyze_standalone_file,
+)
 from sigma_analyzer import (
-    is_zircolite_available, setup_sigma_rules, run_sigma_pipeline,
-    parse_zircolite_results, import_zircolite_logs, get_sigma_rules_info,
+    setup_sigma_rules, get_sigma_rules_info, analyze_log_file,
 )
 from ohmydebn_colors import (
     derive_theme_colors, derive_theme_colors_from_alacritty, derive_theme_colors_from_named_palette,
@@ -181,18 +183,6 @@ def _run_capped(cmd, max_bytes, timeout, text=False):
 # A flow carved for a transcript or payload, in /tmp (_carved_flow) - and
 # what a startup sweep removes when a server that died left one there
 FLOW_CARVE_PREFIX = 'socrates-flow-'
-
-
-def _analysis_running(dir_path):
-    """Whether an analysis is being analyzed now, so it mustn't be deleted:
-    Suricata, Zircolite or the email analyzer would go on writing into its
-    folder - or recreate it, bringing the deleted analysis back. A .phase
-    older than the status check's stale threshold is from a server that
-    died mid-run, and doesn't count."""
-    try:
-        return time.time() - os.path.getmtime(os.path.join(dir_path, '.phase')) <= config.STALE_THRESHOLD_SECONDS
-    except OSError:
-        return False
 
 
 class _CarveFailed(Exception):
@@ -561,67 +551,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             return None
         return max(0, offset), max(1, min(limit, config.MAX_QUERY_LIMIT))
-
-    def _non_artifact_files(self, dir_path, pcap_file=None):
-        """List the real user-uploaded file(s) in an analysis dir, excluding
-        PCAPs/ZIPs, dotfiles, and known pipeline-artifact filenames.
-
-        Shared by _resolve_display_name() (display-name fallback) and
-        handle_post_reanalyze() (finding the file to re-run analysis on) -
-        these two used to have separately hand-rolled, drifted versions of
-        this same listing.
-
-        Exact artifact filenames, not a blanket extension exclusion - a
-        user-uploaded log file legitimately ends in .log, and a standalone
-        (non-log) upload can legitimately end in .txt/.json/.db too, and
-        must still be found here. zircolite.log specifically used to slip
-        through an earlier, looser check and could transiently win a
-        directory listing race against the real uploaded file's name.
-
-        pcap_file, if the caller already knows it (e.g. from
-        find_pcap_file(), which also matches extension-less pcaps via
-        magic bytes - not just this function's own PCAP_EXTENSIONS check),
-        is excluded by exact name too.
-        """
-        if not os.path.exists(dir_path):
-            return []
-        exact_artifacts = set(PCAP_ANALYSIS_ARTIFACTS) | set(FILE_ANALYSIS_ARTIFACTS) | {'name.txt', 'notes.txt'}
-        # Regular files only: filestore/ (Suricata's extracted files, or an
-        # email's attachments) is a directory, and could otherwise win the
-        # listing and be "reanalyzed".
-        return [f for f in os.listdir(dir_path)
-                if f != pcap_file
-                and not f.lower().endswith(PCAP_EXTENSIONS + ('.zip',))
-                and not f.startswith('.')
-                and f not in exact_artifacts
-                and os.path.isfile(os.path.join(dir_path, f))]
-
-    def _resolve_display_name(self, dir_path, md5):
-        """Resolve the human-readable display name for an analysis directory.
-
-        Priority: name.txt contents, first PCAP filename, first non-artifact
-        filename, then the MD5 itself.
-        """
-        name_path = os.path.join(dir_path, 'name.txt')
-        if os.path.exists(name_path) and is_safe_path(dir_path, name_path):
-            try:
-                with open(name_path, 'r') as f:
-                    display_name = f.read().strip()
-                if display_name:
-                    return display_name
-            except OSError:
-                pass
-
-        if os.path.exists(dir_path):
-            pcap_files = [f for f in os.listdir(dir_path) if f.lower().endswith(PCAP_EXTENSIONS)]
-            if pcap_files:
-                return pcap_files[0]
-
-        non_pcap_files = self._non_artifact_files(dir_path)
-        if non_pcap_files:
-            return non_pcap_files[0]
-
-        return md5
 
     def _validate_stream_params(self, params):
         """Returns (result, error_message, status_code). On success,
@@ -1143,10 +1072,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             with _carved_flow(pcap, src, sport, dst, dport,
                               config.MAX_TRANSCRIPT_CARVE_SIZE) as (flow_pcap, truncated):
                 proto = 'tcp'
-                lines = self._extract_payload_lines(flow_pcap, src, sport, dst, dport, 'tcp')
+                lines = transcript_lines(_run_capped, flow_pcap, src, sport, dst, dport, 'tcp',
+                                         config.MAX_STREAM_TEXT_OUTPUT, config.STREAM_TIMEOUT_SECONDS)
                 if not lines:
                     proto = 'udp'
-                    lines = self._extract_payload_lines(flow_pcap, src, sport, dst, dport, 'udp')
+                    lines = transcript_lines(_run_capped, flow_pcap, src, sport, dst, dport, 'udp',
+                                             config.MAX_STREAM_TEXT_OUTPUT, config.STREAM_TIMEOUT_SECONDS)
 
             if len(lines) > config.MAX_TRANSCRIPT_LINES:
                 lines = lines[:config.MAX_TRANSCRIPT_LINES]
@@ -1174,53 +1105,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             self._send_error(500, 'Internal server error')
 
-    def _extract_payload_lines(self, pcap, src, sport, dst, dport, proto):
-        # tshark's ip.* fields don't match IPv6 at all ("not a valid
-        # hostname or IPv4 address", silently giving an empty transcript) -
-        # IPv6 flows need the ipv6.* fields instead.
-        family = 'ipv6' if ipaddress.ip_address(src).version == 6 else 'ip'
-        display_filter = (f'{family}.addr == {src} && {family}.addr == {dst} && '
-                          f'{proto}.port == {sport} && {proto}.port == {dport}')
-        if proto == 'tcp':
-            # The transcript joins a TCP stream's segments into one byte
-            # stream, so a retransmitted segment would be spliced into the
-            # middle of a line rather than show as a harmless duplicate.
-            display_filter += ' && !tcp.analysis.retransmission'
-        # Capped read: the response is trimmed to MAX_TRANSCRIPT_* far below
-        # this, so anything past the cap could never be shown anyway.
-        _, stdout, _ = _run_capped(
-            ['tshark', '-r', pcap, '-Y', display_filter,
-             '-T', 'fields', '-e', f'{family}.src', '-e', f'{proto}.payload'],
-            max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
-            timeout=config.STREAM_TIMEOUT_SECONDS, text=True
-        )
-        src_addr = ipaddress.ip_address(src)
-        lines = []
-        for line in stdout.strip().split('\n'):
-            if not line.strip():
-                continue
-            parts = line.split('\t')
-            if len(parts) < 2:
-                continue
-            packet_src = parts[0].strip()
-            payload_hex = parts[1].replace(':', '') if len(parts) > 1 else ''
-            if payload_hex:
-                try:
-                    payload_bytes = bytes.fromhex(payload_hex)
-                    payload_str = payload_bytes.decode('utf-8', errors='replace')
-                    cleaned = ''.join(c if c in '\n\r\t' or 32 <= ord(c) < 127 else '.' for c in payload_str)
-                    # Whitespace-only payloads are kept: an interactive
-                    # session sends Enter or a space as its own segment, and
-                    # dropping it ran the neighboring commands together once
-                    # the transcript joins segments.
-                    # Compared as addresses, not strings: Suricata logs IPv6
-                    # fully expanded, tshark prints it compressed.
-                    direction = 'src' if ipaddress.ip_address(packet_src) == src_addr else 'dst'
-                    lines.append({'text': cleaned, 'direction': direction})
-                except ValueError:
-                    pass
-        return lines
-
     def handle_get_hexdump_stream(self, params):
         result, error, status_code = self._validate_stream_params(params)
         if error:
@@ -1240,37 +1124,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 max_bytes=config.MAX_STREAM_TEXT_OUTPUT,
                 timeout=config.STREAM_TIMEOUT_SECONDS, text=True
             )
-            packets = []
-            current_packet = None
-            total_chars = 0
-            truncated = raw_truncated
-
-            for line in stdout.split('\n'):
-                if not line.strip():
-                    if current_packet:
-                        packets.append(current_packet)
-                        current_packet = None
-                    continue
-
-                if line.startswith('\t0x'):
-                    if current_packet:
-                        current_packet['lines'].append(line.strip())
-                        total_chars += len(line)
-                else:
-                    if current_packet:
-                        packets.append(current_packet)
-                    current_packet = {'header': line.strip(), 'lines': []}
-
-                if len(packets) >= config.MAX_HEXDUMP_PACKETS or total_chars > MAX_TRANSCRIPT_SIZE:
-                    truncated = True
-                    break
-
-            # (stopped at the packet limit, current_packet is the next
-            # packet's header alone - one more than the limit, and empty)
-            if current_packet and len(packets) < config.MAX_HEXDUMP_PACKETS:
-                packets.append(current_packet)
-
-            self._send_json({'packets': packets, 'truncated': truncated})
+            packets, truncated = parse_hexdump(stdout, config.MAX_HEXDUMP_PACKETS, MAX_TRANSCRIPT_SIZE)
+            self._send_json({'packets': packets, 'truncated': truncated or raw_truncated})
         except subprocess.TimeoutExpired:
             self._send_error(500, 'Hexdump extraction timed out')
         except Exception:
@@ -1362,22 +1217,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def handle_get_analyses(self, params):
         analyses = []
         if os.path.exists(DATA_DIR):
-            candidates = []
-            for md5_dir in os.listdir(DATA_DIR):
-                if not MD5_RE.match(md5_dir):
-                    continue
-                dir_path = os.path.join(DATA_DIR, md5_dir)
-                if not os.path.isdir(dir_path):
-                    continue
-                eve_path = os.path.join(dir_path, 'eve.json')
-                db_path = os.path.join(dir_path, 'events.db')
-                if os.path.exists(eve_path):
-                    eve_size = os.path.getsize(eve_path)
-                    if eve_size > MAX_EVE_SIZE:
-                        continue
-
-                if os.path.exists(eve_path) or os.path.exists(db_path):
-                    candidates.append((md5_dir, dir_path, db_path if os.path.exists(db_path) else None))
+            candidates = finished_analysis_dirs(DATA_DIR, MAX_EVE_SIZE)
 
             # Each candidate's date-range query opens its own SQLite
             # connection against an independent events.db - run them
@@ -1395,7 +1235,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             for (md5_dir, dir_path, _), date_range in zip(candidates, date_ranges):
                 analyses.append({
                     'md5': md5_dir,
-                    'name': self._resolve_display_name(dir_path, md5_dir),
+                    'name': resolve_display_name(dir_path, md5_dir),
                     'date_range': date_range,
                     'has_notes': os.path.isfile(os.path.join(dir_path, 'notes.txt')),
                 })
@@ -1429,7 +1269,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         notes = f.read()
                 except OSError:
                     notes = ''
-            self._send_json({'success': True, 'md5': md5, 'file_name': self._resolve_display_name(dir_path, md5), 'notes': notes})
+            self._send_json({'success': True, 'md5': md5, 'file_name': resolve_display_name(dir_path, md5), 'notes': notes})
         else:
             self._send_error(404, 'Analysis not found')
 
@@ -1445,7 +1285,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         # Under _REANALYZE_LOCK, so a reanalyze can't start in between
         with _REANALYZE_LOCK:
-            if _analysis_running(dir_path):
+            if analysis_running(dir_path):
                 self._send_error(409, 'Analysis in progress - delete it once it has finished')
                 return
             shark_analyzer.cancel(dir_path)
@@ -1753,8 +1593,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     errors.append(md5_dir)
                     continue
                 with _REANALYZE_LOCK:
-                    # (left alone, like a single delete - see _analysis_running)
-                    if _analysis_running(dir_path):
+                    # (left alone, like a single delete - see analysis_running)
+                    if analysis_running(dir_path):
                         skipped += 1
                         continue
                     try:
@@ -2291,30 +2131,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             _set_phase(dir_path, 'files')
 
             try:
-                # network_allowed=False: analysis must never silently reach
-                # out to refresh rules on its own - that's now an explicit,
-                # opt-in action (Rules modal, or the checkForStaleRules()
-                # notification). Uses whatever's already cached/baked-in,
-                # however old.
-                rules_file = setup_yara_rules(DATA_DIR, network_allowed=False)
-                db_file = os.path.join(dir_path, 'events.db')
-                name_path = os.path.join(dir_path, 'name.txt')
-
-                if rules_file and check_yara_executable():
-                    try:
-                        failures = []
-                        matches, sha256, md5, sha1, metadata = scan_single_file(file_path, rules_file, failures)
-                        create_file_analysis_db(db_file, file_path, matches, md5, sha1, sha256, metadata=metadata)
-                        for reason in failures:
-                            add_analysis_warning(dir_path, f'The YARA scan failed - File Alerts may be missing: {reason}')
-                    except Exception as e:
-                        # (a warning: the file's analysis still completes)
-                        add_analysis_warning(dir_path, f'The YARA scan failed - File Alerts may be missing: {e}')
-                        create_file_analysis_db(db_file, file_path, [], '', '', '')
-                else:
-                    create_file_analysis_db(db_file, file_path, [], '', '', '')
-
-                with open(name_path, 'w') as f:
+                analyze_standalone_file(dir_path, file_path, DATA_DIR)
+                with open(os.path.join(dir_path, 'name.txt'), 'w') as f:
                     f.write(safe_filename)
             except Exception as e:
                 _set_error(dir_path, f'Analysis failed: {e}')
@@ -2348,7 +2166,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             _set_phase(dir_path, 'email')
             try:
                 db_file = os.path.join(dir_path, 'events.db')
-                # network_allowed=False - see _analyze_standalone_file.
+                # network_allowed=False - see yara_analyzer.analyze_standalone_file.
                 rules_file = setup_yara_rules(DATA_DIR, network_allowed=False)
                 failures = []
                 scan = functools.partial(scan_single_file, failures=failures) \
@@ -2377,37 +2195,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             _set_phase(dir_path, 'logs')
 
             try:
-                db_file = os.path.join(dir_path, 'events.db')
-                name_path = os.path.join(dir_path, 'name.txt')
-
-                if not is_zircolite_available():
-                    _set_error(dir_path, f'Sigma analysis unavailable — Zircolite is not installed. Install with: pip3 install zircolite=={config.ZIRCOLITE_VERSION}')
-                    init_empty_db(db_file)
-                else:
-                    try:
-                        success, zircolite_db = run_sigma_pipeline(dir_path, file_path, data_dir=DATA_DIR)
-                        if success:
-                            # Import all log events from Zircolite's unified DB
-                            if zircolite_db and os.path.exists(zircolite_db):
-                                import_zircolite_logs(zircolite_db, db_file)
-                                try:
-                                    os.unlink(zircolite_db)
-                                except OSError:
-                                    pass
-                            # Import sigma alerts
-                            sigma_output = os.path.join(dir_path, 'sigma_matches.json')
-                            alerts = parse_zircolite_results(sigma_output)
-                            insert_sigma_alerts(db_file, alerts)
-                        else:
-                            # Rules missing or Zircolite failed: create empty DB so UI shows ready,
-                            # saying why it's empty
-                            init_empty_db(db_file)
-                            add_analysis_warning(dir_path, "The Sigma scan didn't run - no Sigma rules are installed, "
-                                                           "or Zircolite couldn't read this log - so no log events or Sigma Alerts were imported")
-                    except Exception as e:
-                        _set_error(dir_path, f'Sigma analysis failed: {e}')
-
-                with open(name_path, 'w') as f:
+                error = analyze_log_file(dir_path, file_path, DATA_DIR)
+                if error:
+                    _set_error(dir_path, error)
+                with open(os.path.join(dir_path, 'name.txt'), 'w') as f:
                     f.write(safe_filename)
             except Exception as e:
                 _set_error(dir_path, f'Log analysis failed: {e}')
@@ -2632,40 +2423,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         """Shared status-check logic for both GET /api/status and POST /api/check-status."""
         db_file = os.path.join(dir_path, 'events.db')
 
-        # Check for error files first (highest priority)
-        error_file = os.path.join(dir_path, '.error')
-        if os.path.exists(error_file):
-            error_age = time.time() - os.path.getmtime(error_file)
-            if error_age > config.STALE_THRESHOLD_SECONDS:
-                try:
-                    os.unlink(error_file)
-                except OSError:
-                    pass
-            else:
-                try:
-                    with open(error_file, 'r') as f:
-                        error_msg = _sanitize_error_text(f.read().strip())
-                except OSError:
-                    error_msg = 'Analysis failed'
-                return {'status': 'error', 'message': error_msg}
+        # An error first (highest priority)
+        error_msg = read_error(dir_path)
+        if error_msg is not None:
+            return {'status': 'error', 'message': _sanitize_error_text(error_msg)}
 
-        phase_file = os.path.join(dir_path, '.phase')
-        if os.path.exists(phase_file):
-            lock_age = time.time() - os.path.getmtime(phase_file)
-            if lock_age > config.STALE_THRESHOLD_SECONDS:
-                try:
-                    os.unlink(phase_file)
-                except OSError:
-                    pass
-
-        phase = ''
-        phase_still_active = os.path.exists(phase_file)
-        if phase_still_active:
-            try:
-                with open(phase_file, 'r') as f:
-                    phase = f.read().strip()
-            except OSError:
-                pass
+        phase = read_phase(dir_path)
+        phase_still_active = phase is not None
 
         meta = read_meta(dir_path)
         # events.db is created the instant create_sqlite_db opens its
@@ -2676,7 +2440,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         is_ready = os.path.exists(db_file) and not phase_still_active
         response = {'status': 'ready' if is_ready else 'processing'}
         if not is_ready:
-            response['phase'] = phase
+            response['phase'] = phase or ''
         else:
             # What went wrong without failing it (storage.add_analysis_warning)
             warnings = [_sanitize_error_text(w) for w in read_analysis_warnings(dir_path)]
@@ -2803,34 +2567,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         self._send_json(self._build_status_response(dir_path))
 
-    def _remove_artifacts(self, dir_path, artifacts):
-        """Delete each named artifact file from dir_path if present.
-        Best-effort per-file (a stuck/permission-denied file doesn't block
-        cleanup of the rest) - shared by handle_post_reanalyze's pcap and
-        non-pcap branches, which previously each inlined an identical copy
-        of this loop over their own artifact tuple.
-        """
-        for artifact in artifacts:
-            artifact_path = os.path.join(dir_path, artifact)
-            if os.path.exists(artifact_path):
-                try:
-                    os.unlink(artifact_path)
-                except OSError:
-                    pass
-
-    def _restore_meta(self, meta_path, preserved_meta):
-        """Rewrite .meta after a reanalyze cleanup, so the frontend
-        retains detected_type across the reanalyze - best-effort, same
-        reasoning as _remove_artifacts. Shared by handle_post_reanalyze's
-        pcap and non-pcap branches.
-        """
-        if preserved_meta:
-            try:
-                with open(meta_path, 'w') as f:
-                    json.dump(preserved_meta, f)
-            except OSError:
-                pass
-
     def handle_post_reanalyze(self):
         data = self._read_json_body(config.MAX_REQUEST_BODY_SIZE)
         if data is None:
@@ -2857,7 +2593,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             evict_analysis_cache(md5)
 
             pcap_file = find_pcap_file(dir_path)
-            non_pcap_files = self._non_artifact_files(dir_path, pcap_file=pcap_file)
+            non_pcap_files = non_artifact_files(dir_path, pcap_file=pcap_file)
 
             # Preserve existing .meta so we can rewrite it after cleanup
             meta_path = os.path.join(dir_path, '.meta')
@@ -2878,7 +2614,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 # which any merge waiting on it then sees and stops at - see
                 # shark_analyzer.merge_lock
                 with shark_analyzer.merge_lock(dir_path):
-                    self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)
+                    remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)
 
                     # Clean up extracted files from previous analysis
                     filestore_dir = os.path.join(dir_path, 'filestore')
@@ -2888,7 +2624,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         except OSError:
                             pass
 
-                    self._restore_meta(meta_path, preserved_meta)
+                    restore_meta(meta_path, preserved_meta)
 
                     started = spawn_suricata(dir_path, pcap_path, os.path.join(SURICATA_DIR, 'suricata.yaml'), data_dir=DATA_DIR)
                 if started:
@@ -2912,7 +2648,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         self._send_error(409, 'Analysis already in progress')
             elif non_pcap_files:
                 file_path = os.path.join(dir_path, non_pcap_files[0])
-                self._remove_artifacts(dir_path, FILE_ANALYSIS_ARTIFACTS)
+                remove_artifacts(dir_path, FILE_ANALYSIS_ARTIFACTS)
                 # An email analysis's stored message and attachments.
                 remove_filestore(dir_path)
 
@@ -2931,7 +2667,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 # an analysis the old detection got wrong.
                 if preserved_meta:
                     preserved_meta['detected_type'] = detected
-                self._restore_meta(meta_path, preserved_meta)
+                restore_meta(meta_path, preserved_meta)
                 phase = self._analyze_by_type(detected, dir_path, file_path, non_pcap_files[0])
                 self._send_json({'status': 'processing', 'md5': md5, 'phase': phase})
             else:

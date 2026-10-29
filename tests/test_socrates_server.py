@@ -12,6 +12,7 @@ import threading
 import time
 import zipfile
 import io
+import inspect
 import re
 import sqlite3
 import subprocess
@@ -3070,9 +3071,9 @@ bright_magenta = "#D9B9D9"
         self.assertEqual(data.get('phase'), 'files', 'Non-PCAP upload must report files phase')
 
     @unittest.mock.patch('socrates.threading.Thread', new=SyncThread)
-    @unittest.mock.patch('socrates.scan_single_file')
-    @unittest.mock.patch('socrates.check_yara_executable')
-    @unittest.mock.patch('socrates.setup_yara_rules')
+    @unittest.mock.patch('yara_analyzer.scan_single_file')
+    @unittest.mock.patch('yara_analyzer.check_yara_executable')
+    @unittest.mock.patch('yara_analyzer.setup_yara_rules')
     def test_upload_non_pcap_creates_file_analysis_db(self, mock_setup, mock_check, mock_scan):
         """Uploading a non-PCAP file creates events.db with fileinfo + filealerts.
 
@@ -3132,9 +3133,9 @@ bright_magenta = "#D9B9D9"
         mock_check.assert_called_once()
         mock_scan.assert_called_once()
 
-    @unittest.mock.patch('socrates.scan_single_file')
-    @unittest.mock.patch('socrates.check_yara_executable')
-    @unittest.mock.patch('socrates.setup_yara_rules')
+    @unittest.mock.patch('yara_analyzer.scan_single_file')
+    @unittest.mock.patch('yara_analyzer.check_yara_executable')
+    @unittest.mock.patch('yara_analyzer.setup_yara_rules')
     def test_upload_zip_with_non_pcap_creates_file_analysis_db(self, mock_setup, mock_check, mock_scan):
         """Uploading a ZIP containing a non-PCAP file creates events.db with correct extracted name."""
         mock_setup.return_value = '/tmp/fake-yara-rules'
@@ -3516,8 +3517,8 @@ bright_magenta = "#D9B9D9"
             meta = json.load(f)
         self.assertEqual(meta['detected_type'], 'log')
 
-    @unittest.mock.patch('socrates.run_sigma_pipeline')
-    @unittest.mock.patch('socrates.parse_zircolite_results')
+    @unittest.mock.patch('sigma_analyzer.run_sigma_pipeline')
+    @unittest.mock.patch('sigma_analyzer.parse_zircolite_results')
     def test_log_analysis_end_to_end(self, mock_parse, mock_pipeline):
         """Full log analysis pipeline: upload -> mocked Zircolite -> DB -> API queries."""
         # 1. Create a fake Zircolite unified DB with a logs table
@@ -3613,7 +3614,7 @@ bright_magenta = "#D9B9D9"
         self.assertFalse(os.path.exists(os.path.join(dir_path, '.zircolite_events.db')),
                          'Temp Zircolite DB must be deleted after import')
 
-    @unittest.mock.patch('socrates.is_zircolite_available', return_value=False)
+    @unittest.mock.patch('sigma_analyzer.is_zircolite_available', return_value=False)
     def test_analyze_log_file_zircolite_missing_writes_error(self, mock_zircolite):
         """Log analysis with Zircolite unavailable must write .error and create empty DB."""
         json_data = b'{"timestamp":"2024-01-01T00:00:00Z","event_type":"zircolite_missing_test"}'
@@ -3634,9 +3635,9 @@ bright_magenta = "#D9B9D9"
         self.assertIn('unavailable', error_msg.lower())
         self.assertTrue(os.path.exists(db_path), 'events.db must be created even when Zircolite is unavailable')
 
-    @unittest.mock.patch('socrates.setup_yara_rules', return_value='/dummy/rules.yar')
-    @unittest.mock.patch('socrates.check_yara_executable', return_value=True)
-    @unittest.mock.patch('socrates.scan_single_file', side_effect=Exception('YARA fail'))
+    @unittest.mock.patch('yara_analyzer.setup_yara_rules', return_value='/dummy/rules.yar')
+    @unittest.mock.patch('yara_analyzer.check_yara_executable', return_value=True)
+    @unittest.mock.patch('yara_analyzer.scan_single_file', side_effect=Exception('YARA fail'))
     def test_analyze_standalone_file_yara_error_warns(self, mock_scan, mock_yara_exec, mock_rules):
         """Standalone file analysis with YARA failure must warn (not fail the
         analysis - .error would show "Analysis failed") and create an empty DB."""
@@ -3657,8 +3658,8 @@ bright_magenta = "#D9B9D9"
             self.assertIn('The YARA scan failed', f.read())
         self.assertTrue(os.path.exists(db_path), 'events.db must be created with empty matches when YARA fails')
 
-    @unittest.mock.patch('socrates.setup_yara_rules', return_value='/dummy/rules.yar')
-    @unittest.mock.patch('socrates.check_yara_executable', return_value=False)
+    @unittest.mock.patch('yara_analyzer.setup_yara_rules', return_value='/dummy/rules.yar')
+    @unittest.mock.patch('yara_analyzer.check_yara_executable', return_value=False)
     def test_analyze_standalone_file_never_allows_network_rule_refresh(self, mock_yara_exec, mock_rules):
         """REGRESSION: analyzing a file must never silently phone home to
         refresh YARA rules as a side effect of just uploading it - that's
@@ -5689,15 +5690,16 @@ class TestSubprocessTimeouts(unittest.TestCase):
     def test_tshark_has_timeout(self):
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
-        # _extract_payload_lines helper contains the tshark call
-        helper_section = content.split("def _extract_payload_lines(self, pcap, src, sport, dst, dport, proto):")[1].split("def handle_get_hexdump_stream(self, params):")[0]
-        tshark_match = re.search(r"\['tshark', '-r', pcap.*?timeout=", helper_section, re.DOTALL)
-        self.assertIsNotNone(tshark_match, '_extract_payload_lines must call tshark with timeout')
-        self.assertIn('STREAM_TIMEOUT_SECONDS', helper_section, 'tshark timeout must use centralized constant')
-        # The helper should be called twice (TCP then UDP fallback) from handle_get_ascii_stream
-        ascii_section = content.split("def handle_get_ascii_stream(self, params):")[1].split("def _extract_payload_lines(self, pcap, src, sport, dst, dport, proto):")[0]
-        calls_in_ascii = ascii_section.count('self._extract_payload_lines(')
-        self.assertGreaterEqual(calls_in_ascii, 2, '_extract_payload_lines must be called at least twice from ascii_stream')
+        # The transcript's tshark run (stream_payload.transcript_lines) takes
+        # its timeout from the handler - TCP, then UDP as a fallback
+        ascii_section = content.split("def handle_get_ascii_stream(self, params):")[1].split("def handle_get_hexdump_stream(self, params):")[0]
+        calls = re.findall(r"transcript_lines\(_run_capped,.*?\)", ascii_section, re.DOTALL)
+        self.assertEqual(len(calls), 2, 'transcript_lines must be tried for TCP, then UDP')
+        for call in calls:
+            self.assertIn('config.STREAM_TIMEOUT_SECONDS', call, 'tshark timeout must use centralized constant')
+        import stream_payload
+        source = inspect.getsource(stream_payload.transcript_lines)
+        self.assertIn('timeout=timeout', source)
 
     def test_timeout_expired_handled(self):
         with open(SERVER_FILE, 'r') as f:
@@ -5785,36 +5787,53 @@ class TestSuricataProcessingLock(unittest.TestCase):
         self.assertIn("_set_error", spawn_section,
                       'Spawn failure must write error file')
 
+    def _status(self, setup, age=0):
+        """_build_status_response on a fresh analysis dir after setup(dir),
+        with every file in it made age seconds old."""
+        d = tempfile.mkdtemp()
+        try:
+            setup(d)
+            then = time.time() - age
+            for f in os.listdir(d):
+                os.utime(os.path.join(d, f), (then, then))
+            handler = server.Handler.__new__(server.Handler)
+            return handler._build_status_response(d), sorted(os.listdir(d))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
     def test_stale_phase_handled_in_check_status(self):
-        with open(SERVER_FILE, 'r') as f:
-            content = f.read()
-        status_helper = content.split("def _build_status_response(self, dir_path):")[1].split("def handle_get_status(self, params):")[0]
-        self.assertIn("lock_age", status_helper)
-        self.assertIn("STALE_THRESHOLD_SECONDS", status_helper)
-        self.assertIn("response['phase'] = phase", status_helper)
+        def setup(d):
+            open(os.path.join(d, 'events.db'), 'w').close()
+            with open(os.path.join(d, '.phase'), 'w') as f:
+                f.write('importing')
+        status, _ = self._status(setup)
+        self.assertEqual((status['status'], status['phase']), ('processing', 'importing'))
+        status, files = self._status(setup, age=server.config.STALE_THRESHOLD_SECONDS + 60)
+        self.assertEqual(status['status'], 'ready', 'a .phase left by a server that died must not hold it forever')
+        self.assertNotIn('.phase', files)
 
     def test_stale_error_handled_in_check_status(self):
-        with open(SERVER_FILE, 'r') as f:
-            content = f.read()
-        status_helper = content.split("def _build_status_response(self, dir_path):")[1].split("def handle_get_status(self, params):")[0]
-        self.assertIn("error_age", status_helper)
-        self.assertIn("'status': 'error'", status_helper)
-        self.assertIn("'message': error_msg", status_helper)
+        def setup(d):
+            with open(os.path.join(d, '.error'), 'w') as f:
+                f.write('Suricata failed: boom')
+        status, _ = self._status(setup)
+        self.assertEqual(status, {'status': 'error', 'message': 'Suricata failed: boom'})
+        status, files = self._status(setup, age=server.config.STALE_THRESHOLD_SECONDS + 60)
+        self.assertEqual(status['status'], 'processing')
+        self.assertNotIn('.error', files)
 
 
 class TestNameTxtPathSafety(unittest.TestCase):
     def _display_name_helper_section(self, content):
         """Both /api/analyses and /api/load-analysis resolve display names via
-        the shared _resolve_display_name helper, which must validate name.txt."""
-        self.assertIn("def _resolve_display_name(self, dir_path, md5):", content,
-                      'display name resolution must be shared via _resolve_display_name')
-        return content.split("def _resolve_display_name(self, dir_path, md5):")[1].split("def _validate_stream_params(self, params):")[0]
+        the shared storage.resolve_display_name, which must validate name.txt."""
+        return inspect.getsource(storage.resolve_display_name)
 
     def test_analyses_checks_name_txt_safety(self):
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
         analyses_section = content.split("def handle_get_analyses(self, params):")[1].split("def handle_get_load_analysis(self, params):")[0]
-        self.assertIn("self._resolve_display_name(dir_path, md5_dir)", analyses_section,
+        self.assertIn("resolve_display_name(dir_path, md5_dir)", analyses_section,
                       '/api/analyses must resolve display names via the shared helper')
         helper_section = self._display_name_helper_section(content)
         self.assertIn("is_safe_path(dir_path, name_path)", helper_section,
@@ -5824,7 +5843,7 @@ class TestNameTxtPathSafety(unittest.TestCase):
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
         load_section = content.split("def handle_get_load_analysis(self, params):")[1].split("def handle_post_delete_analysis(self):")[0]
-        self.assertIn("self._resolve_display_name(dir_path, md5)", load_section,
+        self.assertIn("resolve_display_name(dir_path, md5)", load_section,
                       '/api/load-analysis must resolve display names via the shared helper')
         helper_section = self._display_name_helper_section(content)
         self.assertIn("is_safe_path(dir_path, name_path)", helper_section,
@@ -5936,16 +5955,16 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         self.assertIn("PCAP_ANALYSIS_ARTIFACTS = ('eve.json', 'events.db', 'events.db-wal', 'events.db-shm', '.phase', '.error', '.warnings', 'yara_matches.json', 'sigma_matches.json', '.meta', 'file_metadata.json', 'fast.log', 'stats.log', 'suricata.log',", storage_content,
                       'PCAP artifact list must be centralized in PCAP_ANALYSIS_ARTIFACTS')
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
-        # The actual per-artifact loop lives in the shared _remove_artifacts
-        # helper now (both the pcap and non-pcap branches used to each
-        # inline an identical copy of it) - reanalyze itself just calls it.
-        self.assertIn("self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)", reanalyze_section,
-                      'reanalyze must delete PCAP_ANALYSIS_ARTIFACTS via _remove_artifacts')
-        remove_artifacts_section = content.split("def _remove_artifacts(self, dir_path, artifacts):")[1].split("\n    def ")[0]
+        # The actual per-artifact loop lives in storage.remove_artifacts
+        # (both the pcap and non-pcap branches used to each inline an
+        # identical copy of it) - reanalyze itself just calls it.
+        self.assertIn("remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)", reanalyze_section,
+                      'reanalyze must delete PCAP_ANALYSIS_ARTIFACTS via remove_artifacts')
+        remove_artifacts_section = inspect.getsource(storage.remove_artifacts)
         self.assertIn('for artifact in artifacts:', remove_artifacts_section,
-                      '_remove_artifacts must loop over the given artifact list')
+                      'remove_artifacts must loop over the given artifact list')
         self.assertIn('os.unlink(artifact_path)', remove_artifacts_section,
-                      '_remove_artifacts must unlink artifact files')
+                      'remove_artifacts must unlink artifact files')
 
     def test_reanalyze_evicts_sankey_and_aggregation_cache(self):
         """Reanalyze deletes and rebuilds events.db, so any cached Sankey/
@@ -5956,7 +5975,7 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
         # Must evict before the artifact-deletion call, not after.
         evict_pos = reanalyze_section.find('evict_analysis_cache(md5)')
-        removal_pos = reanalyze_section.find('self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)')
+        removal_pos = reanalyze_section.find('remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)')
         self.assertNotEqual(evict_pos, -1, 'reanalyze must call evict_analysis_cache(md5)')
         self.assertLess(evict_pos, removal_pos,
                          'cache eviction must happen before events.db is deleted/rebuilt')
@@ -5965,7 +5984,7 @@ class TestReanalyzeEndpoint(unittest.TestCase):
         """Verify reanalyze does NOT delete pcap files or name.txt."""
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
-        # name.txt must not appear in either artifact tuple _remove_artifacts
+        # name.txt must not appear in either artifact tuple remove_artifacts
         # is ever called with from handle_post_reanalyze, and reanalyze must
         # never rmtree the whole analysis directory (only the filestore
         # subdirectory is allowed to be rmtree'd).
@@ -5998,20 +6017,20 @@ class TestReanalyzeEndpoint(unittest.TestCase):
 
     def test_reanalyze_excludes_zircolite_artifacts(self):
         """Verify reanalyze excludes zircolite.log and .zircolite_events.db
-        from file selection - via the shared _non_artifact_files() helper
-        (also used by _resolve_display_name()), not a hand-rolled
+        from file selection - via the shared storage.non_artifact_files()
+        (also used by resolve_display_name()), not a hand-rolled
         duplicate list local to handle_post_reanalyze()."""
         with open(SERVER_FILE, 'r') as f:
             content = f.read()
         reanalyze_section = content.split("def handle_post_reanalyze(self):")[1]
-        self.assertIn("self._non_artifact_files(dir_path, pcap_file=pcap_file)", reanalyze_section,
-                      'reanalyze must use the shared _non_artifact_files() helper for file selection')
+        self.assertIn("non_artifact_files(dir_path, pcap_file=pcap_file)", reanalyze_section,
+                      'reanalyze must use the shared non_artifact_files() helper for file selection')
         with open(STORAGE_FILE, 'r') as f:
             storage_content = f.read()
         self.assertIn("'zircolite.log'", storage_content,
-                      'zircolite.log must be excluded (via FILE_ANALYSIS_ARTIFACTS, checked by _non_artifact_files)')
+                      'zircolite.log must be excluded (via FILE_ANALYSIS_ARTIFACTS, checked by non_artifact_files)')
         self.assertIn("'.zircolite_events.db'", storage_content,
-                      '.zircolite_events.db must be excluded (via FILE_ANALYSIS_ARTIFACTS, checked by _non_artifact_files)')
+                      '.zircolite_events.db must be excluded (via FILE_ANALYSIS_ARTIFACTS, checked by non_artifact_files)')
 
     def test_reanalyze_returns_409_if_already_processing(self):
         """Verify reanalyze returns 409 when analysis is already in progress."""
@@ -7847,7 +7866,7 @@ class TestMultipartParsing(unittest.TestCase):
 
 class TestNonArtifactFiles(unittest.TestCase):
     """REGRESSION: zircolite.log (a real pipeline artifact for log/Sigma
-    analyses) used to slip through _non_artifact_files's suffix-based
+    analyses) used to slip through non_artifact_files's suffix-based
     exclusion list entirely, so it could transiently win a directory-listing
     race against the real uploaded file as the display-name fallback (before
     name.txt is written). Fixed by excluding exact known artifact filenames
@@ -7857,7 +7876,6 @@ class TestNonArtifactFiles(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.handler = server.Handler.__new__(server.Handler)
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -7865,32 +7883,32 @@ class TestNonArtifactFiles(unittest.TestCase):
     def test_zircolite_log_artifact_excluded(self):
         open(os.path.join(self.tmpdir, 'zircolite.log'), 'w').close()
         open(os.path.join(self.tmpdir, 'suspicious.log'), 'w').close()
-        result = self.handler._non_artifact_files(self.tmpdir)
+        result = storage.non_artifact_files(self.tmpdir)
         self.assertEqual(result, ['suspicious.log'],
                           'zircolite.log must be excluded but a user-uploaded .log file must not be')
 
     def test_zircolite_events_db_artifact_excluded(self):
         open(os.path.join(self.tmpdir, '.zircolite_events.db'), 'w').close()
-        result = self.handler._non_artifact_files(self.tmpdir)
+        result = storage.non_artifact_files(self.tmpdir)
         self.assertEqual(result, [], 'dotfile is already excluded, but confirm the exact-name set does not error on it')
 
     def test_missing_dir_returns_empty_list(self):
-        result = self.handler._non_artifact_files(os.path.join(self.tmpdir, 'does-not-exist'))
+        result = storage.non_artifact_files(os.path.join(self.tmpdir, 'does-not-exist'))
         self.assertEqual(result, [])
 
     def test_legitimately_named_txt_and_json_uploads_are_found(self):
-        """REGRESSION: _non_artifact_files() used to blanket-exclude any
+        """REGRESSION: non_artifact_files() used to blanket-exclude any
         .txt/.json/.db-suffixed filename by extension, even though a
         legitimately-uploaded standalone file can itself have one of
         those extensions - the exact same directory's file was still
         correctly found by handle_post_reanalyze()'s own separate,
         hand-rolled listing (which only excluded exact artifact names,
-        not extensions), so a missing name.txt meant _resolve_display_name()
+        not extensions), so a missing name.txt meant resolve_display_name()
         could never fall back to the real filename for such an upload
         even though reanalyze happily found and used it. Both call sites
         now share this one helper, so this can no longer disagree."""
         open(os.path.join(self.tmpdir, 'My Notes.txt'), 'w').close()
-        result = self.handler._non_artifact_files(self.tmpdir)
+        result = storage.non_artifact_files(self.tmpdir)
         self.assertEqual(result, ['My Notes.txt'],
                           'a legitimately-uploaded .txt file must be found, not treated as an artifact')
 
@@ -7900,7 +7918,7 @@ class TestNonArtifactFiles(unittest.TestCase):
         must still be excludable by passing its name explicitly."""
         open(os.path.join(self.tmpdir, 'so-pcap.1234567890'), 'w').close()
         open(os.path.join(self.tmpdir, 'real-upload.bin'), 'w').close()
-        result = self.handler._non_artifact_files(self.tmpdir, pcap_file='so-pcap.1234567890')
+        result = storage.non_artifact_files(self.tmpdir, pcap_file='so-pcap.1234567890')
         self.assertEqual(result, ['real-upload.bin'])
 
 

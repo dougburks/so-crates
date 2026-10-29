@@ -78,7 +78,7 @@ class TestRefreshFallsBackToCacheOnBadDownload(unittest.TestCase):
     isn't actually a zip) or KeyError (if the expected member is ever
     renamed upstream) - neither is an OSError subclass, so both escaped
     setup_yara_rules() entirely even with a perfectly good cached copy on
-    disk, and propagated up into _analyze_standalone_file()'s single broad
+    disk, and propagated up into the standalone-file analysis's single broad
     except Exception as a whole-file-analysis failure instead of silently
     falling back to the cache like the docstring promises."""
 

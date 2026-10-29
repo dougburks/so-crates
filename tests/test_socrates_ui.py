@@ -10712,7 +10712,7 @@ class TestRenameAnalysis(unittest.TestCase):
         """REGRESSION: after renaming an analysis, reopening it from the
         Previous Analyses list (loadAnalysis()) reverted the header back to
         the original filename. /api/load-analysis's file_name already comes
-        from _resolve_display_name() (name.txt first - the renamed value),
+        from storage.resolve_display_name() (name.txt first - the renamed value),
         but loadAnalysis() then unconditionally overwrote currentFileName
         with analysisStatus.meta.extracted (the ORIGINAL upload-time
         filename, never touched by a rename) whenever that field was

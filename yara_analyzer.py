@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 import zipfile
 
+from db import create_file_analysis_db
 from file_analyzer import analyze_file
 from storage import add_analysis_warning
 from validators import is_host_reachable, is_file_stale, gunzip_atomically
@@ -535,3 +536,28 @@ def scan_single_file(file_path, rules_file, failures=None):
             os.unlink(list_path)
         except OSError:
             pass
+
+
+def analyze_standalone_file(dir_path, file_path, data_dir):
+    """A standalone (non-PCAP, non-log, non-email) upload's analysis: YARA
+    scan it and write its events.db - the file's record and any matches. A
+    failed scan is a warning on the analysis, which still completes.
+
+    network_allowed=False: analysis must never silently reach out to
+    refresh rules on its own - that's an explicit, opt-in action (Rules
+    modal, or the checkForStaleRules() notification). Uses whatever's
+    already cached/baked-in, however old."""
+    rules_file = setup_yara_rules(data_dir, network_allowed=False)
+    db_file = os.path.join(dir_path, 'events.db')
+    if rules_file and check_yara_executable():
+        try:
+            failures = []
+            matches, sha256, md5, sha1, metadata = scan_single_file(file_path, rules_file, failures)
+            create_file_analysis_db(db_file, file_path, matches, md5, sha1, sha256, metadata=metadata)
+            for reason in failures:
+                add_analysis_warning(dir_path, f'The YARA scan failed - File Alerts may be missing: {reason}')
+        except Exception as e:
+            add_analysis_warning(dir_path, f'The YARA scan failed - File Alerts may be missing: {e}')
+            create_file_analysis_db(db_file, file_path, [], '', '', '')
+    else:
+        create_file_analysis_db(db_file, file_path, [], '', '', '')
