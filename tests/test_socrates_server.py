@@ -3750,6 +3750,66 @@ bright_magenta = "#D9B9D9"
         self.assertEqual(len(launches), 1)
         shutil.rmtree(dir_path)
 
+    def test_reanalyze_waits_for_a_merge_in_progress(self):
+        """REGRESSION: reanalyze removed events.db while a tshark merge that
+        had passed its checks was about to write into it - the merge
+        recreated it with tshark's rows alone, and Suricata's import, which
+        skips an events.db that exists, never ran. Reanalyze holds the
+        merge's lock while it removes events.db and starts the new run."""
+        md5 = 'e' * 32
+        dir_path = os.path.join(server.DATA_DIR, md5)
+        os.makedirs(dir_path, exist_ok=True)
+        with open(os.path.join(dir_path, 'capture.pcap'), 'wb') as f:
+            f.write(b'\xd4\xc3\xb2\xa1' + b'\x00' * 20)
+        events_db = os.path.join(dir_path, 'events.db')
+        open(events_db, 'w').close()
+        results = []
+        lock = server.shark_analyzer.merge_lock(dir_path)
+        with lock:   # a merge under way
+            t = threading.Thread(target=lambda: results.append(self._post('/api/reanalyze', {'md5': md5})[0]))
+            t.start()
+            time.sleep(0.4)
+            self.assertTrue(os.path.exists(events_db), 'reanalyze must wait for the merge')
+            self.assertEqual(results, [])
+        t.join(5)
+        self.assertEqual(results, [200])
+        self.assertFalse(os.path.exists(events_db))
+        shutil.rmtree(dir_path)
+
+    def test_delete_refused_while_analyzing(self):
+        """Deleting an analysis still being analyzed is a 409 - its run
+        would go on writing into the folder, or recreate it. A .phase left
+        by a server that died (older than the stale threshold) is no bar."""
+        md5 = 'f' * 32
+        dir_path = os.path.join(server.DATA_DIR, md5)
+        os.makedirs(dir_path, exist_ok=True)
+        phase = os.path.join(dir_path, '.phase')
+        with open(phase, 'w') as f:
+            f.write('logs')
+        status, body = self._post('/api/delete-analysis', {'md5': md5})
+        self.assertEqual(status, 409)
+        self.assertIn('in progress', json.loads(body)['error'])
+        self.assertTrue(os.path.isdir(dir_path))
+        old = time.time() - server.config.STALE_THRESHOLD_SECONDS - 60
+        os.utime(phase, (old, old))
+        status, _ = self._post('/api/delete-analysis', {'md5': md5})
+        self.assertEqual(status, 200)
+        self.assertFalse(os.path.exists(dir_path))
+
+    def test_delete_all_leaves_a_running_analysis(self):
+        running, done = os.path.join(server.DATA_DIR, '1' * 32), os.path.join(server.DATA_DIR, '2' * 32)
+        for d in (running, done):
+            os.makedirs(d, exist_ok=True)
+        with open(os.path.join(running, '.phase'), 'w') as f:
+            f.write('network')
+        status, body = self._post('/api/delete-all-analyses', {})
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertGreaterEqual(data.get('skipped', 0), 1)
+        self.assertTrue(os.path.isdir(running))
+        self.assertFalse(os.path.exists(done))
+        shutil.rmtree(running)
+
     def test_reanalyze_detects_log_by_content(self):
         """REGRESSION: reanalyze chose log vs binary by extension only, so a
         log upload recognized by its content (JSON with no log extension)

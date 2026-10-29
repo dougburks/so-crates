@@ -14272,6 +14272,9 @@
                     tabDataCache = {};
                     bumpFetchGeneration();
                     showWelcome();
+                    if (result.skipped) {
+                        showToast(`${result.skipped.toLocaleString()} ${result.skipped === 1 ? 'analysis' : 'analyses'} still running ${result.skipped === 1 ? 'was' : 'were'} left - delete ${result.skipped === 1 ? 'it' : 'them'} once finished`);
+                    }
                 } else {
                     showError(result.error || 'Could not delete analyses');
                 }

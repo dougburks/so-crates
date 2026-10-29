@@ -183,6 +183,18 @@ def _run_capped(cmd, max_bytes, timeout, text=False):
 FLOW_CARVE_PREFIX = 'socrates-flow-'
 
 
+def _analysis_running(dir_path):
+    """Whether an analysis is being analyzed now, so it mustn't be deleted:
+    Suricata, Zircolite or the email analyzer would go on writing into its
+    folder - or recreate it, bringing the deleted analysis back. A .phase
+    older than the status check's stale threshold is from a server that
+    died mid-run, and doesn't count."""
+    try:
+        return time.time() - os.path.getmtime(os.path.join(dir_path, '.phase')) <= config.STALE_THRESHOLD_SECONDS
+    except OSError:
+        return False
+
+
 class _CarveFailed(Exception):
     """tcpdump couldn't read the capture to carve a flow out of it."""
 
@@ -1431,14 +1443,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(*error)
             return
 
-        shark_analyzer.cancel(dir_path)
-        try:
-            shutil.rmtree(dir_path)
-        except OSError as e:
-            # (something still writing into it - an analysis still running)
-            print(f"Could not delete analysis {md5}: {e}")
-            self._send_error(500, 'Could not delete the analysis - try again once it has finished')
-            return
+        # Under _REANALYZE_LOCK, so a reanalyze can't start in between
+        with _REANALYZE_LOCK:
+            if _analysis_running(dir_path):
+                self._send_error(409, 'Analysis in progress - delete it once it has finished')
+                return
+            shark_analyzer.cancel(dir_path)
+            try:
+                shutil.rmtree(dir_path)
+            except OSError as e:
+                print(f"Could not delete analysis {md5}: {e}")
+                self._send_error(500, 'Could not delete the analysis')
+                return
         evict_analysis_cache(md5)
         self._send_json({'success': True})
 
@@ -1724,6 +1740,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self._read_json_body(config.MAX_REQUEST_BODY_SIZE) is None:
             return
         deleted = 0
+        skipped = 0
         errors = []
         if os.path.exists(DATA_DIR):
             for md5_dir in os.listdir(DATA_DIR):
@@ -1735,20 +1752,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if not is_safe_path(DATA_DIR, dir_path):
                     errors.append(md5_dir)
                     continue
-                try:
-                    shark_analyzer.cancel(dir_path)
-                    shutil.rmtree(dir_path)
-                    deleted += 1
-                except Exception as e:
-                    # The exception text embeds the absolute DATA_DIR path.
-                    errors.append(_sanitize_error_text(f'{md5_dir}: {e}'))
+                with _REANALYZE_LOCK:
+                    # (left alone, like a single delete - see _analysis_running)
+                    if _analysis_running(dir_path):
+                        skipped += 1
+                        continue
+                    try:
+                        shark_analyzer.cancel(dir_path)
+                        shutil.rmtree(dir_path)
+                        deleted += 1
+                    except Exception as e:
+                        # The exception text embeds the absolute DATA_DIR path.
+                        errors.append(_sanitize_error_text(f'{md5_dir}: {e}'))
         if errors and deleted == 0:
             self._send_error(500, f'Could not delete analyses: {errors[0]}')
             return
         with CACHE_LOCK:
             for cache in ALL_CACHES:
                 cache.clear()
-        self._send_json({'success': True, 'deleted': deleted})
+        response = {'success': True, 'deleted': deleted}
+        if skipped:
+            response['skipped'] = skipped
+        self._send_json(response)
 
     def handle_post_update_rules(self):
         data = self._read_json_body(config.MAX_REQUEST_BODY_SIZE)
@@ -2849,19 +2874,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 pcap_path = os.path.join(dir_path, pcap_file)
 
                 shark_analyzer.cancel(dir_path)
-                self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)
+                # Held until the new run's .phase is written (spawn_suricata),
+                # which any merge waiting on it then sees and stops at - see
+                # shark_analyzer.merge_lock
+                with shark_analyzer.merge_lock(dir_path):
+                    self._remove_artifacts(dir_path, PCAP_ANALYSIS_ARTIFACTS)
 
-                # Clean up extracted files from previous analysis
-                filestore_dir = os.path.join(dir_path, 'filestore')
-                if os.path.isdir(filestore_dir):
-                    try:
-                        shutil.rmtree(filestore_dir)
-                    except OSError:
-                        pass
+                    # Clean up extracted files from previous analysis
+                    filestore_dir = os.path.join(dir_path, 'filestore')
+                    if os.path.isdir(filestore_dir):
+                        try:
+                            shutil.rmtree(filestore_dir)
+                        except OSError:
+                            pass
 
-                self._restore_meta(meta_path, preserved_meta)
+                    self._restore_meta(meta_path, preserved_meta)
 
-                if spawn_suricata(dir_path, pcap_path, os.path.join(SURICATA_DIR, 'suricata.yaml'), data_dir=DATA_DIR):
+                    started = spawn_suricata(dir_path, pcap_path, os.path.join(SURICATA_DIR, 'suricata.yaml'), data_dir=DATA_DIR)
+                if started:
                     self._send_json({'status': 'processing', 'md5': md5, 'phase': 'network'})
                 else:
                     # spawn_suricata() returns False for two different reasons -

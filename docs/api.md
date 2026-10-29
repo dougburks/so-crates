@@ -723,7 +723,7 @@ Deletes a single historical analysis (removes the entire MD5 directory).
 {"success": true}
 ```
 
-**Errors:** `400` for invalid MD5 or unsafe path. `404` if analysis not found. `500` if the directory couldn't be removed (something still writing into it - an analysis still running).
+**Errors:** `400` for invalid MD5 or unsafe path. `404` if analysis not found. `409` while the analysis is still being analyzed (a `.phase` file newer than the stale-lock threshold). `500` if the directory couldn't be removed.
 
 ---
 
@@ -861,7 +861,7 @@ non-empty array of integers (not booleans), capped at `MAX_QUERY_LIMIT`
 
 ### `POST /api/delete-all-analyses`
 
-Deletes all historical analyses (every MD5-shaped directory under the data root). Non-analysis directories and files are left untouched.
+Deletes all historical analyses (every MD5-shaped directory under the data root). Non-analysis directories and files are left untouched, and so is an analysis still being analyzed - counted in `skipped`, which is omitted when there are none.
 
 **Request Body:** `{}` - the content is ignored, but it must be sent as a JSON object with `Content-Type: application/json` (`415` otherwise), like every other JSON POST.
 

@@ -58,8 +58,12 @@
 - A stream's **ASCII Transcript** or **Send to CyberChef** on a capture
   tcpdump can't read said there was nothing there; it says the capture
   couldn't be read. **Hexdump** showed one empty packet past its limit
-- Deleting an analysis that's still being written to reports an error
-  instead of leaving the request unanswered
+- **Reanalyze** on a PCAP whose tshark rows were joining it at that moment
+  could lose Suricata's results, leaving only tshark's; it now waits for
+  them to finish joining
+- An analysis still being analyzed can't be deleted any more (its run
+  went on writing into the folder, and could bring it back); **Delete
+  All** leaves it and says how many it left
 - **Load from URL** also refuses an IPv6 address that carries a private
   IPv4 one (6to4, NAT64), on Python versions that don't already block
   those ranges

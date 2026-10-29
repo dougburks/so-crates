@@ -1772,7 +1772,12 @@ _merge_locks = {}
 _merge_locks_lock = threading.Lock()
 
 
-def _merge_lock(dir_path):
+def merge_lock(dir_path):
+    """The lock merge() holds while it writes into an analysis's
+    events.db. Reanalyze holds it too, while it removes events.db and
+    starts the new run: a merge that had already passed its checks would
+    otherwise recreate events.db with tshark's rows alone, and Suricata's
+    import - which skips an events.db that exists - would never run."""
     with _merge_locks_lock:
         return _merge_locks.setdefault(dir_path, threading.Lock())
 
@@ -1892,7 +1897,7 @@ def merge(dir_path):
     Returns how many rows were added, or None if it wasn't time to."""
     shark_db = shark_db_path(dir_path)
     events_db = os.path.join(dir_path, 'events.db')
-    with _merge_lock(dir_path):
+    with merge_lock(dir_path):
         if not (os.path.exists(shark_db) and os.path.exists(events_db)) or \
                 os.path.exists(os.path.join(dir_path, '.phase')) or format_version(shark_db) != SHARK_FORMAT_VERSION:
             return None
