@@ -4932,7 +4932,7 @@ bright_magenta = "#D9B9D9"
         SyncThread makes the spawned thread run inline, so by the time the
         POST response is sent the (mocked, instant) job has already
         finished - no polling needed here."""
-        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
             on_progress('suricata rules updated (fake)')
         mock_suricata.side_effect = fake_suricata
 
@@ -4984,7 +4984,7 @@ bright_magenta = "#D9B9D9"
         """POST /api/update-rules with ruleset='all' must trigger all three
         rulesets (spawned as separate threads - SyncThread just makes each
         one run inline here for a deterministic assertion)."""
-        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
             on_progress('suricata done (fake)')
         def fake_yara(data_dir, on_progress=print, network_allowed=True, force=False):
             on_progress('yara done (fake)')
@@ -5055,7 +5055,7 @@ bright_magenta = "#D9B9D9"
         setup_suricata_config() as its own kwarg - the only way this
         setting actually takes effect (see the disable.conf --disable-conf
         wiring in _fetch_single_source)."""
-        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
             on_progress('suricata rules updated (fake)')
         mock_suricata.side_effect = fake_suricata
 
@@ -5070,7 +5070,7 @@ bright_magenta = "#D9B9D9"
         """Omitting 'showProtocolDecodeAlerts' entirely must reach
         setup_suricata_config() as show_protocol_decode_alerts=None, so the
         previously persisted setting is left untouched rather than reset."""
-        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
             on_progress('suricata rules updated (fake)')
         mock_suricata.side_effect = fake_suricata
 
@@ -5085,7 +5085,7 @@ bright_magenta = "#D9B9D9"
         """A valid 'sources' list must reach setup_suricata_config() as its
         enabled_sources kwarg - the only way source selection actually
         takes effect."""
-        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
             on_progress('suricata rules updated (fake)')
         mock_suricata.side_effect = fake_suricata
 
@@ -5101,7 +5101,7 @@ bright_magenta = "#D9B9D9"
         interaction) must reach setup_suricata_config() as
         enabled_sources=None, so reconciliation is skipped and behavior is
         unchanged from before this feature existed."""
-        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+        def fake_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
             on_progress('suricata rules updated (fake)')
         mock_suricata.side_effect = fake_suricata
 
@@ -5118,7 +5118,7 @@ bright_magenta = "#D9B9D9"
         release = threading.Event()
         entered = threading.Event()
 
-        def blocking_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+        def blocking_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
             entered.set()
             release.wait(timeout=5)
 
@@ -5148,7 +5148,7 @@ bright_magenta = "#D9B9D9"
         release = threading.Event()
         entered = threading.Event()
 
-        def blocking_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+        def blocking_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
             entered.set()
             release.wait(timeout=5)
 
@@ -5189,7 +5189,7 @@ bright_magenta = "#D9B9D9"
         release = threading.Event()
         entered = threading.Event()
 
-        def blocking_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+        def blocking_suricata(data_dir, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
             entered.set()
             release.wait(timeout=5)
 
@@ -5295,6 +5295,165 @@ bright_magenta = "#D9B9D9"
         # would have silently swallowed every curated range above it.
         urlhaus = next(r for r in ranges if r['label'] == 'Abuse.ch URLhaus')
         self.assertIsNotNone(urlhaus['max'])
+        local = next(r for r in ranges if r['label'] == 'Local / Custom Rules')
+        self.assertEqual((local['min'], local['max']), (1000000, 1999999))
+        # Ahead of every curated source, like classify_alert_ruleset()
+        self.assertLess(labels.index('Local / Custom Rules'), labels.index('Emerging Threats Open'))
+
+    # ---- Custom Suricata rules ----
+
+    CUSTOM_RULE = 'alert http any any -> any any (msg:"Lab beacon"; http.uri; content:"/gate.php"; sid:1000001; rev:1;)'
+
+    def _custom_rules_paths(self):
+        return (os.path.join(self.tmpdir, 'suricata', 'custom.rules'),
+                os.path.join(self.tmpdir, 'suricata', 'rules', 'custom.rules'))
+
+    def tearDown(self):
+        for path in self._custom_rules_paths():
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_custom_rules_none_saved(self):
+        status, body = self._get('/api/custom-rules')
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertEqual(result['rules'], '')
+        self.assertIsNone(result['count'])
+        self.assertFalse(result['enabled'])
+        self.assertTrue(result['allowed'])
+        self.assertEqual(result['sidRange'], {'min': 1000000, 'max': 1999999})
+
+    @unittest.mock.patch('suricata_analyzer.check_rules_with_suricata', return_value=[])
+    def test_custom_rules_save_turns_them_on(self, _mock_check):
+        status, body = self._post('/api/custom-rules', {'rules': f'# lab 7\n{self.CUSTOM_RULE}'})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {'saved': True, 'count': 1})
+        saved, active = self._custom_rules_paths()
+        for path in (saved, active):
+            with open(path) as f:
+                self.assertEqual(f.read(), f'# lab 7\n{self.CUSTOM_RULE}\n')
+        result = json.loads(self._get('/api/custom-rules')[1])
+        self.assertEqual((result['count'], result['enabled']), (1, True))
+        self.assertIn(self.CUSTOM_RULE, result['rules'])
+        # rules-info carries the summary but never the text - it's polled
+        # every 2 seconds
+        info = json.loads(self._get('/api/rules-info')[1])['suricata']['custom']
+        self.assertEqual((info['count'], info['enabled'], info['allowed']), (1, True, True))
+        self.assertNotIn('rules', info)
+
+    @unittest.mock.patch('suricata_analyzer.check_rules_with_suricata', return_value=[])
+    def test_custom_rules_problems_save_nothing(self, mock_check):
+        saved, active = self._custom_rules_paths()
+        self._post('/api/custom-rules', {'rules': self.CUSTOM_RULE})
+        status, body = self._post('/api/custom-rules', {
+            'rules': 'alert tcp any any -> any any (msg:"et"; sid:2014726; rev:1;)\n'
+                     'alert ip any any -> any any (msg:"x"; dataset:isset,a,type string,load /etc/passwd; sid:1000002;)'})
+        self.assertEqual(status, 400)
+        result = json.loads(body)
+        self.assertEqual([p['line'] for p in result['problems']], [1, 2])
+        self.assertIn('outside 1000000-1999999', result['problems'][0]['message'])
+        self.assertIn('dataset is not allowed', result['problems'][1]['message'])
+        # Suricata is only asked once the cheaper checks pass, and the last
+        # good save is untouched
+        self.assertEqual(mock_check.call_count, 1)
+        with open(active) as f:
+            self.assertIn('sid:1000001', f.read())
+
+    def test_custom_rules_suricata_problems_have_no_paths(self):
+        problem = {'line': 1, 'message': f"unknown rule keyword 'foo' in {self.tmpdir}/suricata/suricata.yaml"}
+        with unittest.mock.patch('suricata_analyzer.check_rules_with_suricata', return_value=[problem]):
+            status, body = self._post('/api/custom-rules', {'rules': self.CUSTOM_RULE})
+        self.assertEqual(status, 400)
+        message = json.loads(body)['problems'][0]['message']
+        self.assertNotIn(self.tmpdir, message)
+        self.assertIn("unknown rule keyword 'foo'", message)
+        self.assertFalse(os.path.exists(self._custom_rules_paths()[1]))
+
+    @unittest.mock.patch('suricata_analyzer.check_rules_with_suricata', return_value=[])
+    def test_custom_rules_empty_text_removes_them(self, _mock_check):
+        self._post('/api/custom-rules', {'rules': self.CUSTOM_RULE})
+        status, body = self._post('/api/custom-rules', {'rules': '  \n'})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['count'], 0)
+        self.assertFalse(any(os.path.exists(p) for p in self._custom_rules_paths()))
+
+    def test_custom_rules_refused_when_not_allowed(self):
+        with unittest.mock.patch.object(server.Handler, 'ALLOW_CUSTOM_RULES', False):
+            status, body = self._post('/api/custom-rules', {'rules': self.CUSTOM_RULE})
+            self.assertEqual(status, 403)
+            self.assertIn('ALLOW_CUSTOM_RULES', json.loads(body)['error'])
+            self.assertFalse(json.loads(self._get('/api/custom-rules')[1])['allowed'])
+            self.assertFalse(json.loads(self._get('/api/rules-info')[1])['suricata']['custom']['allowed'])
+        self.assertFalse(os.path.exists(self._custom_rules_paths()[0]))
+
+    def test_custom_rules_needs_json_and_a_string(self):
+        status, _ = self._post('/api/custom-rules', self.CUSTOM_RULE.encode(), content_type='text/plain')
+        self.assertEqual(status, 415)
+        status, _ = self._post('/api/custom-rules', {'rules': 12345})
+        self.assertEqual(status, 400)
+
+    @unittest.mock.patch('socrates.threading.Thread', new=SyncThread)
+    @unittest.mock.patch('socrates.setup_suricata_config')
+    def test_update_rules_custom_source_turns_custom_rules_on_or_off(self, mock_suricata):
+        """'custom' in sources is the custom rules' switch, not a
+        suricata-update source: it becomes custom_rules_enabled, and is
+        left out of enabled_sources."""
+        status, _ = self._post('/api/update-rules', {'ruleset': 'suricata', 'sources': ['et/open', 'custom']})
+        self.assertEqual(status, 200)
+        self.assertEqual(mock_suricata.call_args.kwargs['enabled_sources'], ['et/open'])
+        self.assertIs(mock_suricata.call_args.kwargs['custom_rules_enabled'], True)
+        self._post('/api/update-rules', {'ruleset': 'suricata', 'sources': ['et/open']})
+        self.assertIs(mock_suricata.call_args.kwargs['custom_rules_enabled'], False)
+        self._post('/api/update-rules', {'ruleset': 'suricata'})
+        self.assertIsNone(mock_suricata.call_args.kwargs['custom_rules_enabled'])
+
+
+@unittest.skipUnless(shutil.which('suricata') and os.path.isdir('/etc/suricata'), 'needs Suricata installed')
+class TestCustomRulesEndToEnd(unittest.TestCase):
+    """A saved custom rule fires in a real analysis of the built-in sample
+    capture, labeled 'Local / Custom Rules' (its sid is inside the old
+    built-in range, so this also proves the local range wins), and stops
+    once the rules are turned off."""
+
+    RULE = ('alert http any any -> any any (msg:"Lab update.bin download"; '
+            'flow:established,to_server; http.uri; content:"/update.bin"; sid:1000100; rev:1;)')
+
+    def setUp(self):
+        self.data_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.data_dir, ignore_errors=True)
+        suricata_analyzer.setup_suricata_config(self.data_dir, on_progress=lambda m: None, network_allowed=False)
+
+    def _analyze(self):
+        from samples import SAMPLES
+        analysis_dir = tempfile.mkdtemp(dir=self.data_dir)
+        pcap = os.path.join(analysis_dir, 'sample.pcap')
+        with open(pcap, 'wb') as f:
+            f.write(SAMPLES['pcap'][1]())
+        with unittest.mock.patch('shark_analyzer.enabled', return_value=False):
+            self.assertTrue(suricata_analyzer.spawn_suricata(analysis_dir, pcap, data_dir=self.data_dir))
+        deadline = time.time() + 120
+        while os.path.exists(os.path.join(analysis_dir, '.phase')) and time.time() < deadline:
+            time.sleep(0.2)
+        self.assertFalse(os.path.exists(os.path.join(analysis_dir, '.error')))
+        return db.get_aggregation_data_sqlite(os.path.join(analysis_dir, 'events.db'), 'alert')
+
+    def test_custom_rule_fires_and_is_labeled_local(self):
+        count, problems = suricata_analyzer.save_custom_rules(self.RULE, self.data_dir)
+        self.assertEqual((count, problems), (1, []))
+        aggregation = self._analyze()
+        self.assertIn({'value': 'Lab update.bin download', 'count': 1}, aggregation['Alert'])
+        self.assertIn({'value': 'Local / Custom Rules', 'count': 1}, aggregation['Ruleset'])
+
+        suricata_analyzer.setup_suricata_config(self.data_dir, on_progress=lambda m: None,
+                                                network_allowed=False, custom_rules_enabled=False)
+        aggregation = self._analyze()
+        self.assertNotIn('Lab update.bin download', [row['value'] for row in aggregation.get('Alert', [])])
+
+    def test_bad_rule_is_refused_with_its_line(self):
+        count, problems = suricata_analyzer.save_custom_rules(
+            f'{self.RULE}\n\nalert tcp any any -> any any (msg:"x"; foo:bar; sid:1000101; rev:1;)', self.data_dir)
+        self.assertEqual(problems, [{'line': 3, 'message': "unknown rule keyword 'foo'"}])
+        self.assertIsNone(suricata_analyzer.get_custom_rules(self.data_dir)['count'])
 
 
 class TestGetSuricataRulesInfoStaleness(unittest.TestCase):

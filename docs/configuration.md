@@ -13,6 +13,7 @@ All analyzed files are stored in `~/socrates-data/`. It holds a set of shared ru
     rules-available/       # Staged per-source rules library, seeded from the baked-in image
                            # copies; fresh downloads only happen via the Rules modal
     enabled_sources.json   # Which rule sources are currently enabled
+    custom.rules           # Your custom rules as saved (rules/custom.rules is the active copy, there while they're on)
     show_protocol_decode_alerts.json  # Persisted "show protocol/decoder alerts" setting
     disable.conf
     cache/                 # Suricata's compiled-rule cache (cache/sgh/), so later runs load rules faster

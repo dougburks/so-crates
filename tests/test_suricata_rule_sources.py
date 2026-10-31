@@ -22,6 +22,7 @@ import gzip
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -701,6 +702,144 @@ class TestSetupSuricataConfigProtocolDecodeAlerts(unittest.TestCase):
             self.tmpdir, network_allowed=False, show_protocol_decode_alerts=None)
         self.assertEqual(self._disable_conf_content(), '')
         self.assertIs(suricata_analyzer.get_suricata_show_protocol_decode_alerts(self.tmpdir), True)
+
+
+
+class TestCustomRules(unittest.TestCase):
+    """Custom rules on disk: saved only when every check passes, turned
+    on or off without losing them, and never touched by source
+    reconciliation. Parts of these follow the reference patch in issue
+    #75."""
+
+    RULE = 'alert tcp any any -> any any (msg:"local"; content:"x"; sid:1000001; rev:1;)'
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        self.suricata_dir = os.path.join(self.tmpdir, 'suricata')
+        self.saved = os.path.join(self.suricata_dir, 'custom.rules')
+        self.active = os.path.join(self.suricata_dir, 'rules', 'custom.rules')
+        patcher = unittest.mock.patch('suricata_analyzer.check_rules_with_suricata', return_value=[])
+        self.mock_check = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_none_saved(self):
+        self.assertEqual(suricata_analyzer.get_custom_rules(self.tmpdir), {'count': None, 'updated': None, 'enabled': False})
+        self.assertEqual(suricata_analyzer.get_custom_rules(self.tmpdir, include_text=True)['rules'], '')
+
+    def test_save_writes_both_copies_with_unix_line_endings(self):
+        count, problems = suricata_analyzer.save_custom_rules(f'# mine\r\n{self.RULE}', self.tmpdir)
+        self.assertEqual((count, problems), (1, []))
+        for path in (self.saved, self.active):
+            with open(path, newline='') as f:
+                self.assertEqual(f.read(), f'# mine\n{self.RULE}\n')
+        info = suricata_analyzer.get_custom_rules(self.tmpdir, include_text=True)
+        self.assertEqual((info['count'], info['enabled']), (1, True))
+
+    def test_problems_write_nothing(self):
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        self.mock_check.return_value = [{'line': 1, 'message': "unknown rule keyword 'foo'"}]
+        count, problems = suricata_analyzer.save_custom_rules(self.RULE.replace('content:"x"', 'foo:bar'), self.tmpdir)
+        self.assertEqual(problems, [{'line': 1, 'message': "unknown rule keyword 'foo'"}])
+        for path in (self.saved, self.active):
+            with open(path) as f:
+                self.assertIn('content:"x"', f.read())
+
+    def test_turning_off_keeps_the_saved_rules(self):
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        suricata_analyzer._set_custom_rules_enabled(self.tmpdir, False, lambda m: None)
+        self.assertFalse(os.path.exists(self.active))
+        self.assertTrue(os.path.exists(self.saved))
+        self.assertFalse(suricata_analyzer.get_custom_rules(self.tmpdir)['enabled'])
+        suricata_analyzer._set_custom_rules_enabled(self.tmpdir, True, lambda m: None)
+        self.assertTrue(os.path.exists(self.active))
+
+    def test_turning_on_with_none_saved_warns(self):
+        messages = []
+        suricata_analyzer._set_custom_rules_enabled(self.tmpdir, True, messages.append)
+        self.assertFalse(os.path.exists(self.active))
+        self.assertIn('no custom rules are saved yet', messages[0])
+
+    def test_empty_text_removes_them(self):
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        self.assertEqual(suricata_analyzer.save_custom_rules('\n  \n', self.tmpdir), (0, []))
+        self.assertFalse(os.path.exists(self.saved) or os.path.exists(self.active))
+
+    def test_reconciling_sources_leaves_custom_rules_alone(self):
+        library_dir = os.path.join(self.suricata_dir, 'rules-available')
+        _write_fake_rule_file(os.path.join(library_dir, 'et-open.rules'))
+        _write_fake_rule_file(os.path.join(library_dir, 'oisf-trafficid.rules'))
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        for sources in (['oisf/trafficid'], ['et/open']):
+            suricata_analyzer._reconcile_suricata_sources(
+                self.suricata_dir, self.tmpdir, sources, lambda m: None, network_allowed=False)
+        self.assertTrue(os.path.isfile(self.active))
+        # and they aren't counted as a curated source's rules
+        self.assertEqual(suricata_analyzer.get_suricata_rules_info(self.tmpdir)['count'], 1)
+
+    def test_setup_lists_custom_rules_and_switches_them(self):
+        os.makedirs(self.suricata_dir, exist_ok=True)
+        with open(os.path.join(self.suricata_dir, 'suricata.yaml'), 'w') as f:
+            f.write('%YAML 1.1\n---\nrule-files:\n  - suricata.rules\n')
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        suricata_analyzer.setup_suricata_config(self.tmpdir, on_progress=lambda m: None, network_allowed=False,
+                                                custom_rules_enabled=False)
+        with open(os.path.join(self.suricata_dir, 'suricata.yaml')) as f:
+            self.assertTrue(f.read().endswith('  - custom.rules\n'))
+        self.assertFalse(os.path.exists(self.active))
+        # None leaves them as they are
+        suricata_analyzer.setup_suricata_config(self.tmpdir, on_progress=lambda m: None, network_allowed=False)
+        self.assertFalse(os.path.exists(self.active))
+
+
+class TestCheckRulesWithSuricata(unittest.TestCase):
+    """Suricata's own parser check: its errors mapped to the lines they're
+    about, and never a pass when the check couldn't run."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        os.makedirs(os.path.join(self.tmpdir, 'suricata'))
+        with open(os.path.join(self.tmpdir, 'suricata', 'suricata.yaml'), 'w') as f:
+            f.write('%YAML 1.1\n---\n')
+
+    def test_errors_map_to_lines(self):
+        output = (
+            'i: suricata: This is Suricata version 8.0.7 RELEASE running in SYSTEM mode\n'
+            "E: detect-parse: unknown rule keyword 'foo'.\n"
+            'E: detect: error parsing signature "alert tcp any any -> any any (foo:bar; sid:1000003;)" from file /tmp/x/custom.rules at line 3\n'
+            'E: detect-pcre: pcre2 compile of "/(/" failed at offset 1: missing closing parenthesis\n'
+            'E: detect: error parsing signature "alert http any any -> any any (pcre:\"/(/\"; sid:1000004;)" from file /tmp/x/custom.rules at line 5\n'
+            'E: suricata: Loading signatures failed.\n')
+        self.assertEqual(suricata_analyzer._suricata_rule_problems(output, '/tmp/x/custom.rules'), [
+            {'line': 3, 'message': "unknown rule keyword 'foo'"},
+            {'line': 5, 'message': 'pcre2 compile of "/(/" failed at offset 1: missing closing parenthesis'},
+        ])
+
+    def test_an_error_with_no_line_still_fails(self):
+        problems = suricata_analyzer._suricata_rule_problems('E: suricata: failed to load /tmp/x/custom.rules.\n', '/tmp/x/custom.rules')
+        self.assertEqual(problems, [{'line': None, 'message': 'failed to load custom.rules'}])
+
+    def test_runs_suricata_on_the_rules_alone(self):
+        result = unittest.mock.Mock(returncode=0, stdout='', stderr='')
+        with unittest.mock.patch('suricata_analyzer.shutil.which', return_value='/usr/bin/suricata'), \
+             unittest.mock.patch('suricata_analyzer.subprocess.run', return_value=result) as mock_run:
+            self.assertEqual(suricata_analyzer.check_rules_with_suricata('alert ...', self.tmpdir), [])
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[:2], ['suricata', '-T'])
+        self.assertIn('-S', cmd)
+        self.assertIn('detect.sgh-mpm-caching=no', cmd)
+
+    def test_never_passes_unchecked(self):
+        with unittest.mock.patch('suricata_analyzer.shutil.which', return_value=None):
+            self.assertIn("isn't installed", suricata_analyzer.check_rules_with_suricata('x', self.tmpdir)[0]['message'])
+        with unittest.mock.patch('suricata_analyzer.shutil.which', return_value='/usr/bin/suricata'):
+            empty = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, empty, ignore_errors=True)
+            self.assertIn("isn't set up", suricata_analyzer.check_rules_with_suricata('x', empty)[0]['message'])
+            with unittest.mock.patch('suricata_analyzer.subprocess.run',
+                                     side_effect=subprocess.TimeoutExpired('suricata', 30)):
+                self.assertIn('took longer', suricata_analyzer.check_rules_with_suricata('x', self.tmpdir)[0]['message'])
 
 
 if __name__ == '__main__':

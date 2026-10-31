@@ -53,12 +53,14 @@ from suricata_analyzer import (
     _set_error, _set_phase, _clear_phase, read_error, read_phase, analysis_running,
     get_suricata_rules_info,
     get_suricata_enabled_sources, get_suricata_show_protocol_decode_alerts,
+    get_custom_rules, save_custom_rules,
     SURICATA_RULE_SOURCES, BAKED_IN_SURICATA_SOURCES,
     DEFAULT_SURICATA_SOURCES, find_extracted_file,
 )
 from stream_payload import DIRECTIONS as STREAM_DIRECTIONS, run_follow_raw, transcript_lines, parse_hexdump
 from suricata_sid_ranges import (
     SURICATA_SID_RANGES, SURICATA_BUILTIN_SID_RANGES, SURICATA_BUILTIN_LABEL,
+    SURICATA_LOCAL_SID_RANGE, SURICATA_LOCAL_LABEL,
 )
 from yara_analyzer import (
     check_yara_executable, setup_yara_rules, scan_single_file, get_yara_rules_info, analyze_standalone_file,
@@ -233,7 +235,7 @@ _rule_update_state = {
 _RULESET_LABELS = {'suricata': 'Suricata', 'yara': 'YARA', 'sigma': 'Sigma'}
 
 
-def _run_ruleset_update(name, sources=None, show_protocol_decode_alerts=None):
+def _run_ruleset_update(name, sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
     def on_progress(message):
         print(message)
         with _rule_update_lock:
@@ -241,7 +243,7 @@ def _run_ruleset_update(name, sources=None, show_protocol_decode_alerts=None):
 
     try:
         if name == 'suricata':
-            setup_suricata_config(DATA_DIR, enable_arp=bool(os.environ.get('ENABLE_ARP_LOGGING')), on_progress=on_progress, enabled_sources=sources, show_protocol_decode_alerts=show_protocol_decode_alerts)
+            setup_suricata_config(DATA_DIR, enable_arp=bool(os.environ.get('ENABLE_ARP_LOGGING')), on_progress=on_progress, enabled_sources=sources, show_protocol_decode_alerts=show_protocol_decode_alerts, custom_rules_enabled=custom_rules_enabled)
         elif name == 'yara':
             setup_yara_rules(DATA_DIR, on_progress=on_progress, force=True)
         elif name == 'sigma':
@@ -605,6 +607,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/shark-settings': 'handle_get_shark_settings',
         '/api/rule-update-status': 'handle_get_rule_update_status',
         '/api/rules-info': 'handle_get_rules_info',
+        '/api/custom-rules': 'handle_get_custom_rules',
         '/api/playbook': 'handle_get_playbook',
         '/api/ai-summary': 'handle_get_ai_summary',
     }
@@ -626,6 +629,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/delete-all-analyses': 'handle_post_delete_all_analyses',
         '/api/csp-report': 'handle_post_csp_report',
         '/api/update-rules': 'handle_post_update_rules',
+        '/api/custom-rules': 'handle_post_custom_rules',
     }
 
     # Hostnames accepted in Host/Origin headers beyond localhost and IP
@@ -640,6 +644,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         h.strip().lower()
         for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()
     )
+
+    # ALLOW_CUSTOM_RULES=false stops anyone saving custom Suricata rules -
+    # for a shared instance or a public demo, where one person's rules
+    # would change everyone's results. Rules already saved stay as they
+    # are, and can still be turned on or off.
+    ALLOW_CUSTOM_RULES = os.environ.get('ALLOW_CUSTOM_RULES', 'true').strip().lower() not in ('false', '0', 'no', 'off')
 
     def _trusted_host(self, netloc):
         """True when a Host/Origin host is safe for this localhost-first app.
@@ -1625,10 +1635,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         sources = data.get('sources')
+        custom_rules_enabled = None
         if sources is not None:
             if not isinstance(sources, list) or not all(isinstance(s, str) for s in sources):
                 self._send_error(400, "sources must be a list of strings")
                 return
+            # 'custom' turns the saved custom rules on; it isn't one of
+            # suricata-update's sources
+            custom_rules_enabled = 'custom' in sources
+            sources = [s for s in sources if s != 'custom']
             unknown = [s for s in sources if s not in SURICATA_RULE_SOURCES]
             if unknown:
                 self._send_error(400, f"unknown suricata source(s): {', '.join(unknown)}")
@@ -1653,7 +1668,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         for n in names:
             threading.Thread(
                 target=_run_ruleset_update,
-                args=(n, sources if n == 'suricata' else None, show_protocol_decode_alerts if n == 'suricata' else None),
+                args=(n, sources if n == 'suricata' else None, show_protocol_decode_alerts if n == 'suricata' else None,
+                      custom_rules_enabled if n == 'suricata' else None),
                 daemon=True).start()
         self._send_json({'status': 'started'})
 
@@ -1678,6 +1694,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         suricata_info = get_suricata_rules_info(DATA_DIR)
         suricata_info['enabledSources'] = get_suricata_enabled_sources(DATA_DIR)
         suricata_info['showProtocolDecodeAlerts'] = get_suricata_show_protocol_decode_alerts(DATA_DIR)
+        suricata_info['custom'] = {**get_custom_rules(DATA_DIR), 'allowed': self.ALLOW_CUSTOM_RULES}
         # bakedIn tells the Rules modal whether a not-yet-staged source
         # needs internet the first time it's enabled (see
         # BAKED_IN_SURICATA_SOURCES's own comment for why ipfire/dbl is the
@@ -1706,6 +1723,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         suricata_info['sidRanges'] = (
             [{'min': lo, 'max': hi, 'label': SURICATA_BUILTIN_LABEL}
              for lo, hi in SURICATA_BUILTIN_SID_RANGES]
+            + [{'min': SURICATA_LOCAL_SID_RANGE[0], 'max': SURICATA_LOCAL_SID_RANGE[1], 'label': SURICATA_LOCAL_LABEL}]
             + [{'min': min_sid, 'max': max_sid, 'label': label}
                for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES]
         )
@@ -1719,6 +1737,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # above the way it used to (see config.RULES_MAX_AGE_HOURS).
             'staleThresholdHours': config.RULES_MAX_AGE_HOURS,
         })
+
+    def handle_get_custom_rules(self, params):
+        self._send_json({
+            **get_custom_rules(DATA_DIR, include_text=True),
+            'allowed': self.ALLOW_CUSTOM_RULES,
+            'sidRange': {'min': SURICATA_LOCAL_SID_RANGE[0], 'max': SURICATA_LOCAL_SID_RANGE[1]},
+        })
+
+    def handle_post_custom_rules(self):
+        if not self.ALLOW_CUSTOM_RULES:
+            self._send_error(403, 'Custom rules are turned off on this server (ALLOW_CUSTOM_RULES)')
+            return
+        # Room for the text JSON-escaped: quotes and backslashes at most
+        # double it, and check_custom_rules refuses it past
+        # CUSTOM_RULES_MAX_BYTES itself
+        data = self._read_json_body(2 * config.CUSTOM_RULES_MAX_BYTES + 65536)
+        if data is None:
+            return
+        rules = data.get('rules')
+        if not isinstance(rules, str):
+            self._send_error(400, 'rules must be a string')
+            return
+        count, problems = save_custom_rules(rules, DATA_DIR)
+        if problems:
+            problems = [{**p, 'message': _sanitize_error_text(p['message'])} for p in problems]
+            self._send_json({'error': 'The rules were not saved', 'problems': problems}, status=400)
+            return
+        self._send_json({'saved': True, 'count': count})
 
     # Strict per-type allowlist for handle_get_playbook's `id` param - rule_id
     # is a dict key into playbook_lookup's in-memory index, not a filesystem

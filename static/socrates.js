@@ -5018,7 +5018,7 @@
         // again" checkbox state) that must only fire if Help was actually
         // open.
         function closeOtherMenuModals(exceptId) {
-            const closers = { helpModal: closeHelpModal, settingsModal: closeSettingsModal, themesModal: closeThemesModal, rulesModal: closeRulesModal, aboutModal: closeAboutModal, notesModal: closeNotesModal, securityOnionModal: closeSecurityOnionModal };
+            const closers = { helpModal: closeHelpModal, settingsModal: closeSettingsModal, themesModal: closeThemesModal, rulesModal: closeRulesModal, customRulesModal: closeCustomRulesModal, aboutModal: closeAboutModal, notesModal: closeNotesModal, securityOnionModal: closeSecurityOnionModal };
             Object.keys(closers).forEach(function(id) {
                 if (id === exceptId) return;
                 const modal = document.getElementById(id);
@@ -5483,6 +5483,7 @@
             closeDeleteModal();
             closeDeleteAllModal();
             closeReanalyzeModal();
+            closeCustomRulesModal();
             closeRulesModal();
             closeAboutModal();
             closeNotesModal();
@@ -6676,6 +6677,11 @@
             return true;
         }
         document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && document.getElementById('customRulesModal')?.classList.contains('active')) {
+                // It opens over the Rules modal: back out to that, not past it
+                closeCustomRulesModal();
+                return;
+            }
             if (e.key === 'Escape') {
                 // Escape backs out one level at a time: close whatever's
                 // open (a modal, the gear dropdown, a pivot menu) if
@@ -7212,8 +7218,33 @@
             // (renderRuleSection()) is the only way to expand/collapse
             // this, so when collapsed there's nothing to render at all.
             return suricataSourcesExpanded
-                ? `<div style="margin-top: 8px;">${decodeAlertsRow}${bulkLinks}<div class="suricata-sources-list" style="columns: 2; column-gap: 16px; max-height: 260px; overflow-y: auto; border: 1px solid var(--bg-hover); border-radius: 6px; padding: 4px 12px;">${rows}</div></div>`
+                ? `<div style="margin-top: 8px;">${decodeAlertsRow}${bulkLinks}<div class="suricata-sources-list" style="columns: 2; column-gap: 16px; max-height: 260px; overflow-y: auto; border: 1px solid var(--bg-hover); border-radius: 6px; padding: 4px 12px;">${rows}</div>${renderCustomRulesRow(info.suricata.custom)}</div>`
                 : '';
+        }
+
+        // The analyst's own rules, one more source after the curated ones:
+        // its switch rides the same selection and Update as theirs (as
+        // 'custom'), but it has an editor (showCustomRulesModal) instead
+        // of a download. Can't be switched on until some are saved.
+        function renderCustomRulesRow(custom) {
+            if (!custom) return '';
+            const saved = custom.count !== null && custom.count !== undefined;
+            const meta = saved ? `${formatRuleCount(custom.count)} — saved ${formatRuleDate(custom.updated)}` : 'none yet';
+            const action = custom.allowed
+                ? `<button data-action="open-custom-rules">${saved ? 'Edit Rules' : 'Add Rules'}</button>`
+                : '<span class="custom-rules-meta" style="margin-left: auto;">Adding rules is turned off on this server</span>';
+            return `
+                <div class="custom-rules-row">
+                    <label>
+                        <span class="theme-switch">
+                            <input type="checkbox" ${suricataSourceSelection.custom ? 'checked' : ''} ${saved ? '' : 'disabled'} data-change-action="suricata-source-toggle" data-name="custom">
+                            <span class="theme-switch-slider"></span>
+                        </span>
+                        <span>Custom rules</span>
+                    </label>
+                    <span class="custom-rules-meta">— ${meta}</span>
+                    ${action}
+                </div>`;
         }
 
         // Only one of the three per-ruleset logs and the Suricata sources
@@ -7403,6 +7434,7 @@
                         suricataSourceSelection[name] = true;
                     });
                     showProtocolDecodeAlerts = !!info.suricata.showProtocolDecodeAlerts;
+                    suricataSourceSelection.custom = !!(info.suricata.custom && info.suricata.custom.enabled);
                     suricataSelectionInitialized = true;
                 }
                 ['suricata', 'yara', 'sigma'].forEach(function(name) {
@@ -7464,6 +7496,7 @@
 
         function closeRulesModal() {
             document.getElementById('rulesModal').classList.remove('active');
+            closeCustomRulesModal();
             if (rulesPollInterval) {
                 clearInterval(rulesPollInterval);
                 rulesPollInterval = null;
@@ -7494,6 +7527,101 @@
             const rulesModal = document.getElementById('rulesModal');
             if (!rulesPollInterval && rulesModal && rulesModal.classList.contains('active')) {
                 rulesPollInterval = setInterval(refreshRulesModal, 2000);
+            }
+        }
+
+        async function showCustomRulesModal() {
+            let data;
+            try {
+                const resp = await fetch('/api/custom-rules');
+                data = await resp.json();
+            } catch (e) {
+                showToast("Custom rules couldn't be loaded: SO-CRATES couldn't be reached");
+                return;
+            }
+            const textarea = document.getElementById('customRulesInput');
+            textarea.value = data.rules || '';
+            if (data.sidRange) {
+                document.getElementById('customRulesSidRange').textContent = `${data.sidRange.min}-${data.sidRange.max}`;
+            }
+            showCustomRulesProblems([]);
+            document.getElementById('customRulesModal').classList.add('active');
+            textarea.focus();
+        }
+
+        function closeCustomRulesModal() {
+            document.getElementById('customRulesModal').classList.remove('active');
+        }
+
+        // Each problem's line is a link selecting that line in the editor.
+        function showCustomRulesProblems(problems) {
+            const list = document.getElementById('customRulesProblems');
+            list.innerHTML = problems.map(function(p) {
+                const message = escapeHtml(p.message);
+                return p.line
+                    ? `<li><a href="#" data-action="goto-custom-rule-line" data-line="${Number(p.line)}" style="color: inherit;">Line ${Number(p.line)}</a>: ${message}</li>`
+                    : `<li>${message}</li>`;
+            }).join('');
+            list.style.display = problems.length ? '' : 'none';
+        }
+
+        function selectCustomRuleLine(line) {
+            const textarea = document.getElementById('customRulesInput');
+            const lines = textarea.value.split('\n');
+            let start = 0;
+            for (let i = 0; i < line - 1 && i < lines.length; i++) start += lines[i].length + 1;
+            textarea.focus();
+            textarea.setSelectionRange(start, start + (lines[line - 1] || '').length);
+        }
+
+        // Read in the browser and put in the editor to look over - only
+        // Save sends anything.
+        async function loadCustomRulesFile(input) {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            try {
+                document.getElementById('customRulesInput').value = await file.text();
+                showCustomRulesProblems([]);
+            } catch (e) {
+                showCustomRulesProblems([{ line: null, message: `${file.name} couldn't be read` }]);
+            }
+        }
+
+        async function saveCustomRules() {
+            const saveBtn = document.getElementById('customRulesSaveBtn');
+            saveBtn.disabled = true;
+            try {
+                const resp = await fetch('/api/custom-rules', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rules: document.getElementById('customRulesInput').value }),
+                });
+                let data = {};
+                try { data = await resp.json(); } catch (e) { /* no JSON body */ }
+                if (!resp.ok) {
+                    showCustomRulesProblems(data.problems || [{ line: null, message: data.error || 'The rules were not saved' }]);
+                    return;
+                }
+                closeCustomRulesModal();
+                // The server turned them on (or removed them) - keep the
+                // switch in step, or the next Update would undo it
+                suricataSourceSelection.custom = data.count > 0;
+                const pcapOpen = currentMd5 && !isWelcomeScreen() && detectFileType(currentFileName) === 'pcap';
+                showToast(data.count > 0
+                    ? `Saved ${data.count} custom rule${data.count === 1 ? '' : 's'} - captures analyzed from now on use them`
+                    : 'Custom rules removed', data.count > 0 && pcapOpen ? {
+                    actionLabel: 'Reanalyze this one',
+                    onAction: function() {
+                        closeRulesModal();
+                        openReanalyzeModal(currentMd5, currentFileName);
+                    },
+                } : undefined);
+                await refreshRulesModal();
+            } catch (e) {
+                showCustomRulesProblems([{ line: null, message: "SO-CRATES couldn't be reached" }]);
+            } finally {
+                saveBtn.disabled = false;
             }
         }
 
@@ -14398,6 +14526,11 @@
             'close-themes-modal': () => closeThemesModal(),
             'close-notes-modal': () => closeNotesModal(),
             'close-rules-modal': () => closeRulesModal(),
+            'close-custom-rules-modal': () => closeCustomRulesModal(),
+            'open-custom-rules': () => showCustomRulesModal(),
+            'save-custom-rules': () => saveCustomRules(),
+            'load-custom-rules-file': () => document.getElementById('customRulesFileInput').click(),
+            'goto-custom-rule-line': (el) => selectCustomRuleLine(Number(el.dataset.line)),
             'close-autocomplete-modal': () => closeAutocompleteModal(),
             'confirm-delete': () => confirmDelete(),
             'confirm-delete-all': () => confirmDeleteAll(),
@@ -14551,6 +14684,7 @@
             'change-agg-page-size': (el) => changeAggPageSize(el.value),
             'suricata-source-toggle': (el) => handleSuricataSourceToggle(el.dataset.name, el.checked),
             'protocol-decode-toggle': (el) => handleShowProtocolDecodeAlertsToggle(el.checked),
+            'custom-rules-file': (el) => loadCustomRulesFile(el),
         });
 
         document.addEventListener('click', e => {

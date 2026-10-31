@@ -21130,6 +21130,173 @@ class TestRulesModal(unittest.TestCase):
         self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
 
+CUSTOM_RULES_SAVED = {'count': 2, 'updated': 5000.0, 'enabled': True, 'allowed': True}
+
+
+class TestCustomRulesEditor(unittest.TestCase):
+    """The Rules modal's Custom rules row and its editor (the
+    customRulesModal): states, the problem list, and the switch riding
+    the same Update as the curated sources."""
+
+    PRELUDE = '''
+        localStorage.setItem('socrates_hideHelp', 'true');
+        await new Promise(r => setTimeout(r, 50));
+        var posts = [];
+        var toasts = [];
+        window.showToast = function(message, opts) { toasts.push({ message: message, action: opts && opts.actionLabel }); };
+        function respond(body, status) {
+            return Promise.resolve({ ok: !status || status < 400, status: status || 200, json: () => Promise.resolve(body) });
+        }
+    '''
+
+    def _fetch(self, custom, post_response='{saved: true, count: 2}', post_status=200):
+        info = json.loads(json.dumps(RULES_INFO_RESPONSE))
+        info['suricata']['custom'] = custom
+        return '''
+            window.fetch = function(url, opts) {
+                if (opts && opts.method === 'POST') {
+                    posts.push({ url: url, body: JSON.parse(opts.body) });
+                    return respond(''' + post_response + ''', ''' + str(post_status) + ''');
+                }
+                if (url === '/api/rules-info') return respond(''' + json.dumps(info) + ''');
+                if (url === '/api/custom-rules') return respond({ rules: '# saved\\nalert tcp any any -> any any (msg:"a"; sid:1000001;)', count: 1, sidRange: { min: 1000000, max: 1999999 } });
+                return respond(''' + json.dumps(RULE_UPDATE_STATUS_IDLE) + ''');
+            };
+        '''
+
+    def test_row_states(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + '''
+            handleSuricataSourceToggle('custom', false);
+            var none = renderCustomRulesRow({ count: null, updated: null, enabled: false, allowed: true });
+            handleSuricataSourceToggle('custom', true);
+            var saved = renderCustomRulesRow({ count: 2, updated: 5000, enabled: true, allowed: true });
+            var off = renderCustomRulesRow({ count: 2, updated: 5000, enabled: true, allowed: false });
+            window.__jsdom_result = { none: none, saved: saved, off: off, missing: renderCustomRulesRow(undefined) };
+        ''')
+        self.assertIn('none yet', result['none'])
+        self.assertIn('Add Rules', result['none'])
+        self.assertIn('disabled', result['none'], "the switch can't turn on rules that don't exist")
+        self.assertIn('2 rules', result['saved'])
+        self.assertIn('Edit Rules', result['saved'])
+        self.assertIn('checked', result['saved'])
+        self.assertNotIn('disabled', result['saved'])
+        self.assertIn('turned off on this server', result['off'])
+        self.assertNotIn('open-custom-rules', result['off'])
+        self.assertEqual(result['missing'], '')
+
+    def test_switch_rides_the_suricata_update(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED) + '''
+            await showRulesModal(true);
+            var rowText = document.querySelector('.custom-rules-row').textContent;
+            await triggerRulesetUpdate('suricata');
+            var on = posts[0].body.sources;
+            handleSuricataSourceToggle('custom', false);
+            await triggerRulesetUpdate('suricata');
+            window.__jsdom_result = { rowText: rowText, on: on, off: posts[1].body.sources };
+        ''')
+        self.assertIn('Custom rules', result['rowText'])
+        self.assertIn('custom', result['on'])
+        self.assertIn('et/open', result['on'])
+        self.assertNotIn('custom', result['off'])
+
+    def test_problems_are_listed_by_line_and_nothing_closes(self):
+        from tests.jsdom_helper import js_statements
+        problems = json.dumps({'error': 'The rules were not saved', 'problems': [
+            {'line': 2, 'message': 'sid 2014726 is outside 1000000-1999999, the range custom rules use'},
+            {'line': None, 'message': '<b>whole text</b>'}]})
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED, problems, 400) + '''
+            await showRulesModal(true);
+            await showCustomRulesModal();
+            var loaded = document.getElementById('customRulesInput').value;
+            document.getElementById('customRulesInput').value = 'line one\\nline two here\\nline three';
+            await saveCustomRules();
+            var list = document.getElementById('customRulesProblems');
+            list.querySelector('[data-action="goto-custom-rule-line"]').click();
+            var t = document.getElementById('customRulesInput');
+            window.__jsdom_result = {
+                loaded: loaded,
+                sent: posts[0].body.rules,
+                open: document.getElementById('customRulesModal').classList.contains('active'),
+                listShown: list.style.display !== 'none',
+                listHtml: list.innerHTML,
+                selected: t.value.slice(t.selectionStart, t.selectionEnd),
+                toasts: toasts.length,
+            };
+        ''')
+        self.assertIn('sid:1000001', result['loaded'])
+        self.assertEqual(result['sent'], 'line one\nline two here\nline three')
+        self.assertTrue(result['open'], 'a refused save leaves the editor open with the text in it')
+        self.assertTrue(result['listShown'])
+        self.assertIn('Line 2</a>: sid 2014726 is outside', result['listHtml'])
+        self.assertIn('&lt;b&gt;whole text&lt;/b&gt;', result['listHtml'])
+        self.assertEqual(result['selected'], 'line two here')
+        self.assertEqual(result['toasts'], 0)
+
+    def test_save_closes_turns_on_and_offers_reanalyze_for_an_open_capture(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch({'count': None, 'updated': None, 'enabled': False, 'allowed': True}) + '''
+            await showRulesModal(true);
+            await triggerRulesetUpdate('suricata');
+            await showCustomRulesModal();
+            await saveCustomRules();
+            await triggerRulesetUpdate('suricata');
+            var updates = posts.filter(p => p.url === '/api/update-rules').map(p => p.body.sources.includes('custom'));
+            var welcomeToast = toasts[0];
+            currentMd5 = 'a'.repeat(32);
+            currentFileName = 'lab7.pcap';
+            window.isWelcomeScreen = function() { return false; };
+            await showCustomRulesModal();
+            await saveCustomRules();
+            window.__jsdom_result = {
+                before: updates[0], after: updates[1],
+                open: document.getElementById('customRulesModal').classList.contains('active'),
+                rulesOpen: document.getElementById('rulesModal').classList.contains('active'),
+                welcomeToast: welcomeToast, pcapToast: toasts[1],
+            };
+        ''')
+        self.assertFalse(result['before'])
+        self.assertTrue(result['after'], 'the server turned them on, so the switch must too')
+        self.assertFalse(result['open'])
+        self.assertTrue(result['rulesOpen'])
+        self.assertIn('Saved 2 custom rules', result['welcomeToast']['message'])
+        self.assertIsNone(result['welcomeToast'].get('action'))
+        self.assertEqual(result['pcapToast']['action'], 'Reanalyze this one')
+
+    def test_escape_backs_out_of_the_editor_only(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED) + '''
+            await showRulesModal(true);
+            await showCustomRulesModal();
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            var afterOne = [document.getElementById('customRulesModal').classList.contains('active'),
+                            document.getElementById('rulesModal').classList.contains('active')];
+            await showCustomRulesModal();
+            closeRulesModal();
+            window.__jsdom_result = { afterOne: afterOne,
+                                      editorAfterRulesClosed: document.getElementById('customRulesModal').classList.contains('active') };
+        ''')
+        self.assertEqual(result['afterOne'], [False, True])
+        self.assertFalse(result['editorAfterRulesClosed'])
+
+    def test_load_a_file_fills_the_editor_without_sending(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED) + '''
+            var input = { value: 'lab.rules', files: [{ name: 'lab.rules', text: () => Promise.resolve('alert tcp any any -> any any (sid:1000005;)') }] };
+            await loadCustomRulesFile(input);
+            window.__jsdom_result = { text: document.getElementById('customRulesInput').value, cleared: input.value, posts: posts.length };
+        ''')
+        self.assertEqual(result['text'], 'alert tcp any any -> any any (sid:1000005;)')
+        self.assertEqual(result['cleared'], '', 'cleared, so loading the same file again fires change')
+        self.assertEqual(result['posts'], 0)
+
+    def test_editor_markup(self):
+        self.assertIn('id="customRulesModal"', HTML_CONTENT)
+        self.assertIn('data-change-action="custom-rules-file"', HTML_CONTENT)
+        self.assertIn('accept=".rules,.txt,text/plain"', HTML_CONTENT)
+
+
 class TestAlertRulesetClassification(unittest.TestCase):
     """classifyRuleset() and its wiring into getColumnsForType/
     buildRowForEvent/extractValue/renderAlertDetails for the alert event

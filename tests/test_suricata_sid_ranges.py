@@ -45,6 +45,25 @@ class TestClassifyAlertRuleset(unittest.TestCase):
     def test_builtin_range(self):
         self.assertEqual(sr.classify_alert_ruleset(1), sr.SURICATA_BUILTIN_LABEL)
         self.assertEqual(sr.classify_alert_ruleset(500000), sr.SURICATA_BUILTIN_LABEL)
+        self.assertEqual(sr.classify_alert_ruleset(999999), sr.SURICATA_BUILTIN_LABEL)
+
+    def test_local_range(self):
+        """1000000-1999999, the range kept for local rules (custom rules
+        must use it), reads 'Local / Custom Rules' - it used to be part of
+        the built-in range."""
+        for sid in (1000000, 1000001, 1500000, 1999999):
+            self.assertEqual(sr.classify_alert_ruleset(sid), sr.SURICATA_LOCAL_LABEL, sid)
+        self.assertEqual(sr.classify_alert_ruleset(2000005), 'Emerging Threats Open')
+
+    def test_no_other_range_overlaps_the_local_range(self):
+        """Custom rules are labeled by range alone, so no curated source or
+        built-in range may ever reach into the local one."""
+        local_min, local_max = sr.SURICATA_LOCAL_SID_RANGE
+        ranges = [(lo, hi, 'built-in') for lo, hi in sr.SURICATA_BUILTIN_SID_RANGES]
+        ranges += [(lo, hi, slug) for lo, hi, slug, _label in sr.SURICATA_SID_RANGES]
+        for lo, hi, name in ranges:
+            overlaps = lo <= local_max and (hi is None or hi >= local_min)
+            self.assertFalse(overlaps, f'{name} ({lo}-{hi}) overlaps the local SID range')
 
     def test_builtin_event_rules_inside_et_open_span(self):
         """REGRESSION: Suricata's own decoder/stream/app-layer event rules
@@ -130,7 +149,8 @@ class TestSidRangesSqlCase(unittest.TestCase):
         conn = sqlite3.connect(':memory:')
         try:
             all_sids = list(SAMPLE_SIDS.values()) + [
-                1, 2210054, 2290020, 2290021, 2199999, 2300000, 999999999, -5,
+                1, 999999, 1000000, 1000001, 1999999,
+                2210054, 2290020, 2290021, 2199999, 2300000, 999999999, -5,
             ]
             for sid in all_sids:
                 row = conn.execute(f'SELECT {case_sql}', {'sid': sid}).fetchone()

@@ -356,6 +356,26 @@
             </div>
         </div>
 
+        <div class="modal" id="customRulesModal" data-action="backdrop" data-arg="close-custom-rules-modal">
+            <div class="modal-content" style="max-width: 900px;">
+                <div class="modal-header">
+                    <h3>Custom Suricata Rules</h3>
+                    <button class="modal-close" title="Close (Esc)" data-action="close-custom-rules-modal">&times;</button>
+                </div>
+                <div class="custom-rules-hint">One rule per line, each with a <code>sid</code> from <span id="customRulesSidRange">1000000-1999999</span>. Rules using dataset, datarep, iprep or Lua aren't allowed. Every rule is checked before it's saved.</div>
+                <textarea id="customRulesInput" class="notes-textarea custom-rules-textarea" spellcheck="false" placeholder="alert http any any -> any any (msg:&quot;Beacon to /gate.php&quot;; flow:established,to_server; http.uri; content:&quot;/gate.php&quot;; sid:1000001; rev:1;)"></textarea>
+                <input type="file" id="customRulesFileInput" accept=".rules,.txt,text/plain" data-change-action="custom-rules-file" style="display: none;">
+                <ul id="customRulesProblems" class="custom-rules-problems" style="display: none;"></ul>
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-top: 15px; border-top: 1px solid var(--bg-hover); margin-top: 10px;">
+                    <button data-action="load-custom-rules-file" class="modal-btn-secondary">Load a file&hellip;</button>
+                    <div style="display: flex; gap: 10px;">
+                        <button data-action="close-custom-rules-modal" class="modal-btn-secondary">Cancel</button>
+                        <button id="customRulesSaveBtn" data-action="save-custom-rules" class="modal-btn-primary">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="modal" id="autocompleteModal" data-action="backdrop" data-arg="close-autocomplete-modal">
             <div class="modal-content" style="max-width: 420px;">
                 <input type="text" id="autocompleteInput" autocomplete="off" spellcheck="false" placeholder="Type a command or theme code&hellip;" class="settings-text-input" style="width: 100%; box-sizing: border-box; margin-bottom: 10px;">

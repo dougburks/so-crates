@@ -11,6 +11,7 @@
 - **HEAD refused:** `do_HEAD` answers `405` for every path - the stdlib handler's inherited version served files straight from the working directory, bypassing `do_GET`'s Host check, routing and path normalization
 - **No CORS:** No `Access-Control-Allow-Origin` header is ever sent - cross-origin access isn't allowed, not even a wildcard
 - **Container privilege:** The Docker/Podman image's final stage runs as `USER 1000:1000`, never root
+- **Custom Suricata rules:** `POST /api/custom-rules` saves nothing unless every rule passes `validators.check_custom_rules` (size, SID range, and no `dataset`/`datarep`/`iprep`/Lua keywords - these can load or save files by path or run a script) and then `suricata -T` over the rules alone; if Suricata can't run the check, the save is refused rather than let through. `ALLOW_CUSTOM_RULES=false` turns saving off for shared instances
 - **Startup network isolation:** `main()` calls `setup_suricata_config()`/`setup_yara_rules()`/`setup_sigma_rules()` with `network_allowed=False` at boot - startup only ever uses baked-in rules or whatever's already cached on disk, and can never block on a slow or unreachable rule mirror. Refreshing rules over the network happens later, only as an explicit on-demand action from the Rules modal (`POST /api/update-rules`)
 
 See [Security](../security.md) for the user-facing summary of these same protections.

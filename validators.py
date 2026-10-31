@@ -523,3 +523,109 @@ def is_log_file_by_extension(filename):
     """Check if filename has a known log file extension."""
     lower = filename.lower()
     return any(lower.endswith(ext) for ext in LOG_EXTENSIONS)
+
+
+# Custom Suricata rules (suricata_analyzer.save_custom_rules) are refused
+# outright if they use any of these: dataset/datarep can load a file by any
+# path and dataset can save one, iprep reads reputation files, and the Lua
+# keywords run a script. A pasted rule can come from anywhere, so these
+# are screened out rather than sandboxed - the curated sources keep their
+# own use of them (IPFire DBL relies on datasets).
+CUSTOM_RULE_FORBIDDEN_KEYWORDS = frozenset({'dataset', 'datarep', 'iprep', 'lua', 'luajit', 'luaxform'})
+
+
+def custom_rule_lines(text):
+    """(line number, rule) for each rule in a rules file's text - blank
+    lines and '#' comments skipped, and a rule continued onto the next line
+    with a trailing backslash joined up, numbered by its first line."""
+    rules = []
+    pending, start = None, 0
+    for number, line in enumerate(text.splitlines(), 1):
+        if pending is None:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            pending, start = '', number
+        if line.rstrip().endswith('\\'):
+            pending += line.rstrip()[:-1]
+            continue
+        rules.append((start, pending + line.strip()))
+        pending = None
+    if pending is not None:
+        rules.append((start, pending))
+    return rules
+
+
+def rule_options(rule):
+    """A Suricata rule's options as (keyword, value) pairs - keyword
+    lowercased, value None for a bare keyword. None when the rule has no
+    parenthesized options. Split on ';' the way Suricata does: only a
+    backslash-escaped ';' doesn't end an option, quotes or not. A keyword's
+    name inside content:"..." or msg:"..." is never mistaken for it."""
+    open_paren, close_paren = rule.find('('), rule.rfind(')')
+    if open_paren < 0 or close_paren < open_paren:
+        return None
+    options, current, i = [], '', 0
+    body = rule[open_paren + 1:close_paren]
+    while i < len(body):
+        ch = body[i]
+        if ch == '\\' and i + 1 < len(body):
+            current += body[i:i + 2]
+            i += 2
+            continue
+        if ch == ';':
+            options.append(current)
+            current = ''
+        else:
+            current += ch
+        i += 1
+    options.append(current)
+    pairs = []
+    for option in options:
+        if not option.strip():
+            continue
+        keyword, sep, value = option.partition(':')
+        pairs.append((keyword.strip().lower(), value.strip() if sep else None))
+    return pairs
+
+
+def check_custom_rules(text, sid_range):
+    """The checks on custom Suricata rules that need no Suricata: size,
+    forbidden keywords, and each rule's sid - present, inside sid_range
+    (min, max), and used once. Returns (rule count, problems), problems a
+    list of {'line', 'message'} (line None for the whole text); Suricata's
+    own parser check comes after these pass."""
+    size = len(text.encode('utf-8'))
+    if size > config.CUSTOM_RULES_MAX_BYTES:
+        return 0, [{'line': None, 'message': f'The rules are {size:,} bytes - at most {config.CUSTOM_RULES_MAX_BYTES:,} are allowed'}]
+    if '\x00' in text:
+        return 0, [{'line': None, 'message': 'The rules contain a NUL byte - is this a text file?'}]
+    rules = custom_rule_lines(text)
+    if len(rules) > config.CUSTOM_RULES_MAX_COUNT:
+        return len(rules), [{'line': None, 'message': f'{len(rules):,} rules - at most {config.CUSTOM_RULES_MAX_COUNT:,} are allowed'}]
+    sid_min, sid_max = sid_range
+    problems, first_line_of_sid = [], {}
+    for number, rule in rules:
+        options = rule_options(rule)
+        if options is None:
+            problems.append({'line': number, 'message': 'not a rule - no options in parentheses'})
+            continue
+        for keyword, _value in options:
+            if keyword in CUSTOM_RULE_FORBIDDEN_KEYWORDS:
+                problems.append({'line': number, 'message': f'{keyword} is not allowed in custom rules'})
+        sids = [value for keyword, value in options if keyword == 'sid']
+        if not sids:
+            problems.append({'line': number, 'message': 'no sid'})
+            continue
+        try:
+            sid = int(sids[0])
+        except (TypeError, ValueError):
+            problems.append({'line': number, 'message': f'sid {sids[0]} is not a number'})
+            continue
+        if not sid_min <= sid <= sid_max:
+            problems.append({'line': number, 'message': f'sid {sid} is outside {sid_min}-{sid_max}, the range custom rules use'})
+        elif sid in first_line_of_sid:
+            problems.append({'line': number, 'message': f'sid {sid} is already used on line {first_line_of_sid[sid]}'})
+        else:
+            first_line_of_sid[sid] = number
+    return len(rules), problems

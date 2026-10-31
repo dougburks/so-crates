@@ -14,6 +14,7 @@ potentially malicious files. What's built in by default (see
 - **File-type routing** - PCAPs, log files, email messages, and everything else each only ever reach their own analyzer (Suricata, Zircolite/Sigma, the email parser + YARA, YARA)
 - **SSRF protection** - on "Load from URL", including a DNS-rebinding-safe resolve-then-connect
 - **Extracted files** - files Suricata carved from traffic, and an email's message and attachments, are served only by exact SHA256 from that analysis's own `filestore/` (no client-supplied path, symlinks out of it refused), as `application/octet-stream` downloads a browser never renders, capped at 25 MB
+- **Custom Suricata rules** - checked before they're saved: none that can read or write files or run a script (`dataset`, `datarep`, `iprep`, Lua), every SID in the local range and used once, and Suricata's own parser - nothing is saved unless every rule passes. `ALLOW_CUSTOM_RULES=false` turns adding them off on a shared instance
 - **Zip safety** - zip-slip and zip-bomb (decompressed-size) protection on archive extraction
 - **Upload limits** - a hard size ceiling plus an upfront disk-space check before accepting an upload
 - **Generic error messages** - no internal details or stack traces leaked

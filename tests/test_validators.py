@@ -744,3 +744,79 @@ class TestGunzipAtomically(unittest.TestCase):
         with open(self.dest, 'rb') as f:
             self.assertEqual(f.read(), b'previous complete ruleset')
         self.assertFalse(os.path.exists(self.dest + '.tmp'))
+
+
+class TestCustomRuleChecks(unittest.TestCase):
+    """The checks custom Suricata rules pass before Suricata itself sees
+    them (check_custom_rules), and the parsing they rest on."""
+
+    RANGE = (1000000, 1999999)
+
+    def _problems(self, text):
+        return validators.check_custom_rules(text, self.RANGE)[1]
+
+    def test_rule_lines_skip_comments_and_join_continued_rules(self):
+        text = ('# heading\n\n'
+                'alert tcp any any -> any any (msg:"a"; sid:1000001;)\n'
+                '  #alert tcp any any -> any any (msg:"off"; sid:1000002;)\n'
+                'alert tcp any any -> any any (msg:"b"; \\\n'
+                '    content:"x"; sid:1000003;)\n')
+        self.assertEqual(validators.custom_rule_lines(text), [
+            (3, 'alert tcp any any -> any any (msg:"a"; sid:1000001;)'),
+            (5, 'alert tcp any any -> any any (msg:"b"; content:"x"; sid:1000003;)'),
+        ])
+
+    def test_rule_options_split_like_suricata(self):
+        options = validators.rule_options(
+            'alert tcp any any -> any any (msg:"uses dataset\; really"; content:"lua"; nocase; sid:1000001;)')
+        self.assertEqual(options, [('msg', '"uses dataset\; really"'), ('content', '"lua"'),
+                                   ('nocase', None), ('sid', '1000001')])
+        self.assertIsNone(validators.rule_options('not a rule at all'))
+
+    def test_good_rules_pass(self):
+        count, problems = validators.check_custom_rules(
+            '# lab\nalert http any any -> any any (msg:"C2"; http.uri; content:"/gate.php"; sid:1000001; rev:1;)\n'
+            'alert tcp any any -> any any (msg:"filestore is fine"; filestore; sid:1999999; rev:1;)', self.RANGE)
+        self.assertEqual((count, problems), (2, []))
+
+    def test_each_forbidden_keyword_is_refused_with_its_line(self):
+        for line, keyword in enumerate(sorted(validators.CUSTOM_RULE_FORBIDDEN_KEYWORDS), 1):
+            text = '\n' * (line - 1) + f'alert ip any any -> any any (msg:"x"; {keyword}:whatever; sid:1000001;)'
+            self.assertEqual(self._problems(text),
+                             [{'line': line, 'message': f'{keyword} is not allowed in custom rules'}], keyword)
+
+    def test_keyword_names_in_content_or_msg_are_allowed(self):
+        self.assertEqual(self._problems(
+            'alert http any any -> any any (msg:"dataset lua iprep"; content:"dataset:"; sid:1000001;)'), [])
+
+    def test_sid_checks(self):
+        problems = self._problems(
+            'alert tcp any any -> any any (msg:"low"; sid:999999;)\n'
+            'alert tcp any any -> any any (msg:"high"; sid:2000000;)\n'
+            'alert tcp any any -> any any (msg:"none"; rev:1;)\n'
+            'alert tcp any any -> any any (msg:"word"; sid:abc;)\n'
+            'alert tcp any any -> any any (msg:"first"; sid:1000001;)\n'
+            'alert tcp any any -> any any (msg:"again"; sid:1000001;)')
+        self.assertEqual([(p['line'], p['message'].split(' - ')[0]) for p in problems], [
+            (1, 'sid 999999 is outside 1000000-1999999, the range custom rules use'),
+            (2, 'sid 2000000 is outside 1000000-1999999, the range custom rules use'),
+            (3, 'no sid'),
+            (4, 'sid abc is not a number'),
+            (6, 'sid 1000001 is already used on line 5'),
+        ])
+
+    def test_text_that_is_not_a_rule(self):
+        self.assertEqual(self._problems('hello world'),
+                         [{'line': 1, 'message': 'not a rule - no options in parentheses'}])
+
+    def test_size_caps(self):
+        rule = 'alert tcp any any -> any any (msg:"x"; sid:{};)\n'
+        with unittest.mock.patch.object(validators.config, 'CUSTOM_RULES_MAX_COUNT', 2):
+            self.assertEqual(self._problems(rule.format(1000001) + rule.format(1000002)), [])
+            problems = self._problems(''.join(rule.format(1000001 + i) for i in range(3)))
+            self.assertIn('at most 2 are allowed', problems[0]['message'])
+        just_fits = rule.format(1000001)
+        with unittest.mock.patch.object(validators.config, 'CUSTOM_RULES_MAX_BYTES', len(just_fits)):
+            self.assertEqual(self._problems(just_fits), [])
+            self.assertIsNone(self._problems(just_fits + ' ')[0]['line'])
+        self.assertIn('NUL', self._problems('alert\x00')[0]['message'])

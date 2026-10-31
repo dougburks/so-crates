@@ -12,7 +12,8 @@ import config
 from db import create_sqlite_db
 from storage import add_analysis_warning
 import shark_analyzer
-from validators import is_host_reachable, is_epoch_stale, gunzip_atomically
+from suricata_sid_ranges import SURICATA_LOCAL_SID_RANGE
+from validators import is_host_reachable, is_epoch_stale, gunzip_atomically, check_custom_rules, custom_rule_lines
 from yara_analyzer import run_yara_pipeline
 
 REQUIRED_EXECUTABLES = ['tcpdump', 'tshark', 'suricata', 'suricata-update']
@@ -89,6 +90,16 @@ def _source_filename(slug):
 # *.rules file, or it would always see "rules exist" from the bundled
 # event files alone even with zero curated sources active.
 _CURATED_RULE_FILENAMES = {_source_filename(slug) for slug in SURICATA_RULE_SOURCES}
+
+# The analyst's own rules (save_custom_rules): kept as saved in
+# suricata/custom.rules, and copied into the active rules/ dir under the
+# same name while they're on. Not a curated source, so _CURATED_RULE_FILENAMES
+# leaves it out - reconciling sources never touches it, and it isn't
+# counted as curated coverage.
+CUSTOM_RULES_FILENAME = 'custom.rules'
+# One save at a time - two at once could leave the saved and active
+# copies from different saves.
+_custom_rules_lock = threading.Lock()
 
 
 def check_executables():
@@ -667,7 +678,147 @@ def get_suricata_rules_info(data_dir=None):
     }
 
 
-def setup_suricata_config(data_dir=None, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None):
+def _custom_rules_paths(data_dir):
+    """(saved copy, active copy) of the custom rules."""
+    suricata_dir = os.path.join(data_dir, 'suricata')
+    return (os.path.join(suricata_dir, CUSTOM_RULES_FILENAME),
+            os.path.join(suricata_dir, 'rules', CUSTOM_RULES_FILENAME))
+
+
+def get_custom_rules(data_dir, include_text=False):
+    """{'count', 'updated', 'enabled'} for the saved custom rules (count and
+    updated None when there are none), plus 'rules', their text, when
+    include_text - left out of /api/rules-info, which the Rules modal
+    polls every 2 seconds."""
+    saved, active = _custom_rules_paths(data_dir)
+    try:
+        with open(saved, 'r', encoding='utf-8', errors='replace') as f:
+            text = f.read()
+        updated = os.path.getmtime(saved)
+    except OSError:
+        info = {'count': None, 'updated': None, 'enabled': False}
+        return {**info, 'rules': ''} if include_text else info
+    info = {'count': len(custom_rule_lines(text)), 'updated': updated, 'enabled': os.path.isfile(active)}
+    return {**info, 'rules': text} if include_text else info
+
+
+# Suricata's error lines: "E: detect-parse: unknown rule keyword 'foo'."
+# then "E: detect: error parsing signature "..." from file x at line 3".
+_SURICATA_ERROR_RE = re.compile(r'^E: [\w.-]+: (.*)$')
+_SURICATA_RULE_LINE_RE = re.compile(r'^error parsing signature .* at line (\d+)$')
+
+
+def _suricata_rule_problems(output, rules_path):
+    """Suricata's own -T output as {'line', 'message'} problems: the error
+    lines before each "error parsing signature ... at line N" are why that
+    rule failed."""
+    problems, reasons = [], []
+    for line in output.splitlines():
+        m = _SURICATA_ERROR_RE.match(line.strip())
+        if not m:
+            continue
+        message = m.group(1).replace(rules_path, CUSTOM_RULES_FILENAME)
+        at = _SURICATA_RULE_LINE_RE.match(message)
+        if at:
+            problems.append({'line': int(at.group(1)),
+                             'message': '; '.join(reasons) or 'Suricata could not parse this rule'})
+            reasons = []
+        elif message != 'Loading signatures failed.':
+            reasons.append(message.rstrip('.'))
+    if not problems:
+        problems.append({'line': None, 'message': '; '.join(reasons)[:500] or 'Suricata could not load the rules'})
+    return problems
+
+
+def check_rules_with_suricata(text, data_dir):
+    """Run Suricata's own parser (`suricata -T`) over text, loaded alone
+    (-S) so it takes well under a second rather than the many seconds
+    every source together would. Returns a list of problems, empty when
+    Suricata accepts every rule. Never passes rules it couldn't check: no
+    Suricata, no config yet or a timeout is a problem too, since an
+    analysis skips a rule Suricata can't parse without a word - a typo
+    would just be an alert that never fires."""
+    suricata_config = os.path.join(data_dir, 'suricata', 'suricata.yaml')
+    if shutil.which('suricata') is None:
+        return [{'line': None, 'message': "Suricata isn't installed, so the rules can't be checked"}]
+    if not os.path.isfile(suricata_config):
+        return [{'line': None, 'message': "Suricata isn't set up yet, so the rules can't be checked - try again in a moment"}]
+    with tempfile.TemporaryDirectory(prefix='socrates-rules-check-') as tmp:
+        rules_path = os.path.join(tmp, CUSTOM_RULES_FILENAME)
+        with open(rules_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        try:
+            result = subprocess.run(
+                # No compiled-rule cache: these few rules would only add
+                # entries to the one analyses use
+                ['suricata', '-T', '-c', suricata_config, '-S', rules_path, '-l', tmp,
+                 '--set', 'detect.sgh-mpm-caching=no'],
+                cwd=tmp, capture_output=True, text=True, errors='replace',
+                timeout=config.SURICATA_TEST_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return [{'line': None, 'message': f'Checking the rules took longer than {config.SURICATA_TEST_TIMEOUT}s'}]
+        except OSError as e:
+            return [{'line': None, 'message': f'Suricata could not be run to check the rules: {e}'}]
+        if result.returncode == 0:
+            return []
+        return _suricata_rule_problems(result.stdout + '\n' + result.stderr, rules_path)
+
+
+def _write_atomically(path, text):
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def save_custom_rules(text, data_dir):
+    """Check custom rules and, only if every check passes, save them and
+    turn them on - the next analysis loads them with the other sources.
+    Empty text removes them. Returns (rule count, problems); nothing is
+    written when there are problems, so a bad rule never reaches an
+    analysis."""
+    saved, active = _custom_rules_paths(data_dir)
+    text = text.replace('\r\n', '\n')
+    with _custom_rules_lock:
+        if not text.strip():
+            for path in (saved, active):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+            return 0, []
+        count, problems = check_custom_rules(text, SURICATA_LOCAL_SID_RANGE)
+        if problems:
+            return count, problems
+        problems = check_rules_with_suricata(text, data_dir)
+        if problems:
+            return count, problems
+        if not text.endswith('\n'):
+            text += '\n'
+        os.makedirs(os.path.dirname(active), exist_ok=True)
+        _write_atomically(saved, text)
+        _write_atomically(active, text)
+        return count, []
+
+
+def _set_custom_rules_enabled(data_dir, enabled, on_progress):
+    """Turn the saved custom rules on (copy them into the active rules/
+    dir) or off (remove that copy, keeping the saved one)."""
+    saved, active = _custom_rules_paths(data_dir)
+    with _custom_rules_lock:
+        try:
+            if enabled:
+                if os.path.isfile(saved):
+                    shutil.copy2(saved, active)
+                else:
+                    on_progress('Warning: no custom rules are saved yet - add some first')
+            elif os.path.exists(active):
+                os.remove(active)
+        except OSError as e:
+            on_progress(f"Warning: could not turn custom rules {'on' if enabled else 'off'}: {e}")
+
+
+def setup_suricata_config(data_dir=None, enable_arp=False, on_progress=print, network_allowed=True, enabled_sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
     """Ensure Suricata is configured and has rules available.
 
     Priority when network_allowed and internet is reachable: refresh every
@@ -698,6 +849,10 @@ def setup_suricata_config(data_dir=None, enable_arp=False, on_progress=print, ne
     and a plain "Update All") leaves whatever was last persisted
     untouched; an explicit True/False (from the Rules modal) updates and
     persists the setting before this run applies it.
+
+    custom_rules_enabled: optional bool turning the saved custom rules on
+    or off (see save_custom_rules) - None, like the two above, leaves them
+    as they are.
     """
     if data_dir is None:
         data_dir = os.path.expanduser('~/socrates-data')
@@ -773,9 +928,11 @@ def setup_suricata_config(data_dir=None, enable_arp=False, on_progress=print, ne
         # this module's tests) - this is what lets enabling a
         # not-yet-active source take effect on the next analysis without
         # ever touching this file again.
+        # Custom rules last, the same way - listed whether or not any are
+        # saved or on.
         rule_files_block = 'rule-files:\n' + ''.join(
             f'  - {_source_filename(slug)}\n' for slug in SURICATA_RULE_SOURCES
-        )
+        ) + f'  - {CUSTOM_RULES_FILENAME}\n'
         config_content = re.sub(
             r'(?m)^rule-files:\n(?:  - .*\n)*',
             lambda _m: rule_files_block,
@@ -813,6 +970,9 @@ def setup_suricata_config(data_dir=None, enable_arp=False, on_progress=print, ne
     # behind has_internet_access() like the old design. Only fetching a
     # source that's never been staged locally needs real internet, checked
     # once inside it.
+    if custom_rules_enabled is not None:
+        _set_custom_rules_enabled(data_dir, custom_rules_enabled, on_progress)
+
     freshly_fetched = set()
     if enabled_sources is not None:
         freshly_fetched = _reconcile_suricata_sources(suricata_dir, data_dir, enabled_sources, on_progress, network_allowed)

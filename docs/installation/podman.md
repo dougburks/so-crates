@@ -80,6 +80,15 @@ podman run --userns=keep-id --user $(id -u):$(id -g) \
 ```
 
 
+
+## Shared instances
+
+Custom Suricata rules apply to every analysis on the server, so on an instance several people use, one person's rules change everyone's results. Set `ALLOW_CUSTOM_RULES=false` to stop anyone adding them (rules already saved stay as they are):
+
+```bash
+podman run -v ~/socrates-data:/data -p 8000:8000 -e ALLOW_CUSTOM_RULES=false ghcr.io/dougburks/so-crates:main
+```
+
 ## Cloud and proxied environments
 
 If you access SO-CRATES through a proxy hostname rather than localhost or an IP (e.g. Killercoda, GitHub Codespaces, or your own reverse proxy), add the hostname to the `ALLOWED_HOSTS` environment variable or requests are rejected with "Invalid Host header" (a DNS-rebinding defense). A wildcard covers per-session hostnames:

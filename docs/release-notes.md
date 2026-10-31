@@ -1,5 +1,29 @@
 # Release Notes
 
+## Unreleased
+
+### Custom Suricata rules
+
+- **Add your own Suricata rules** in the Rules modal: paste them, or load a
+  `.rules` file, under **Custom rules** at the end of the Suricata
+  sources. Each rule needs a SID from 1,000,000 to 1,999,999. Every save
+  is checked first - size, no `dataset`, `datarep`, `iprep` or Lua, each
+  SID in range and used once, then Suricata's own parser - and nothing is
+  saved unless every rule passes, with each problem listed by line -
+  Suricata itself skips a rule it can't parse without a word, so a typo
+  would otherwise just be an alert that never fires. Saved rules apply to every capture analyzed from then on,
+  there's a switch to turn them off without losing them, and they're kept
+  in the data folder through restarts and upgrades. Suggested by
+  popeye1919, whose network forensics course has students write a rule
+  for a C2 beacon and reanalyze to see it fire
+- **Alerts with SIDs from 1,000,000 to 1,999,999 show the ruleset "Local /
+  Custom Rules"**, not "Suricata (built-in)". Nothing SO-CRATES ships uses
+  that range, and Suricata's own rules sit below it, so this also labels
+  older analyses' local rules correctly. From popeye1919's reference patch
+- **`ALLOW_CUSTOM_RULES=false`** stops anyone adding custom rules - for a
+  shared instance or a public demo, where everyone's analyses would run
+  them
+
 ## 5.1.0
 
 ### Improvements

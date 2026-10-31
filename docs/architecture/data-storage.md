@@ -9,6 +9,8 @@
     rules-available/       # Per-source rules library - seeded from baked-in/staged copies;
                            # downloads happen only via the Rules modal
     enabled_sources.json   # Which curated rule sources are currently active
+    custom.rules           # Custom rules as saved (suricata_analyzer.save_custom_rules); rules/custom.rules is
+                           # the active copy, present only while they're on, and last in suricata.yaml's rule-files
     show_protocol_decode_alerts.json  # Whether Suricata's built-in decoder rules stay active
     disable.conf
     cache/                 # Suricata's compiled-rule cache (cache/sgh/), so later runs load rules faster

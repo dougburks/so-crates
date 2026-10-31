@@ -167,7 +167,7 @@ Returns on-disk rule counts, last-updated times, and staleness for all three rul
 
 **Response:** `{"suricata": {"count": <number or null>, "updated": <epoch or null>, "stale": <boolean or null>}, "yara": {"count": ..., "updated": ..., "stale": ...}, "sigma": {"windows": {"count": ..., "updated": ..., "stale": ...}, "linux": {...}}, "staleThresholdHours": <number>}` - `count`/`updated`/`stale` are all `null` if that ruleset has never been set up (rather than `stale: true`, since "never downloaded" is a different, more urgent problem the Rules modal's counts already surface, distinct from "downloaded but old"). `stale` is `true` once `updated` is older than `staleThresholdHours` (the server's `config.RULES_MAX_AGE_HOURS`) - the single source of truth both the Rules modal's own date-color warning and the notification read, rather than each hardcoding its own threshold.
 
-The `suricata` object additionally carries the rule-source configuration the Rules modal edits via `POST /api/update-rules`: `enabledSources` (currently enabled slugs), `showProtocolDecodeAlerts` (boolean), `availableSources` (map of every known slug to its metadata, each with a `bakedIn` boolean telling the modal whether enabling that source for the first time needs internet), `defaultSources` (what "Revert to Default" restores - served here so the frontend can't drift from `DEFAULT_SURICATA_SOURCES`), and `sidRanges` (an array of `{"min", "max", "label"}` signature-ID ranges, the single source of truth `classifyRuleset()` in `static/socrates.js` uses to attribute an alert's `signature_id` to its ruleset).
+The `suricata` object additionally carries the rule-source configuration the Rules modal edits via `POST /api/update-rules`: `enabledSources` (currently enabled slugs), `showProtocolDecodeAlerts` (boolean), `availableSources` (map of every known slug to its metadata, each with a `bakedIn` boolean telling the modal whether enabling that source for the first time needs internet), `defaultSources` (what "Revert to Default" restores - served here so the frontend can't drift from `DEFAULT_SURICATA_SOURCES`), `sidRanges` (an array of `{"min", "max", "label"}` signature-ID ranges, the single source of truth `classifyRuleset()` in `static/socrates.js` uses to attribute an alert's `signature_id` to its ruleset - the built-in ranges first, then 1000000-1999999 as "Local / Custom Rules", then the curated sources), and `custom` (`{"count", "updated", "enabled", "allowed"}` for the [custom rules](#get-apicustom-rules) - `count`/`updated` `null` when none are saved; never their text, since the Rules modal polls this every 2 seconds).
 
 ---
 
@@ -183,11 +183,33 @@ Returns the live/last-run state of each ruleset's update job, polled by the Rule
 
 Starts an update for one ruleset, or all three. Triggered by the Rules modal's per-ruleset "Update" buttons and its "Update All" button.
 
-**Request body:** `{"ruleset": "suricata"|"yara"|"sigma"|"all"}` - plus two optional Suricata-only fields (ignored for the other rulesets even under `"all"`): `sources`, a list of Suricata rule-source slugs to enable (validated against `SURICATA_RULE_SOURCES`), and `showProtocolDecodeAlerts`, a boolean.
+**Request body:** `{"ruleset": "suricata"|"yara"|"sigma"|"all"}` - plus two optional Suricata-only fields (ignored for the other rulesets even under `"all"`): `sources`, a list of Suricata rule-source slugs to enable (validated against `SURICATA_RULE_SOURCES`), and `showProtocolDecodeAlerts`, a boolean. `sources` may also include `"custom"`, which turns the saved custom rules on - leaving it out of a `sources` list turns them off (they stay saved); omitting `sources` leaves them as they are.
 
 **Response:** `{"status": "started"}`
 
 **Errors:** `400` if `ruleset` isn't one of the four allowed values, if `sources` isn't a list of strings or names an unknown slug, or if `showProtocolDecodeAlerts` isn't a boolean. `409` ("Rule update already in progress") if the targeted ruleset (or, for `"all"`, any one of the three) is already running.
+
+---
+
+### `GET /api/custom-rules`
+
+The custom Suricata rules, for the Rules modal's editor.
+
+**Response:** `{"rules": <text>, "count": <number or null>, "updated": <epoch or null>, "enabled": <boolean>, "allowed": <boolean>, "sidRange": {"min": 1000000, "max": 1999999}}` - `rules` is `""` and `count`/`updated` are `null` when none are saved. `allowed` is `false` when the server runs with `ALLOW_CUSTOM_RULES=false`.
+
+---
+
+### `POST /api/custom-rules`
+
+Checks custom Suricata rules and, only if every rule passes, saves them and turns them on for the next analysis. Empty text deletes them.
+
+**Request body:** `{"rules": <text>}`
+
+The checks, in order (each stops the save): at most 1 MB and 5,000 rules; then, together, no `dataset`, `datarep`, `iprep`, `lua`, `luajit` or `luaxform` in any rule, and every rule's `sid` present, in 1000000-1999999, and used once; then `suricata -T` over the rules alone.
+
+**Response:** `{"saved": true, "count": <number>}`
+
+**Errors:** `400` `{"error": "The rules were not saved", "problems": [{"line": <number or null>, "message": <string>}, ...]}` when a check fails - nothing is written; `line` is `null` for a problem with the whole text. `400` if `rules` isn't a string, `415` without `Content-Type: application/json`, `403` when the server runs with `ALLOW_CUSTOM_RULES=false`.
 
 ---
 
