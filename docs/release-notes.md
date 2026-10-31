@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased
+## 5.2.0
 
 ### Custom Suricata rules
 
