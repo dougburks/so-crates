@@ -221,7 +221,7 @@ Checks custom Suricata rules and, only if every rule passes, saves them and turn
 
 **Request body:** `{"rules": <text>}`
 
-The checks, in order (each stops the save): at most 1 MB and 5,000 rules, and no control character but tabs and line breaks (Windows line endings are fine); then, together, no rule indented with a space or tab (Suricata skips the line), no `dataset`, `datarep`, `iprep`, `lua`, `luajit` or `luaxform` in any rule, and every rule's `sid` present, in 1000000-1999999, and used once; then `suricata -T` over the rules alone.
+The checks, in order (each stops the save): at most 1 MB and 5,000 rules, and no control character but tabs and line breaks (Windows line endings are fine); then, together, no rule indented with a space or tab (Suricata skips the line), no `dataset`, `datarep`, `iprep`, `lua`, `luajit`, `luaxform`, `filemd5`, `filesha1` or `filesha256` in any rule, and every rule's `sid` present, in 1000000-1999999, and used once; then `suricata -T` over the rules alone.
 
 **Response:** `{"saved": true, "count": <number>}`
 

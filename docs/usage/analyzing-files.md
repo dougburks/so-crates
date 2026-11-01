@@ -34,7 +34,7 @@ You can add your own Suricata rules: to test one you just wrote against a captur
 3. Every rule needs a `sid` between **1,000,000 and 1,999,999**, the range conventionally kept for local rules. Each SID can be used once
 4. Click **Save**. Every rule is checked first, and the rules are saved only if they all pass. Otherwise nothing changes, your text stays in the editor, and each problem is listed with its line number (click one to select that line):
     - more than 1 MB of text or 5,000 rules
-    - a rule using `dataset`, `datarep`, `iprep` or Lua (`lua`, `luajit`, `luaxform`) - these can read or write files or run a script, so custom rules can't use them
+    - a rule using `dataset`, `datarep`, `iprep`, Lua (`lua`, `luajit`, `luaxform`) or a hash list (`filemd5`, `filesha1`, `filesha256`) - these can read or write files or run a script, so custom rules can't use them
     - a SID outside 1,000,000-1,999,999, missing, or used twice
     - a rule indented with a space or tab - Suricata skips such a line, so the rule would never load
     - a control character other than a tab (a stray carriage return, say) - Suricata would read the line differently than it looks

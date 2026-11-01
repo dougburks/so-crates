@@ -7626,7 +7626,7 @@
         // in view are drawn (the rules can be 1 MB), moved to where the
         // textarea has them scrolled. Lines with a problem from the last
         // refused Save get a background until edited.
-        const CUSTOM_RULE_FORBIDDEN_KEYWORDS = ['dataset', 'datarep', 'iprep', 'lua', 'luajit', 'luaxform'];
+        const CUSTOM_RULE_FORBIDDEN_KEYWORDS = ['dataset', 'datarep', 'iprep', 'lua', 'luajit', 'luaxform', 'filemd5', 'filesha1', 'filesha256'];
         const RULE_HEADER_CLASSES = ['cr-action', 'cr-proto', 'cr-addr', 'cr-addr', 'cr-dir', 'cr-addr', 'cr-addr'];
         let customRuleProblemLines = new Set();
         let customRulesLineCount = 0;

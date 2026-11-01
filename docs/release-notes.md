@@ -27,8 +27,8 @@
 - **Add your own Suricata rules** in the Rules modal: paste them, or load a
   `.rules` file, under **Custom rules** at the end of the Suricata
   sources. Each rule needs a SID from 1,000,000 to 1,999,999. Every save
-  is checked first - size, no `dataset`, `datarep`, `iprep` or Lua, each
-  SID in range and used once, then Suricata's own parser - and nothing is
+  is checked first - size, no `dataset`, `datarep`, `iprep`, Lua or hash
+  lists (`filemd5`...), each SID in range and used once, then Suricata's own parser - and nothing is
   saved unless every rule passes, with each problem listed by line -
   Suricata itself skips a rule it can't parse without a word, so a typo
   would otherwise just be an alert that never fires. Saved rules apply to every capture analyzed from then on,

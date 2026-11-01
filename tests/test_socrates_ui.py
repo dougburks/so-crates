@@ -21337,7 +21337,7 @@ class TestCustomRulesEditor(unittest.TestCase):
     def test_forbidden_keywords_match_the_servers(self):
         import validators
         match = re.search(r"const CUSTOM_RULE_FORBIDDEN_KEYWORDS = \[([^\]]*)\]", JS_CONTENT)
-        self.assertEqual(set(re.findall(r"'([a-z]+)'", match.group(1))), set(validators.CUSTOM_RULE_FORBIDDEN_KEYWORDS))
+        self.assertEqual(set(re.findall(r"'([a-z0-9]+)'", match.group(1))), set(validators.CUSTOM_RULE_FORBIDDEN_KEYWORDS))
 
     def test_highlight_layer_matches_the_text_and_marks_problems(self):
         from tests.jsdom_helper import js_statements

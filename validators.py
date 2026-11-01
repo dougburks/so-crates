@@ -527,11 +527,14 @@ def is_log_file_by_extension(filename):
 
 # Custom Suricata rules (suricata_analyzer.save_custom_rules) are refused
 # outright if they use any of these: dataset/datarep can load a file by any
-# path and dataset can save one, iprep reads reputation files, and the Lua
-# keywords run a script. A pasted rule can come from anywhere, so these
-# are screened out rather than sandboxed - the curated sources keep their
-# own use of them (IPFire DBL relies on datasets).
-CUSTOM_RULE_FORBIDDEN_KEYWORDS = frozenset({'dataset', 'datarep', 'iprep', 'lua', 'luajit', 'luaxform'})
+# path and dataset can save one, iprep reads reputation files, the Lua
+# keywords run a script, and filemd5/filesha1/filesha256 load a hash list
+# by any path - a custom rule has no list of its own to point them at, so
+# all they could do is probe which files exist. A pasted rule can come from
+# anywhere, so these are screened out rather than sandboxed - the curated
+# sources keep their own use of them (IPFire DBL relies on datasets).
+CUSTOM_RULE_FORBIDDEN_KEYWORDS = frozenset({'dataset', 'datarep', 'iprep', 'lua', 'luajit', 'luaxform',
+                                            'filemd5', 'filesha1', 'filesha256'})
 
 
 def _rule_file_lines(text):
