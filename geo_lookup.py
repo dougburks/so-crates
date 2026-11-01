@@ -58,10 +58,6 @@ def _load(base_dir):
         return index
 
 
-def available(base_dir=None):
-    return _load(base_dir or GEOIP_DIR) is not None
-
-
 def info(base_dir=None):
     """{'source', 'date'} of the baked-in data, or None without it."""
     index = _load(base_dir or GEOIP_DIR)
@@ -92,8 +88,8 @@ def _country(ip, base_dir):
         return UNKNOWN
     if addr.version == 6 and addr.ipv4_mapped:
         addr = addr.ipv4_mapped
-    if addr.version == 4 and addr.is_reserved:
-        return UNKNOWN   # 240/4: never assigned, so no network of anyone's
+    if addr.version == 4 and addr.is_reserved and int(addr) != 0xFFFFFFFF:
+        return UNKNOWN   # 240/4: never assigned, so no network of anyone's - but its broadcast, which is local
     if addr.is_multicast or not addr.is_global:
         # private, loopback, link-local, unspecified, CGNAT, multicast
         return LOCAL

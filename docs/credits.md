@@ -26,7 +26,7 @@ SO-CRATES is built on many excellent open-source projects and freely available r
 | [NMAP Scan Detection](https://github.com/aleksibovellan/opnsense-suricata-nmaps) | MIT | Suricata network rules (optional) |
 | [Antiphishing](https://github.com/julioliraup/Antiphishing) | GPL-3.0-only | Suricata network rules (optional) |
 | [The Hunter's Ledger](https://the-hunters-ledger.com/) | CC-BY-4.0 | Suricata network rules (optional) |
-| [D3](https://d3js.org/) | ISC | Sankey diagram visualization |
+| [D3](https://d3js.org/) | ISC | Sankey diagram and Traffic Map rendering |
 | [d3-sankey](https://github.com/d3/d3-sankey) | BSD-3-Clause | Sankey diagram layout |
 | [DB-IP IP to Country Lite](https://db-ip.com/db/download/ip-to-country-lite) | CC-BY-4.0 | IP address to country for the Traffic Map ([IP Geolocation by DB-IP](https://db-ip.com)) |
 | [Natural Earth](https://www.naturalearthdata.com/) | Public domain | Traffic Map's world (1:110m countries) |

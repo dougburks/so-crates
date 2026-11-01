@@ -7,7 +7,7 @@ Browser ──▶ socrates.py (Python HTTP server, port 8000)
                 │
                 ├──▶ Suricata (subprocess, analyzes PCAPs → eve.json)
                 ├──▶ Zircolite (subprocess, analyzes log files → Sigma matches)
-                ├──▶ YARA (scans binary/other files → yara_matches.json)
+                ├──▶ YARA (scans binary/other files → events.db; a PCAP's extracted files → yara_matches.json)
                 ├──▶ email_analyzer.py (in-process: parses .eml → email/link/fileinfo events, YARA on attachments)
                 ├──▶ exiftool (subprocess, optional EXIF metadata on binary files)
                 ├──▶ SQLite (indexes eve.json/Sigma matches → events.db)

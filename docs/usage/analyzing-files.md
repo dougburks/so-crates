@@ -36,6 +36,8 @@ You can add your own Suricata rules: to test one you just wrote against a captur
     - more than 1 MB of text or 5,000 rules
     - a rule using `dataset`, `datarep`, `iprep` or Lua (`lua`, `luajit`, `luaxform`) - these can read or write files or run a script, so custom rules can't use them
     - a SID outside 1,000,000-1,999,999, missing, or used twice
+    - a rule indented with a space or tab - Suricata skips such a line, so the rule would never load
+    - a control character other than a tab (a stray carriage return, say) - Suricata would read the line differently than it looks
     - anything Suricata itself rejects, in Suricata's own words (an unknown keyword, a bad `pcre`...)
 
 The editor colors each rule as you type: the action, protocol and direction, option keywords, quoted strings, `|hex|` bytes and comments, with a forbidden keyword underlined in red. Options end at every `;` that isn't escaped with a backslash, quotes or not, as Suricata reads them - so a missing `;` or a stray one inside a `msg` shows up as text colored wrong. After a refused save, each line with a problem is shaded until you edit it.

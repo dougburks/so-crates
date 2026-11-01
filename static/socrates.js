@@ -8312,10 +8312,7 @@
         const TRAFFIC_MAP_SPEED_KEY = 'socrates_trafficMapSpeed';
 
         function trafficMapPref(key, fallback) {
-            try { const v = localStorage.getItem(key); return v === null ? fallback : v; } catch (e) { return fallback; }
-        }
-        function setTrafficMapPref(key, value) {
-            try { localStorage.setItem(key, value); } catch (e) { /* private mode */ }
+            return safeStorageGet(localStorage, key) ?? fallback;
         }
 
         function trafficMapCountries() {
@@ -8484,6 +8481,8 @@
             const bez = (a, c, b, t) => (1 - t) * (1 - t) * a + 2 * (1 - t) * t * c + t * t * b;
             const rgba = (c, a) => `rgba(${c.r | 0},${c.g | 0},${c.b | 0},${a})`;
             const animating = () => animateBox.checked;
+            // an alert's color key - any severity, a custom rule's priority:9 included
+            const sevKind = sev => COLORS.SEVERITY[sev] ? 's' + sev : 'sdefault';
 
             function readColors() {
                 const cs = getComputedStyle(document.documentElement);
@@ -8491,7 +8490,7 @@
                 colors = { bg: c('--bg-secondary', '#161b22'), bg2: c('--bg-tertiary', '#21262d'), muted: c('--text-muted', '#8b949e'),
                     bright: c('--text-bright', '#f0f6fc'), flow: c('--accent', '#58a6ff') };
                 colors.accent = colors.flow;
-                for (const s of [1, 2, 3]) colors['s' + s] = d3.rgb(COLORS.SEVERITY[s]);
+                for (const s in COLORS.SEVERITY) colors['s' + s] = d3.rgb(COLORS.SEVERITY[s]);
                 light = d3.hsl(colors.bg).l > 0.55;
                 colors.dot = d3.rgb(d3.interpolateRgb(colors.bg, colors.muted)(light ? 0.3 : 0.34));
             }
@@ -8608,7 +8607,7 @@
                     const f = Math.log1p(n) / max;
                     routeArc(ctx, k, 'flow', aMin + (aMax - aMin) * f, wMin + (wMax - wMin) * f);
                 }
-                for (const [k, sev] of alertRoutes) routeArc(ctx, k, 's' + sev, Math.min(1, aMax + 0.3), wMax);
+                for (const [k, sev] of alertRoutes) routeArc(ctx, k, sevKind(sev), Math.min(1, aMax + 0.3), wMax);
             }
 
             function control(a, b) {
@@ -8670,7 +8669,7 @@
                 // one label per landing place - a server many alerts land on
                 // shows the latest, rather than a stack of them
                 labels = labels.filter(l => Math.hypot(l.x - at[0], l.y - at[1]) > 40);
-                labels.push({ x: at[0], y: at[1], born, text: al[4], kind: 's' + al[3] });
+                labels.push({ x: at[0], y: at[1], born, text: al[4], kind: sevKind(al[3]) });
                 if (labels.length > 4) labels.shift();
             }
 
@@ -8710,7 +8709,7 @@
                 for (; ai < data.alerts.length && data.alerts[ai][0] < ct; ai++) {
                     const al = data.alerts[ai];
                     tallyAlert(al); feed.unshift(al); newAlert = true;
-                    if (show && al[1] !== '??' && al[2] !== '??') spawnArc(al[1], al[2], now, 's' + al[3], 2, Math.random() * 120, al);
+                    if (show && al[1] !== '??' && al[2] !== '??') spawnArc(al[1], al[2], now, sevKind(al[3]), 2, Math.random() * 120, al);
                 }
                 if (newAlert) { feed.length = Math.min(feed.length, 6); renderFeed(true); }
                 if (p >= 1) { playing = false; setPlayIcon(); }
@@ -8864,7 +8863,7 @@
                 g.addColorStop(0, rgba(colors.accent, 0.85)); g.addColorStop(1, rgba(colors.accent, 0.15));
                 hx.fillStyle = g; hx.fill(); hx.restore();
                 for (const al of data.alerts) {
-                    hx.fillStyle = rgba(colors['s' + al[3]] || colors.s3, al[0] <= capTime() ? 1 : 0.45);
+                    hx.fillStyle = rgba(colors[sevKind(al[3])], al[0] <= capTime() ? 1 : 0.45);
                     hx.fillRect(al[0] / data.span * w - 0.75, 0, 1.5, 6);
                 }
             }
@@ -8934,12 +8933,12 @@
             track.addEventListener('pointerdown', e => { dragging = true; track.setPointerCapture(e.pointerId); seekFrom(e); });
             track.addEventListener('pointermove', e => { if (dragging) seekFrom(e); });
             track.addEventListener('pointerup', () => { dragging = false; });
-            speedSel.addEventListener('change', () => setTrafficMapPref(TRAFFIC_MAP_SPEED_KEY, speedSel.value));
+            speedSel.addEventListener('change', () => safeStorageSet(localStorage, TRAFFIC_MAP_SPEED_KEY, speedSel.value));
             animateBox.addEventListener('change', () => {
-                setTrafficMapPref(TRAFFIC_MAP_ANIMATE_KEY, String(animateBox.checked));
+                safeStorageSet(localStorage, TRAFFIC_MAP_ANIMATE_KEY, String(animateBox.checked));
                 arcs = []; ripples = []; labels = []; fxx.clearRect(0, 0, W, H); redrawAll();
             });
-            lanSel.addEventListener('change', () => { setTrafficMapPref(TRAFFIC_MAP_LAN_KEY, lanSel.value); layout(); });
+            lanSel.addEventListener('change', () => { safeStorageSet(localStorage, TRAFFIC_MAP_LAN_KEY, lanSel.value); layout(); });
 
             const themeObserver = new MutationObserver(() => { readColors(); renderFeed(false); redrawAll(); });
             themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'style'] });

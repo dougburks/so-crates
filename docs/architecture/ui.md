@@ -9,7 +9,7 @@ Four files:
 | `static/socrates.css` | All styles |
 | `static/socrates.js` | All JavaScript |
 
-`socrates.html` loads them via `<script src>` and `<link>` tags - `theme-boot.js` parser-blocking in `<head>`, so the theme applies before anything draws. D3 and d3-sankey are vendored in `static/` for offline use; CyberChef is baked into the container image and served at `/cyberchef/` (see [Architecture](index.md)).
+`socrates.html` loads them via `<script src>` and `<link>` tags - `theme-boot.js` parser-blocking in `<head>`, so the theme applies before anything draws. D3, d3-sankey and topojson-client (with the Traffic Map's `world-110m.json`) are vendored in `static/` for offline use; CyberChef is baked into the container image and served at `/cyberchef/` (see [Architecture](index.md)).
 
 ## UI States
 

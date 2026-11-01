@@ -75,7 +75,7 @@ A capture of more than 3 million packets isn't run through tshark until you ask,
 - **Links** - every web link in the message, with its domain and visible text. The **Mismatch** column shows Yes for a link whose text names one domain (`https://www.bank.example/login`) while it actually goes to another - a classic phishing trick
 - **File Info** - the message itself and each attachment, decoded, with hashes, file type and metadata. Each has a **Send to CyberChef** button
 - **File Alerts** - YARA matches on the message or its decoded attachments. Scanning them decoded catches malware that base64 encoding hides from a scan of the raw message
-- **Aggregation Tables, Search & Filtering** - the same as PCAP mode. There's no Sankey diagram or All Events view, since an email has no network flows
+- **Aggregation Tables, Search & Filtering** - the same as PCAP mode. There's no Sankey diagram, Traffic Map or All Events view, since an email has no network flows
 
 The message's HTML is read for its links and text but never displayed as a web page.
 

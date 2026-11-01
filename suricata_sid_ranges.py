@@ -78,7 +78,8 @@ RETIRED_SOURCES = {'abuse.ch/urlhaus'}
 # the low one ends below the local range (and so below et/open's floor,
 # 2000005), so neither local rules nor et/open rules outside the
 # event-rule block are ever claimed as built-in. Suricata 8's own bundled
-# rules that are on all sit below 300000 or in 2200000-2299999.
+# rules that are enabled by default all sit below 300000 or in
+# 2200000-2299999.
 SURICATA_BUILTIN_SID_RANGES = [(1, 999999), (2200000, 2299999)]
 SURICATA_BUILTIN_LABEL = 'Suricata (built-in)'
 

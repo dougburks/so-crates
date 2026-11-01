@@ -534,26 +534,44 @@ def is_log_file_by_extension(filename):
 CUSTOM_RULE_FORBIDDEN_KEYWORDS = frozenset({'dataset', 'datarep', 'iprep', 'lua', 'luajit', 'luaxform'})
 
 
-def custom_rule_lines(text):
-    """(line number, rule) for each rule in a rules file's text - blank
-    lines and '#' comments skipped, and a rule continued onto the next line
-    with a trailing backslash joined up, numbered by its first line."""
-    rules = []
+def _rule_file_lines(text):
+    """('rule', line number, rule) for each rule in a rules file's text, read
+    the way Suricata's loader reads it: lines end at '\\n' only, a line
+    starting with '#', a space or a tab is skipped, and a rule continued
+    onto the next line with a trailing backslash is joined up, numbered by
+    its first line. ('indented', line number, text) for a skipped line that
+    holds more than a comment - a rule Suricata would never load."""
     pending, start = None, 0
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in enumerate(text.split('\n'), 1):
+        line = line.rstrip('\r')
         if pending is None:
-            stripped = line.strip()
-            if not stripped or stripped.startswith('#'):
+            if not line.strip() or line.startswith('#'):
+                continue
+            if line[0] in ' \t':
+                if not line.strip().startswith('#'):
+                    yield 'indented', number, line.strip()
                 continue
             pending, start = '', number
         if line.rstrip().endswith('\\'):
             pending += line.rstrip()[:-1]
             continue
-        rules.append((start, pending + line.strip()))
+        yield 'rule', start, pending + line.strip()
         pending = None
     if pending is not None:
-        rules.append((start, pending))
-    return rules
+        yield 'rule', start, pending
+
+
+def custom_rule_lines(text):
+    """(line number, rule) for each rule Suricata would load from a rules
+    file's text - see _rule_file_lines."""
+    return [(number, rule) for kind, number, rule in _rule_file_lines(text) if kind == 'rule']
+
+
+# Characters Python would take for the end of a line but Suricata wouldn't
+# (or would read as part of the rule): a rule checked line by line here
+# must be the rule Suricata loads, or a forbidden keyword could hide behind
+# a stray carriage return
+_RULE_TEXT_CONTROL_RE = re.compile('[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]')
 
 
 def rule_options(rule):
@@ -610,11 +628,19 @@ def check_custom_rules(text, sid_range):
         return 0, [{'line': None, 'message': f'The rules are {size:,} bytes - at most {config.CUSTOM_RULES_MAX_BYTES:,} are allowed'}]
     if '\x00' in text:
         return 0, [{'line': None, 'message': 'The rules contain a NUL byte - is this a text file?'}]
+    text = text.replace('\r\n', '\n')
+    control = _RULE_TEXT_CONTROL_RE.search(text)
+    if control:
+        return 0, [{'line': text.count('\n', 0, control.start()) + 1,
+                    'message': f'a control character (U+{ord(control.group()):04X}) - only tabs and line breaks belong in rules'}]
     rules = custom_rule_lines(text)
     if len(rules) > config.CUSTOM_RULES_MAX_COUNT:
         return len(rules), [{'line': None, 'message': f'{len(rules):,} rules - at most {config.CUSTOM_RULES_MAX_COUNT:,} are allowed'}]
     sid_min, sid_max = sid_range
     problems, first_line_of_sid = [], {}
+    for kind, number, _line in _rule_file_lines(text):
+        if kind == 'indented':
+            problems.append({'line': number, 'message': 'starts with a space or tab - Suricata skips such a line, so this rule would never load'})
     for number, rule in rules:
         options = rule_options(rule)
         if options is None:

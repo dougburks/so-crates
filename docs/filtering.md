@@ -11,7 +11,7 @@ object (written by the pivot menu's Include/Exclude/Only actions -
 table row cell or aggregation-table value is clicked):
 
 ```js
-let currentFilters = {};
+var currentFilters = {};
 // Example: { "Dest Port": "80", "Source IP": { "include": ["10.0.0.1"], "exclude": [] } }
 ```
 

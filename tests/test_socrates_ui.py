@@ -23398,6 +23398,29 @@ class TestTrafficMap(unittest.TestCase):
         self.assertEqual(result['clicked'], ['US'])
         self.assertFalse(result['credit'])
 
+    def test_any_alert_severity_draws(self):
+        """Severity 4 (Suricata's tcp-connection class) and a custom rule's
+        priority:9 have colors too - a missing one threw on every frame."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var root = document.createElement('div');
+            document.body.appendChild(root);
+            var map = createTrafficMap(root, world);
+            var data = Object.assign({}, mapData, { alertCount: 2, alerts: [
+                [0.5, 'US', 'FR', 4, 'TCP connection', '8.8.8.8', '203.0.113.9'],
+                [0.6, 'SG', 'FR', 9, 'custom priority', '103.1.1.1', '203.0.113.9']] });
+            var error = null;
+            try {
+                map.setData(data, new Set(), false);
+                map.seek(1);
+                map.seek(0.5);
+            } catch (e) { error = String(e); }
+            window.__jsdom_result = { error: error, alerts: root.querySelector('[data-tm="alerts"]').textContent };
+            map.destroy();
+        """, with_d3=True)
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['alerts'], '2')
+
     def test_notes_for_no_data_and_no_location_data(self):
         from tests.jsdom_helper import js_statements
         result = js_statements(self.STUBS + r"""

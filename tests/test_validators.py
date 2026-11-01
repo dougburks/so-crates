@@ -763,6 +763,32 @@ class TestCustomRuleChecks(unittest.TestCase):
             (5, 'alert tcp any any -> any any (msg:"b"; content:"x"; sid:1000003;)'),
         ])
 
+    def test_indented_rule_is_a_problem(self):
+        """Suricata skips a line starting with a space or tab, so an indented
+        rule would be saved and never load."""
+        problems = self._problems('alert tcp any any -> any any (msg:"a"; sid:1000001;)\n'
+                                  '\talert tcp any any -> any any (msg:"b"; sid:1000002;)\n'
+                                  '  # an indented comment is fine\n')
+        self.assertEqual([p['line'] for p in problems], [2])
+        self.assertIn('starts with a space or tab', problems[0]['message'])
+
+    def test_control_characters_are_refused(self):
+        """Python's splitlines() ends a line at a lone carriage return (and
+        more), Suricata only at a newline - so a forbidden keyword could hide
+        on what looked like a comment. Lines are read as Suricata reads them,
+        and such characters are refused."""
+        hidden = 'alert tcp any any -> any any (sid:1000002; msg:"x)\r#"; dataset:isset,x;)'
+        for ch in ('\r', '\x0b', '\x0c', '\x1c', '\x85', ' '):
+            with self.subTest(ch=repr(ch)):
+                problems = self._problems('# lab\n' + hidden.replace('\r', ch))
+                self.assertEqual(len(problems), 1)
+                self.assertEqual(problems[0]['line'], 2)
+                self.assertIn('control character', problems[0]['message'])
+        # Windows line endings are fine
+        count, problems = validators.check_custom_rules(
+            'alert tcp any any -> any any (msg:"a"; sid:1000001;)\r\n# note\r\n', self.RANGE)
+        self.assertEqual((count, problems), (1, []))
+
     def test_rule_options_split_like_suricata(self):
         options = validators.rule_options(
             'alert tcp any any -> any any (msg:"uses dataset\\; really"; content:"lua"; nocase; sid:1000001;)')

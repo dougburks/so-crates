@@ -14,10 +14,12 @@ All analyzed files are stored in `~/socrates-data/`. It holds a set of shared ru
                            # copies; fresh downloads only happen via the Rules modal
     enabled_sources.json   # Which rule sources are currently enabled
     custom.rules           # Your custom rules as saved (rules/custom.rules is the active copy, there while they're on)
+    etpro.code             # Your Emerging Threats Pro access code, if saved (readable only by the user SO-CRATES runs as)
     show_protocol_decode_alerts.json  # Persisted "show protocol/decoder alerts" setting
     disable.conf
     cache/                 # Suricata's compiled-rule cache (cache/sgh/), so later runs load rules faster
-  zircolite/               # Optional: only a fallback zircolite.py copy for manual installs; the app looks
+  zircolite/               # Optional: only a fallback zircolite.py copy for manual installs (always
+                           # ~/socrates-data/zircolite/, whatever DATA_DIR is); the app looks
                            # for `zircolite`/`zircolite.py` on PATH first (installed via pip, or baked into
                            # the Docker image at build time) - never auto-cloned at runtime
   sigma-rules/

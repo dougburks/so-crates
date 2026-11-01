@@ -43,7 +43,7 @@ class TestCountry(unittest.TestCase):
 
     def test_addresses_that_dont_route_are_local(self):
         for ip in ('10.1.2.3', '172.16.0.1', '192.168.1.1', '127.0.0.1', '169.254.1.1', '100.64.1.1',
-                   '224.0.0.251', '239.255.255.250', '0.0.0.0', 'fe80::1', 'fd00::1', '::1', 'ff02::fb'):
+                   '224.0.0.251', '239.255.255.250', '0.0.0.0', '255.255.255.255', 'fe80::1', 'fd00::1', '::1', 'ff02::fb'):
             with self.subTest(ip=ip):
                 self.assertEqual(self.cc(ip), geo_lookup.LOCAL)
 
@@ -56,12 +56,10 @@ class TestCountry(unittest.TestCase):
                 self.assertEqual(self.cc(ip), geo_lookup.UNKNOWN)
 
     def test_info(self):
-        self.assertTrue(geo_lookup.available(self.dir))
         self.assertEqual(geo_lookup.info(self.dir), {'source': 'DB-IP IP to Country Lite', 'date': '2026-11'})
 
     def test_without_data_public_addresses_are_unknown(self):
         missing = os.path.join(self.tmpdir, 'none')
-        self.assertFalse(geo_lookup.available(missing))
         self.assertIsNone(geo_lookup.info(missing))
         self.assertEqual(geo_lookup.country('8.8.8.8', missing), geo_lookup.UNKNOWN)
         self.assertEqual(geo_lookup.country('10.0.0.1', missing), geo_lookup.LOCAL)
@@ -81,7 +79,7 @@ class TestCountry(unittest.TestCase):
                 else:
                     with gzip.open(path, 'wb') as f:
                         f.write(content)
-                self.assertFalse(geo_lookup.available(bad))
+                self.assertIsNone(geo_lookup.info(bad))
                 self.assertEqual(geo_lookup.country('8.8.8.8', bad), geo_lookup.UNKNOWN)
 
 
