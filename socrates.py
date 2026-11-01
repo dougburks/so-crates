@@ -46,7 +46,7 @@ from storage import (
     non_artifact_files, resolve_display_name, remove_artifacts, restore_meta, finished_analysis_dirs,
 )
 from analysis_cache import (
-    SANKEY_CACHE, AGGREGATION_CACHE, AGGREGATION_TOTALS_CACHE, ALL_CACHES, CACHE_LOCK,
+    SANKEY_CACHE, AGGREGATION_CACHE, AGGREGATION_TOTALS_CACHE, TRAFFIC_MAP_CACHE, ALL_CACHES, CACHE_LOCK,
     cache_put, evict_analysis_cache, cacheable_aggregation_key,
 )
 from suricata_analyzer import (
@@ -76,6 +76,7 @@ from ohmydebn_colors import (
 from email_analyzer import analyze_message, remove_filestore
 import shark_analyzer
 from findings import query_findings
+from traffic_map import empty_traffic_map, get_traffic_map_data
 from playbook_lookup import get_playbook
 from samples import SAMPLES
 from ai_summary_lookup import get_ai_summary
@@ -586,6 +587,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/count': 'handle_get_count',
         '/api/findings': 'handle_get_findings',
         '/api/sankey-data': 'handle_get_sankey_data',
+        '/api/traffic-map': 'handle_get_traffic_map',
         '/api/aggregation-data': 'handle_get_aggregation_data',
         '/api/aggregation-totals': 'handle_get_aggregation_totals',
         '/api/download-stream': 'handle_get_download_stream',
@@ -935,6 +937,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     cache_put(SANKEY_CACHE, cache_key, data)
             else:
                 data = get_sankey_data_sqlite(db_file, event_type, q)
+        except Exception:
+            self._send_error(500, 'Database error')
+            return
+        self._send_json(data)
+
+    def handle_get_traffic_map(self, params):
+        md5 = params.get('md5', [''])[0]
+        dir_path, error = self._resolve_md5_dir(md5)
+        if error:
+            self._send_error(400, error)
+            return
+        q = self._parse_search_terms(params)
+        db_file = os.path.join(dir_path, 'events.db')
+        if not os.path.exists(db_file):
+            self._send_json(empty_traffic_map())
+            return
+        try:
+            if q is None:
+                with CACHE_LOCK:
+                    cached = TRAFFIC_MAP_CACHE.get((md5,))
+                if cached is not None:
+                    self._send_json(cached)
+                    return
+                data = get_traffic_map_data(db_file)
+                with CACHE_LOCK:
+                    cache_put(TRAFFIC_MAP_CACHE, (md5,), data)
+            else:
+                data = get_traffic_map_data(db_file, q)
         except Exception:
             self._send_error(500, 'Database error')
             return

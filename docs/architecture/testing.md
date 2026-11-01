@@ -27,6 +27,8 @@ Twenty test files serve as executable specifications:
 - **test_ohmydebn_colors.py** - OhMyDebn theme-sync color derivation: `colors.toml`/`alacritty.toml` parsing, contrast-safety adjustments
 - **test_suricata_rule_sources.py** - Multi-ruleset Suricata source support: per-source fetch/enable/disable, baked-in library seeding
 - **test_suricata_sid_ranges.py** - SID-range-to-ruleset classification, and its consistency with `SURICATA_RULE_SOURCES`
+- **test_geo_lookup.py** - IP address to country: DB-IP ranges for IPv4 and IPv6, addresses that don't route as `LAN`, missing or corrupt data, and `scripts/build_geoip.py`'s checks on a download
+- **test_traffic_map.py** - The Traffic Map's data (flows bucketed by time and country, alerts, the most severe kept) and `country:` search terms filtering every query
 - **test_playbook_lookup.py** - Security Onion Playbooks lookup: exact-rule/engine-fallback resolution, index caching
 - **test_ai_summary_lookup.py** - AI-generated rule summary lookup: exact-match resolution (no fallback), index caching
 - **test_stream_payload.py** - Stream payloads: the `tshark` follow command (IPv6 bracketing) and per-direction parsing of its output, the ASCII transcript and the hexdump's parsing, against real `tshark` runs on a generated pcap (`tests/pcap_fixtures.py`)

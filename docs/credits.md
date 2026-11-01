@@ -28,6 +28,11 @@ SO-CRATES is built on many excellent open-source projects and freely available r
 | [The Hunter's Ledger](https://the-hunters-ledger.com/) | CC-BY-4.0 | Suricata network rules (optional) |
 | [D3](https://d3js.org/) | ISC | Sankey diagram visualization |
 | [d3-sankey](https://github.com/d3/d3-sankey) | BSD-3-Clause | Sankey diagram layout |
+| [DB-IP IP to Country Lite](https://db-ip.com/db/download/ip-to-country-lite) | CC-BY-4.0 | IP address to country for the Traffic Map ([IP Geolocation by DB-IP](https://db-ip.com)) |
+| [Natural Earth](https://www.naturalearthdata.com/) | Public domain | Traffic Map's world (1:110m countries) |
+| [world-atlas](https://github.com/topojson/world-atlas) | ISC | Natural Earth's countries as TopoJSON |
+| [topojson-client](https://github.com/topojson/topojson-client) | ISC | Decoding the Traffic Map's world |
+| [i18n-iso-countries](https://github.com/michaelwittig/node-i18n-iso-countries) | MIT | Country names for the Traffic Map |
 | [CyberChef](https://github.com/gchq/CyberChef) | Apache-2.0 | Built-in data decoding and analysis (pivot-menu lookup, Send to CyberChef) |
 | [tcpdump](https://www.tcpdump.org/) | BSD-3-Clause | Stream/hexdump carving |
 | [Wireshark/tshark](https://www.wireshark.org/) | GPL-2.0-only | ASCII transcript extraction, and decoding the protocols Suricata doesn't parse |

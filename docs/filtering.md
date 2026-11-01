@@ -22,7 +22,7 @@ shapes - a string entry requires an exact match; an object entry ORs
 
 Filters are **global** - they apply across all tabs (Alert, DNS, HTTP, All Events, etc.). When a filter is set on one tab, it persists when switching to another tab.
 
-Search (`currentSearch`) is a separate server-side full-text filter using SQLite FTS5. It is an **array of terms** - typing `tcp 80` creates two chips `[🔍 "tcp" ×] [🔍 "80" ×]`. Each chip is independently removable. Quoted phrases like `"GET /login"` become a single chip. Search terms AND together on the backend. Search complements column filters: you can search for `192.168.1.1` and then further narrow with aggregation filters. Search is cleared when loading a new PCAP or when clicking **Clear All**.
+Search (`currentSearch`) is a separate server-side full-text filter using SQLite FTS5. It is an **array of terms** - typing `tcp 80` creates two chips `[🔍 "tcp" ×] [🔍 "80" ×]`. Each chip is independently removable. Quoted phrases like `"GET /login"` become a single chip. Search terms AND together on the backend. A `country:XX` term (the Traffic Map's click - `toggleCountryFilter()` adds or removes it) isn't text to match: `db.py`'s `_build_search_terms()` sets it apart (`SearchTerms.countries`) and `_build_where_conditions()` turns it into a condition on the event's addresses, through the `geo_country()` SQL function every connection registers (`geo_lookup.country`) - so it filters every server-side query a text term does. Search complements column filters: you can search for `192.168.1.1` and then further narrow with aggregation filters. Search is cleared when loading a new PCAP or when clicking **Clear All**.
 
 ## Scalable Fetch vs. Full-Batch Fallback
 
@@ -64,7 +64,8 @@ If the true match count exceeds what was fetched, `ensureCappedBatch()` marks th
 | `computeFilteredStats()` | Counts events by type from the filtered subset |
 | `getSankeyEvents()` | Returns filtered events for the currently visible tab for the Sankey diagram |
 | `refreshCurrentView()` | Rebuilds the current tab's table, aggregations, stats, filter bar, and Sankey diagram |
-| `updateSankeyDiagram()` | Rebuilds the Sankey diagram using events from `getSankeyEvents()` |
+| `updateSankeyDiagram()` | Rebuilds the Sankey diagram using events from `getSankeyEvents()`, and has `updateTrafficMap()` refetch the Traffic Map if the analysis or search changed |
+| `toggleCountryFilter(cc)` | Adds the `country:<cc>` search term, or removes it if present (any case) - the Traffic Map's click |
 
 ## Data Flow
 

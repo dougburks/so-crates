@@ -25,6 +25,10 @@ These apply to every request, before any endpoint-specific checks:
 
 Directory listings are never served (`404`).
 
+## Search Terms
+
+Every endpoint with a `q` parameter takes any number of them, ANDed together. A term is matched against the whole event (SQLite FTS5, or `LIKE` without it) - except a term of the form `country:XX`, which instead keeps events whose source or destination address is in country `XX` (an ISO 3166-1 alpha-2 code, any case), `country:LAN` (addresses that don't route on the internet) or `country:??` (no known country). It's the Traffic Map's click; two of them keep the traffic between those two countries. Countries come from the image's IP location data (`geo_lookup.py`) - without it, every public address is `??`. Sigma alerts have no addresses to place, so `/api/sigma-alerts` and `/api/sigma-count` ignore `country:` terms.
+
 ## GET Endpoints
 
 ### `GET /`
@@ -245,6 +249,32 @@ Returns a pre-aggregated `{nodes, links}` Sankey diagram (Source IP → Dest IP 
 Each column is capped to the top 50 nodes by event count; the remainder is bucketed into a synthetic `Other` node per column so the response size doesn't grow with the dataset. `column` is `0` (Source IP), `1` (Dest IP), or `2` (Dest Port).
 
 Unfiltered (no `q`) responses are cached server-side per `(md5, type)` and invalidated on delete/reanalyze - repeat requests for the same view are effectively instant.
+
+---
+
+### `GET /api/traffic-map`
+
+The Traffic Map's data: an analysis's Suricata flows and alerts by country over time (`traffic_map.py`). Flows are placed at their start and grouped into `bins` time bins per source and destination country, so the payload stays small however many flows there are; alerts are listed one by one.
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `md5` | Yes | - | MD5 hash of the analysis |
+| `q` | No | none | Search terms, as for every other endpoint - `country:` terms included (see [Search Terms](#search-terms)). |
+
+**Response:**
+```json
+{"start": 1784926838.08, "span": 604800.57, "bins": 1200,
+ "buckets": [[0, "FR", "US", 11, 11562], ...],
+ "alerts": [[12.5, "CN", "US", 2, "ET SCAN Zmap User-Agent (Inbound)", "1.2.3.4", "203.0.113.8"], ...],
+ "totals": {"US": [207010, 39914993], "FR": [86840, 10831078], ...},
+ "flows": 207010, "alertCount": 157,
+ "geo": {"source": "DB-IP IP to Country Lite", "date": "2026-11"}}
+```
+`start` is the first flow's or alert's time (epoch seconds) and `span` the seconds to the last. Each bucket is `[bin, source country, destination country, flows, bytes]`; each alert is `[seconds after start, source country, destination country, severity, signature, source IP, destination IP]`, at most 2,000 of them - the most severe first when there are more (`alertCount` is the full count). `totals` is flows and bytes per country, as source or destination. A country is an ISO 3166-1 alpha-2 code, `LAN` for an address that doesn't route on the internet, or `??` when there's none. `geo` is `null` when the image's IP location data isn't installed (a local development run), in which case every public address is `??`. An analysis with no flows or alerts gets `"start": null` and empty lists.
+
+Unfiltered (no `q`) responses are cached per analysis, like `/api/sankey-data`.
 
 ---
 

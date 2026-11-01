@@ -32,6 +32,7 @@ Typing any letter or digit outside a text field opens a command palette, pre-fil
 - `search` (analysis page only) - focuses the search bar instead of opening a modal
 - `clear` (analysis page only) - clears all active search terms/filters, same as the filter bar's own Clear All button
 - `sankey` (analysis page only) - collapses or expands the Sankey Diagram section
+- `traffic map` (analysis page only) - collapses or expands the Traffic Map section
 - `aggregation` (analysis page only) - collapses or expands the Aggregation Tables section
 
 ## Gear Menu

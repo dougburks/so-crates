@@ -221,6 +221,23 @@ RUN mkdir -p /tmp/sigma-rules-out && \
 COPY scripts/fetch-cyberchef.sh /tmp/fetch-cyberchef.sh
 RUN sh /tmp/fetch-cyberchef.sh /tmp/cyberchef-out
 
+# DB-IP's "IP to Country Lite" (CC BY 4.0), for the Traffic Map and the
+# country: filter - see geo_lookup.py. DB-IP publishes it monthly under a
+# dated name, so this takes the current month's, or last month's early in
+# a month before the new one is out. Unpinned, like the playbooks: it's
+# reference data, and scripts/build_geoip.py refuses a truncated or
+# malformed file. Converted to a compact index (about 2 MB) so the CSV
+# stays out of the runtime image.
+COPY scripts/build_geoip.py /tmp/build_geoip.py
+RUN mkdir -p /tmp/geoip-out && \
+    for month in "$(date -u +%Y-%m)" "$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%Y-%m)"; do \
+        if curl -fsSL -o /tmp/dbip.csv.gz "https://download.db-ip.com/free/dbip-country-lite-${month}.csv.gz"; then \
+            python3 /tmp/build_geoip.py /tmp/dbip.csv.gz /tmp/geoip-out/country.bin.gz "${month}" && break; \
+        fi; \
+    done && \
+    test -s /tmp/geoip-out/country.bin.gz && \
+    rm -f /tmp/dbip.csv.gz
+
 FROM debian:13-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -262,7 +279,7 @@ ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY config.py db.py models.py validators.py url_fetch.py storage.py analysis_cache.py email_analyzer.py samples.py suricata_analyzer.py suricata_sid_ranges.py yara_analyzer.py sigma_analyzer.py file_analyzer.py exif_analyzer.py ohmydebn_colors.py playbook_lookup.py ai_summary_lookup.py cyberchef.py stream_payload.py shark_analyzer.py shark_protocols.py pcap_subset.py findings.py socrates.py socrates.html ./
+COPY config.py db.py models.py validators.py url_fetch.py storage.py analysis_cache.py email_analyzer.py samples.py suricata_analyzer.py suricata_sid_ranges.py yara_analyzer.py sigma_analyzer.py file_analyzer.py exif_analyzer.py ohmydebn_colors.py playbook_lookup.py ai_summary_lookup.py geo_lookup.py cyberchef.py stream_payload.py shark_analyzer.py shark_protocols.py pcap_subset.py findings.py traffic_map.py socrates.py socrates.html ./
 COPY static/ static/
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
@@ -424,6 +441,10 @@ COPY --from=resources-builder /tmp/ai-summaries-out/ /usr/share/ai-summaries/
 # Bake CyberChef in so the pivot menu's CyberChef lookup works air-gapped -
 # see the resources-builder stage above and cyberchef.py.
 COPY --from=resources-builder /tmp/cyberchef-out/ /usr/share/cyberchef/
+
+# IP-to-country data for the Traffic Map - see the resources-builder stage
+# above and geo_lookup.py.
+COPY --from=resources-builder /tmp/geoip-out/ /usr/share/geoip/
 
 RUN mkdir -p /data && chown -R 1000:1000 /data
 

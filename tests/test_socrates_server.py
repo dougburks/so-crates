@@ -1214,6 +1214,53 @@ class TestAPIEndpoints(unittest.TestCase):
         self.assertIn('5.5.5.5', names)
         self.assertNotIn('1.1.1.1', names)
 
+    def test_traffic_map_with_events(self):
+        md5 = 'd4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a1'
+        md5dir = os.path.join(self.tmpdir, md5)
+        os.makedirs(md5dir, exist_ok=True)
+        with open(os.path.join(md5dir, 'eve.json'), 'w') as f:
+            f.write(json.dumps({'event_type': 'flow', 'timestamp': '2026-01-01T00:00:05.000000+0000',
+                                'src_ip': '10.0.0.5', 'dest_ip': '10.0.0.9', 'dest_port': 443,
+                                'flow': {'start': '2026-01-01T00:00:00.000000+0000', 'bytes_toserver': 10,
+                                         'bytes_toclient': 5}}) + '\n')
+            f.write(json.dumps({'event_type': 'alert', 'timestamp': '2026-01-01T00:00:01.000000+0000',
+                                'src_ip': '10.0.0.5', 'dest_ip': '10.0.0.9', 'dest_port': 443,
+                                'alert': {'severity': 2, 'signature': 'TEST alert'}}) + '\n')
+        db.create_sqlite_db(os.path.join(md5dir, 'events.db'), os.path.join(md5dir, 'eve.json'))
+
+        status, body = self._get(f'/api/traffic-map?md5={md5}')
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data['flows'], 1)
+        self.assertEqual(data['buckets'], [[0, 'LAN', 'LAN', 1, 15]])
+        self.assertEqual(data['alerts'], [[1.0, 'LAN', 'LAN', 2, 'TEST alert', '10.0.0.5', '10.0.0.9']])
+        with analysis_cache.CACHE_LOCK:
+            self.assertIn((md5,), analysis_cache.TRAFFIC_MAP_CACHE)
+
+        # a search isn't cached, and filters like any other view's
+        status, body = self._get(f'/api/traffic-map?md5={md5}&q=country:FR')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['flows'], 0)
+        analysis_cache.evict_analysis_cache(md5)
+        with analysis_cache.CACHE_LOCK:
+            self.assertNotIn((md5,), analysis_cache.TRAFFIC_MAP_CACHE)
+
+    def test_traffic_map_without_events_db(self):
+        md5 = 'e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b2'
+        md5dir = os.path.join(self.tmpdir, md5)
+        os.makedirs(md5dir, exist_ok=True)
+        status, body = self._get(f'/api/traffic-map?md5={md5}')
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['flows'], 0)
+        self.assertEqual(os.listdir(md5dir), [], 'no events.db may be created by asking')
+
+    def test_traffic_map_requires_valid_md5(self):
+        for path in ('/api/traffic-map', '/api/traffic-map?md5=invalid', '/api/traffic-map?md5=../etc/passwd'):
+            with self.subTest(path=path):
+                status, body = self._get(path)
+                self.assertEqual(status, 400)
+                self.assertIn('error', json.loads(body))
+
     def test_sankey_data_requires_md5(self):
         status, body = self._get('/api/sankey-data')
         self.assertEqual(status, 400)
@@ -7735,6 +7782,20 @@ class TestDockerfile(unittest.TestCase):
                       final_stage)
         self.assertIsNone(re.search(r'^\s+unzip\s*\\?$', final_stage, re.MULTILINE),
                           'unzip must not be installed in the final runtime stage')
+
+    def test_geoip_baked_from_resources_builder(self):
+        """DB-IP's country data is downloaded and converted by
+        scripts/build_geoip.py in the resources-builder stage, and copied
+        to the folder geo_lookup.GEOIP_DIR defaults to."""
+        import geo_lookup
+        with open(DOCKERFILE, 'r') as f:
+            content = f.read()
+        self.assertIn('COPY scripts/build_geoip.py /tmp/build_geoip.py', content)
+        self.assertIn('https://download.db-ip.com/free/dbip-country-lite-${month}.csv.gz', content)
+        self.assertIn('python3 /tmp/build_geoip.py /tmp/dbip.csv.gz /tmp/geoip-out/country.bin.gz', content)
+        final_stage = self._dockerfile_final_stage()
+        self.assertIn(f'COPY --from=resources-builder /tmp/geoip-out/ {geo_lookup.GEOIP_DIR}/', final_stage)
+        self.assertNotIn('dbip', final_stage)
 
     def test_build_toolchain_absent_from_final_stage(self):
         """REGRESSION: the Rust/build toolchain used to compile the

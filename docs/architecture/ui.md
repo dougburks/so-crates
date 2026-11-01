@@ -29,6 +29,7 @@ Analysis View (analysis loaded)
   │               a PCAP analysis's cards are in Triage, Protocol records and Connections panels
   │               that share rows, All Events last in Triage; every card one width and height)
   ├── Sankey Diagram (collapsible section - Source IP → Dest IP → Dest Port, reflects current filters)
+  ├── Traffic Map (collapsible section, collapsed until opened - flows and alerts replayed by country on a world map, reflects the current search)
   ├── Aggregation Tables (collapsible section - frequency counts per column)
   └── Data Table (the selected tab's rows; a row expands into its detail panel)
 ```
@@ -60,6 +61,7 @@ let tabDataCache = {};       // cached event data per type
 | Command Palette | `AUTOCOMPLETE_COMMANDS`, `openAutocompleteModal()`, `filterAutocomplete()`, `autocompleteMatchesQuery()`, `autocompleteMatchScore()`, `activateAutocompleteSelection()` | Type-anywhere command list (see [Usage](../usage/keyboard-and-menus.md#command-palette)) |
 | Data Loading | `loadTabData()`, `loadFromUrl()`, `uploadPcap()`, `checkStatus()` | Fetch data from API |
 | Rendering | `buildStats()`, `buildSections()`, `buildSection()`, `buildAllEvents()`, `buildRowForEvent()`, `updateSankeyDiagram()` | Build HTML |
+| Traffic Map | `updateTrafficMap()`, `toggleTrafficMap()`, `toggleCountryFilter()`, `trafficMapCountries()`, `loadTrafficMapWorld()`, `createTrafficMap()` | The world map replay (`/api/traffic-map`): two stacked canvases - the dot map (each country painted offscreen in its own color, then sampled on a grid, which also answers which country is under the pointer) under the arcs in flight, drawn a few dozen batched strokes per frame - and the timeline. Colors are read from the theme's variables and re-read when `data-theme` or the root `style` changes; alerts use `COLORS.SEVERITY`. The world is `static/world-110m.json` (`scripts/build_world_map.py`), decoded by the vendored `topojson-client` |
 | Aggregation | `buildAggregationTablesCore()`, `buildAggregationTables()`, `buildAggregationTablesAll()`, `buildAggregationsSection()`, `buildAggregationsSectionAll()` | Frequency grids |
 | Search | `performSearch()`, `clearSearchTerm()`, `refreshAnalysisData()` | Full-text search via server |
 | Filtering | `applyFilters()`, `clearFilter()`, `clearAllFilters()`, `getFilteredEvents()`, `getSankeyEvents()`, `refreshCurrentView()` | Column filter management |

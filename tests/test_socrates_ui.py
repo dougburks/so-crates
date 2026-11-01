@@ -3598,6 +3598,8 @@ class TestThemeAndMenu(unittest.TestCase):
             '.detail-value-pivot.keyboard-selected',
             '.autocomplete-item.keyboard-selected',
             '.agg-page-btn.keyboard-selected',
+            '.tm-top button.on',
+            '.tm-play:focus-visible',
         )
         fallback = 'var(--interactive-highlight, var(--accent))'
         for selector in documented_consumers:
@@ -4637,6 +4639,11 @@ class TestThemeAndMenu(unittest.TestCase):
                       "'sankey' must call toggleDiagram(), same as clicking the Sankey Diagram section's own toggle bar")
         self.assertIn('analysisOnly: true', sankey_entry,
                       "'sankey' must stay analysis-only - there's no Sankey Diagram section on the welcome screen")
+
+        traffic_map_entry = entry_for('traffic map')
+        self.assertIn('toggleTrafficMap()', traffic_map_entry,
+                      "'traffic map' must call toggleTrafficMap(), same as clicking the Traffic Map section's own toggle bar")
+        self.assertIn('analysisOnly: true', traffic_map_entry)
 
         aggregation_entry = entry_for('aggregation')
         self.assertIn('toggleAggregations()', aggregation_entry,
@@ -23227,6 +23234,192 @@ class TestTsharkUI(unittest.TestCase):
         self.assertIn("const sectionEl = activeType && activeType !== eventTypes[0]\n                    ? document.getElementById('section-' + activeType) : null;", body)
         self.assertIn('if (sectionEl) {', body)
         self.assertIn('} else if (eventTypes[0]) {\n                    await loadTabData(eventTypes[0], null);', body)
+
+
+
+WORLD_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'world-110m.json')
+
+
+class TestTrafficMap(unittest.TestCase):
+    """The Traffic Map panel: collapsed until opened, only for a capture,
+    its clicks toggling country: search terms, and the map's panels built
+    from its data (escaped). The canvases are stubbed - JSDOM can't draw."""
+
+    STUBS = r"""
+        localStorage.setItem('socrates_hideHelp', 'true');
+        await new Promise(r => setTimeout(r, 50));
+        var ctxStub = new Proxy({}, {
+            get(t, k) {
+                if (k === 'getImageData') return (x, y, w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) });
+                if (k === 'createRadialGradient' || k === 'createLinearGradient') return () => ({ addColorStop() {} });
+                if (k === 'measureText') return () => ({ width: 10 });
+                if (k in t) return t[k];
+                return function() {};
+            },
+            set(t, k, v) { t[k] = v; return true; },
+        });
+        HTMLCanvasElement.prototype.getContext = function() { return ctxStub; };
+        window.Path2D = class { moveTo() {} lineTo() {} arc() {} };
+        window.requestAnimationFrame = () => 1;
+        window.cancelAnimationFrame = () => {};
+        var square = (x, y) => ({ type: 'Polygon', coordinates: [[[x, y], [x + 5, y], [x + 5, y + 5], [x, y + 5], [x, y]]] });
+        var world = {
+            features: [{ type: 'Feature', id: 'US', cc: 'US', geometry: square(-100, 35) },
+                       { type: 'Feature', id: 'FR', cc: 'FR', geometry: square(0, 45) }],
+            places: { SG: [103.8, 1.35] },
+            names: { US: 'United States', FR: 'France', SG: 'Singapore' },
+        };
+        var mapData = {
+            start: 1767225600, span: 100, bins: 1200, flows: 4, alertCount: 1,
+            geo: { source: 'DB-IP IP to Country Lite', date: '2026-11' },
+            buckets: [[0, 'US', 'FR', 3, 300], [600, 'SG', 'FR', 1, 10]],
+            alerts: [[0.5, 'US', 'FR', 1, '<img src=x onerror=alert(1)>', '8.8.8.8', '203.0.113.9']],
+            totals: { US: [3, 300], FR: [4, 310], SG: [1, 10] },
+        };
+    """
+
+    def test_static_wiring(self):
+        sankey = HTML_CONTENT.index('id="sankeyPanel"')
+        panel = HTML_CONTENT.index('id="trafficMapPanel"')
+        self.assertLess(sankey, panel)
+        self.assertLess(panel, HTML_CONTENT.index('id="aggregations"'))
+        self.assertIn('<script src="static/topojson-client.min.js"></script>', HTML_CONTENT)
+        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(JS_PATH), 'topojson-client.min.js')))
+        self.assertIn("'toggle-traffic-map': () => toggleTrafficMap(),", JS_CONTENT)
+        self.assertIn("trafficMap: '#trafficMapPanel > .section-toggle-bar',", JS_CONTENT)
+        self.assertIn('body.file-analysis #trafficMapPanel { display: none !important; }', CSS_CONTENT)
+        # alerts keep the app's fixed severity colors
+        self.assertIn("colors['s' + s] = d3.rgb(COLORS.SEVERITY[s])", JS_CONTENT)
+
+    def test_world_map_file(self):
+        with open(WORLD_MAP_PATH) as f:
+            world = json.load(f)
+        ids = [g['id'] for g in world['objects']['countries']['geometries']]
+        self.assertTrue(all(re.fullmatch(r'[A-Z]{2}', i) for i in ids), 'shapes keyed by ISO alpha-2')
+        self.assertNotIn('AQ', ids, 'the map leaves Antarctica out')
+        for cc in ('US', 'FR', 'CN', 'BR', 'XK'):
+            self.assertIn(cc, ids)
+        for cc in ('SG', 'HK', 'MT'):
+            self.assertIn(cc, world['places'], f'{cc} is too small for a shape, so it gets a point')
+            self.assertNotIn(cc, ids)
+        lon, lat = world['places']['SG']
+        self.assertTrue(-180 <= lon <= 180 and -90 <= lat <= 90)
+        self.assertEqual(world['names']['DE'], 'Germany')
+
+    def test_collapsed_until_opened_and_only_for_a_capture(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var fetches = [];
+            window.fetch = function(url) { fetches.push(url); return new Promise(() => {}); };
+            currentMd5 = 'a'.repeat(32);
+            trafficMapMode = false;
+            await updateTrafficMap();
+            var panel = document.getElementById('trafficMapPanel');
+            var collapsed = { display: panel.style.display, html: panel.textContent };
+            isLogAnalysisMode = true;
+            await updateTrafficMap();
+            var log = panel.style.display;
+            isLogAnalysisMode = false;
+            isEmailAnalysisMode = true;
+            await updateTrafficMap();
+            var email = panel.style.display;
+            isEmailAnalysisMode = false;
+            window.__jsdom_result = { collapsed: collapsed, log: log, email: email, fetches: fetches };
+        """)
+        self.assertEqual(result['collapsed'], {'display': '', 'html': '▸ Traffic Map'})
+        self.assertEqual(result['log'], 'none')
+        self.assertEqual(result['email'], 'none')
+        self.assertEqual(result['fetches'], [], 'nothing is fetched until the map is opened')
+
+    def test_country_click_toggles_its_search_term(self):
+        from tests.jsdom_helper import js_statements
+        # currentSearch is a `let` binding test code can't reach (see
+        # test_only_leaves_currentSearch_untouched): it's seeded through
+        # huntFilterValue() and read back through buildSearchQuery()
+        result = js_statements(self.STUBS + r"""
+            var refreshes = 0;
+            refreshAnalysisData = async function() { refreshes++; };
+            await huntFilterValue('country:de');
+            await toggleCountryFilter('FR');
+            var added = buildSearchQuery();
+            var countries = Array.from(trafficMapCountries()).sort();
+            await toggleCountryFilter('FR');
+            var removed = buildSearchQuery();
+            await toggleCountryFilter('DE');
+            window.__jsdom_result = { added: added, countries: countries, removed: removed,
+                                      lowerCaseRemoved: buildSearchQuery(), refreshes: refreshes };
+        """)
+        self.assertEqual(result['added'], '&q=country%3Ade&q=country%3AFR')
+        self.assertEqual(result['countries'], ['DE', 'FR'])
+        self.assertEqual(result['removed'], '&q=country%3Ade')
+        self.assertEqual(result['lowerCaseRemoved'], '', 'a term typed in lower case is the same country')
+        self.assertEqual(result['refreshes'], 4)
+
+    def test_panels_from_data(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var clicked = [];
+            toggleCountryFilter = function(cc) { clicked.push(cc); };
+            var root = document.createElement('div');
+            document.body.appendChild(root);
+            var map = createTrafficMap(root, world);
+            map.setData(mapData, new Set(['US']), false);
+            var q = s => root.querySelector(s);
+            var atStart = { flows: q('[data-tm="flows"]').textContent, play: q('[data-tm="play"]').getAttribute('aria-label'),
+                            feed: q('[data-tm="feed"]').textContent };
+            map.seek(1);
+            var buttons = Array.from(root.querySelectorAll('.tm-top button'));
+            buttons[0].click();
+            window.__jsdom_result = {
+                atStart: atStart,
+                flows: q('[data-tm="flows"]').textContent,
+                alerts: q('[data-tm="alerts"]').textContent,
+                places: q('[data-tm="places"]').textContent,
+                title: q('[data-tm="top-title"]').textContent,
+                top: buttons.map(b => [b.dataset.cc, b.className, b.querySelector('.n').textContent]),
+                feedText: q('[data-tm="feed"]').textContent,
+                feedImages: root.querySelectorAll('.tm-feed img').length,
+                clock: q('[data-tm="clock"]').textContent,
+                clicked: clicked,
+                credit: q('.tm-credit').hidden,
+            };
+            map.destroy();
+        """, with_d3=True)
+        self.assertEqual(result['atStart']['flows'], '0')
+        self.assertEqual(result['atStart']['play'], 'Pause', 'it plays once data arrives')
+        self.assertEqual(result['atStart']['feed'], 'No alerts yet')
+        self.assertEqual((result['flows'], result['alerts'], result['places']), ('4', '1', '3'))
+        self.assertEqual(result['title'], 'Top sources')
+        self.assertEqual(result['top'], [['US', 'on', '3'], ['SG', '', '1']])
+        self.assertIn('<img src=x onerror=alert(1)>', result['feedText'])
+        self.assertEqual(result['feedImages'], 0, 'a signature is text, never markup')
+        self.assertIn('8.8.8.8 (US)', result['feedText'])
+        self.assertEqual(result['clock'], '00:01:40')
+        self.assertEqual(result['clicked'], ['US'])
+        self.assertFalse(result['credit'])
+
+    def test_notes_for_no_data_and_no_location_data(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var root = document.createElement('div');
+            document.body.appendChild(root);
+            var map = createTrafficMap(root, world);
+            map.setData(Object.assign({}, mapData, { geo: null }), new Set(), false);
+            var noGeo = { note: root.querySelector('[data-tm="note"]').textContent, credit: root.querySelector('.tm-credit').hidden };
+            map.setData({ start: null, span: 0, bins: 1200, flows: 0, alertCount: 0, geo: mapData.geo,
+                          buckets: [], alerts: [], totals: {} }, new Set(), false);
+            window.__jsdom_result = { noGeo: noGeo, empty: root.querySelector('[data-tm="note"]').textContent,
+                                      play: root.querySelector('[data-tm="play"]').getAttribute('aria-label') };
+            map.destroy();
+        """, with_d3=True)
+        self.assertIn("IP location data isn't installed", result['noGeo']['note'])
+        self.assertTrue(result['noGeo']['credit'])
+        self.assertEqual(result['empty'], 'No flows or alerts to map')
+        self.assertEqual(result['play'], 'Play')
+
+    def test_menus_keep_their_own_arrow_keys(self):
+        guard = JS_CONTENT.split('function isNavigableKeyContext(e) {')[1].split('\n        }')[0]
+        self.assertIn("e.target.tagName !== 'SELECT'", guard)
 
 
 if __name__ == '__main__':

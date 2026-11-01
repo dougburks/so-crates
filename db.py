@@ -4,6 +4,7 @@
 import concurrent.futures
 import json
 import os
+import re
 import sqlite3
 import subprocess
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ from models import (
     get_timestamp,
 )
 import config
+import geo_lookup
 from suricata_sid_ranges import sid_ranges_sql_case
 
 
@@ -159,20 +161,55 @@ def _escape_fts5(term):
     return ' '.join('"' + t.replace('"', '""') + '"' for t in tokens)
 
 
+# A search term of this shape filters to events with an address in a
+# country (the Traffic Map's click) rather than searching the text:
+# country:FR, country:LAN for addresses that don't route on the internet,
+# country:?? for those with no known country. See geo_lookup.country().
+COUNTRY_TERM_RE = re.compile(r'country:([A-Za-z]{2}|LAN|\?\?)', re.IGNORECASE)
+
+
+class SearchTerms(list):
+    """The text terms of a search - what FTS or LIKE matches, so a list of
+    only them keeps every `terms and has_fts` check meaning "join the FTS
+    index" - with its country: terms apart in .countries."""
+
+    def __init__(self, text=(), countries=()):
+        super().__init__(text)
+        self.countries = list(countries)
+
+
+def country_term(term):
+    """The country code a country: search term names, or None."""
+    m = COUNTRY_TERM_RE.fullmatch(term.strip())
+    return m.group(1).upper() if m else None
+
+
 def _build_search_terms(q):
     if q is None:
-        return []
+        return SearchTerms()
     if isinstance(q, str):
-        return [q.strip()[:config.MAX_SEARCH_TERM_LENGTH]] if q.strip() else []
-    if isinstance(q, list):
-        return [x.strip()[:config.MAX_SEARCH_TERM_LENGTH] for x in q if x.strip()]
-    return []
+        q = [q]
+    if not isinstance(q, list):
+        return SearchTerms()
+    text, countries = [], []
+    for x in q:
+        x = x.strip()[:config.MAX_SEARCH_TERM_LENGTH]
+        if not x:
+            continue
+        cc = country_term(x)
+        if cc is None:
+            text.append(x)
+        elif cc not in countries:
+            countries.append(cc)
+    return SearchTerms(text, countries)
 
 
 @contextmanager
 def _db_connection(db_path):
     conn = sqlite3.connect(db_path, timeout=config.SQLITE_TIMEOUT_SECONDS)
     conn.execute('PRAGMA busy_timeout = 30000;')
+    # for country: search terms (_build_where_conditions)
+    conn.create_function('geo_country', 1, geo_lookup.country, deterministic=True)
     try:
         yield conn
     finally:
@@ -547,6 +584,13 @@ def _build_where_conditions(has_acknowledged_table, terms, has_fts, event_type, 
         for term in terms:
             conditions.append("json_data LIKE ? ESCAPE '\\'")
             params.append(_sanitize_like(term))
+
+    # Each country: term is its own condition, like each text term: two of
+    # them find the traffic between those two countries.
+    col_prefix = 'e.' if (event_type_col or '').startswith('e.') else ''
+    for cc in getattr(terms, 'countries', ()):
+        conditions.append(f'(geo_country({col_prefix}src_ip) = ? OR geo_country({col_prefix}dest_ip) = ?)')
+        params.extend((cc, cc))
 
     if event_type:
         conditions.append(f'{event_type_col} = ?')

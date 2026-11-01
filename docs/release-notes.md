@@ -2,6 +2,26 @@
 
 ## 5.2.0
 
+### Traffic Map
+
+- **A Traffic Map replays a capture on a world map** - open the new
+  **Traffic Map** section under the Sankey Diagram and each flow flies
+  from the country it came from to the one it went to, in the order the
+  flows started, while each alert flies in its severity's color with its
+  signature where it lands. Countries light up with their traffic, routes
+  stay faintly behind, and a timeline shows how busy each moment was -
+  drag it to jump, or replay the whole capture in 20 seconds, a minute or
+  three. Top sources and the latest alerts are listed beside the map.
+  Turn off **Animate** for a still map of every route (it starts off if
+  your system asks for reduced motion); it follows the theme
+- **Filter by country** - click a country on the map to filter the whole
+  analysis to traffic to or from it, as a `country:FR` search term you
+  can also type yourself (`country:LAN` for private addresses). Click it
+  again to undo
+- **Country data from DB-IP** - the free IP to Country Lite database
+  (CC BY 4.0) is built into the container image, refreshed with every
+  build; nothing is looked up online
+
 ### Custom Suricata rules
 
 - **Add your own Suricata rules** in the Rules modal: paste them, or load a
@@ -45,6 +65,9 @@
   replaced by Suricata's own bundled ones alone: `suricata-update` exits
   successfully when a download fails. Its output is checked now, and the
   source's last good rules stay in use
+- **Arrow keys in a menu moved the page's keyboard selection** instead of
+  the menu's choice - the aggregation tables' page size, and now the
+  Traffic Map's options
 
 ## 5.1.0
 
