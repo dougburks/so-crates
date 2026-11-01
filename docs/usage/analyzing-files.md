@@ -27,6 +27,8 @@ You can add your own Suricata rules: to test one you just wrote against a captur
     - a SID outside 1,000,000-1,999,999, missing, or used twice
     - anything Suricata itself rejects, in Suricata's own words (an unknown keyword, a bad `pcre`...)
 
+The editor colors each rule as you type: the action, protocol and direction, option keywords, quoted strings, `|hex|` bytes and comments, with a forbidden keyword underlined in red. Options end at every `;` that isn't escaped with a backslash, quotes or not, as Suricata reads them - so a missing `;` or a stray one inside a `msg` shows up as text colored wrong. After a refused save, each line with a problem is shaded until you edit it.
+
 Saved rules are on straight away, and apply to every capture analyzed from then on. To run them on a capture that's already open, use **Reanalyze this one** in the message after saving, or the analysis's reanalyze icon. Their alerts show the ruleset **Local / Custom Rules** in Network Alerts.
 
 The switch beside **Custom rules** turns them off and on like any other source, kept for later while off - click **Update** for the change to take effect. Save an empty editor to delete them. They're kept in your data folder (`/data` in the container), so they survive a restart and an image upgrade.

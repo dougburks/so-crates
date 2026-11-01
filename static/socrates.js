@@ -7546,7 +7546,10 @@
             }
             showCustomRulesProblems([]);
             document.getElementById('customRulesModal').classList.add('active');
+            textarea.scrollTop = 0;
+            textarea.scrollLeft = 0;
             textarea.focus();
+            renderCustomRulesHighlight();
         }
 
         function closeCustomRulesModal() {
@@ -7563,6 +7566,9 @@
                     : `<li>${message}</li>`;
             }).join('');
             list.style.display = problems.length ? '' : 'none';
+            customRuleProblemLines = new Set(problems.filter(p => p.line).map(p => Number(p.line)));
+            customRulesLineCount = document.getElementById('customRulesInput').value.split('\n').length;
+            renderCustomRulesHighlight();
         }
 
         function selectCustomRuleLine(line) {
@@ -7572,6 +7578,195 @@
             for (let i = 0; i < line - 1 && i < lines.length; i++) start += lines[i].length + 1;
             textarea.focus();
             textarea.setSelectionRange(start, start + (lines[line - 1] || '').length);
+        }
+
+        // The editor's highlighting: a <pre> behind the textarea, whose own
+        // text is transparent, draws the same text in color. Only the lines
+        // in view are drawn (the rules can be 1 MB), moved to where the
+        // textarea has them scrolled. Lines with a problem from the last
+        // refused Save get a background until edited.
+        const CUSTOM_RULE_FORBIDDEN_KEYWORDS = ['dataset', 'datarep', 'iprep', 'lua', 'luajit', 'luaxform'];
+        const RULE_HEADER_CLASSES = ['cr-action', 'cr-proto', 'cr-addr', 'cr-addr', 'cr-dir', 'cr-addr', 'cr-addr'];
+        let customRuleProblemLines = new Set();
+        let customRulesLineCount = 0;
+        let customRulesHighlightQueued = false;
+
+        // One rule - its lines joined by '\n', backslashes kept - as
+        // [class, text] pieces. Options split on ';' the way Suricata (and
+        // validators.rule_options) splits them, only a backslash-escaped
+        // one not ending an option, quotes or not - so a missing ';' shows
+        // up as wrongly colored text.
+        function tokenizeSuricataRule(rule) {
+            const out = [];
+            const push = (cls, text) => {
+                if (!text) return;
+                const last = out[out.length - 1];
+                if (last && last[0] === cls) last[1] += text;
+                else out.push([cls, text]);
+            };
+            if (/^\s*#/.test(rule)) {
+                push('cr-comment', rule);
+                return out;
+            }
+            const open = rule.indexOf('(');
+            const close = rule.lastIndexOf(')');
+            // Action, protocol, source, port, direction, destination, port
+            // - a [list] is one part, even with spaces in it
+            const header = open < 0 ? rule : rule.slice(0, open);
+            let i = 0;
+            let part = 0;
+            while (i < header.length) {
+                const space = /^(?:\s|\\\n)+/.exec(header.slice(i));
+                if (space) {
+                    push('', space[0]);
+                    i += space[0].length;
+                    continue;
+                }
+                let j = i;
+                let depth = 0;
+                while (j < header.length && (depth > 0 || !/\s/.test(header[j]))) {
+                    if (header[j] === '[') depth++;
+                    else if (header[j] === ']') depth--;
+                    j++;
+                }
+                push(RULE_HEADER_CLASSES[part++] || '', header.slice(i, j));
+                i = j;
+            }
+            if (open < 0) return out;
+
+            function pushPlain(text) {
+                text.split(/(\b\d+\b)/).forEach((piece, n) => push(n % 2 ? 'cr-number' : '', piece));
+            }
+            function pushValue(value) {
+                let inString = false;
+                let hexEnd = -1;
+                let plain = '';
+                const flushPlain = () => { pushPlain(plain); plain = ''; };
+                for (let k = 0; k < value.length; k++) {
+                    const ch = value[k];
+                    const len = ch === '\\' && k + 1 < value.length ? 2 : 1;
+                    const text = value.slice(k, k + len);
+                    if (k <= hexEnd) {
+                        push('cr-hex', text);
+                    } else if (ch === '|' && /^[0-9a-fA-F\s]*\|/.test(value.slice(k + 1))) {
+                        // |hex bytes| - only when hex follows, so pcre's
+                        // a|b alternation stays as it is
+                        flushPlain();
+                        hexEnd = value.indexOf('|', k + 1);
+                        push('cr-hex', text);
+                    } else if (ch === '"') {
+                        flushPlain();
+                        inString = !inString;
+                        push('cr-string', text);
+                    } else if (inString) {
+                        push('cr-string', text);
+                    } else {
+                        plain += text;
+                    }
+                    k += len - 1;
+                }
+                flushPlain();
+            }
+            function pushOption(option) {
+                const colon = option.indexOf(':');
+                const name = colon < 0 ? option : option.slice(0, colon);
+                const lead = /^(?:\s|\\\n)*/.exec(name)[0];
+                push('', lead);
+                const keyword = name.slice(lead.length);
+                push(CUSTOM_RULE_FORBIDDEN_KEYWORDS.includes(keyword.trim().toLowerCase()) ? 'cr-forbidden' : 'cr-keyword', keyword);
+                if (colon >= 0) {
+                    push('', ':');
+                    pushValue(option.slice(colon + 1));
+                }
+            }
+
+            push('cr-paren', '(');
+            const end = close > open ? close : rule.length;
+            let option = '';
+            for (let k = open + 1; k < end; k++) {
+                if (rule[k] === '\\' && k + 1 < end) {
+                    option += rule.slice(k, k + 2);
+                    k++;
+                } else if (rule[k] === ';') {
+                    pushOption(option);
+                    option = '';
+                    push('', ';');
+                } else {
+                    option += rule[k];
+                }
+            }
+            pushOption(option);
+            if (close > open) {
+                push('cr-paren', ')');
+                push('', rule.slice(close + 1));
+            }
+            return out;
+        }
+
+        // A rule's pieces as one HTML string per line.
+        function ruleTokensToLines(tokens) {
+            const lines = [''];
+            tokens.forEach(function([cls, text]) {
+                text.split('\n').forEach(function(piece, n) {
+                    if (n) lines.push('');
+                    if (piece) lines[lines.length - 1] += cls ? `<span class="${cls}">${escapeHtml(piece)}</span>` : escapeHtml(piece);
+                });
+            });
+            return lines;
+        }
+
+        function customRulesLineHeight(textarea) {
+            const value = getComputedStyle(textarea).lineHeight;
+            return /px$/.test(value) && parseFloat(value) > 0 ? parseFloat(value) : 18;
+        }
+
+        function renderCustomRulesHighlight() {
+            customRulesHighlightQueued = false;
+            const textarea = document.getElementById('customRulesInput');
+            const target = document.querySelector('#customRulesHighlight .custom-rules-highlight-lines');
+            if (!textarea || !target) return;
+            const lines = textarea.value.split('\n');
+            const lineHeight = customRulesLineHeight(textarea);
+            const margin = 20;
+            const first = Math.max(0, Math.floor(textarea.scrollTop / lineHeight) - margin);
+            const last = Math.min(lines.length, first + Math.ceil((textarea.clientHeight || 600) / lineHeight) + 2 * margin);
+            const continues = line => !/^\s*(#|$)/.test(line) && /\\\s*$/.test(line);
+            // A rule continued from above the window starts above it
+            let n = first;
+            while (n > 0 && continues(lines[n - 1])) n--;
+            let html = '';
+            while (n < last) {
+                let m = n;
+                while (m < lines.length - 1 && continues(lines[m])) m++;
+                ruleTokensToLines(tokenizeSuricataRule(lines.slice(n, m + 1).join('\n'))).forEach(function(line, k) {
+                    const number = n + k;
+                    if (number < first || number >= last) return;
+                    const problem = customRuleProblemLines.has(number + 1) ? ' cr-problem' : '';
+                    html += `<span class="cr-line${problem}">${line || ' '}</span>`;
+                });
+                n = m + 1;
+            }
+            target.innerHTML = html;
+            target.style.transform = `translate(${-textarea.scrollLeft}px, ${first * lineHeight - textarea.scrollTop}px)`;
+        }
+
+        function queueCustomRulesHighlight() {
+            if (customRulesHighlightQueued) return;
+            customRulesHighlightQueued = true;
+            (window.requestAnimationFrame || (f => setTimeout(f, 16)))(renderCustomRulesHighlight);
+        }
+
+        // An edit clears its line's problem mark - or every mark, once lines
+        // were added or removed and the numbers no longer fit
+        function handleCustomRulesInput(textarea) {
+            const lineCount = textarea.value.split('\n').length;
+            if (lineCount !== customRulesLineCount) {
+                customRuleProblemLines = new Set();
+            } else {
+                customRuleProblemLines.delete(textarea.value.slice(0, textarea.selectionStart).split('\n').length);
+            }
+            customRulesLineCount = lineCount;
+            queueCustomRulesHighlight();
         }
 
         // Read in the browser and put in the editor to look over - only
@@ -14807,6 +15002,11 @@
             if (e.key === 'Enter') performSearch();
         });
         document.getElementById('autocompleteInput').addEventListener('input', () => filterAutocomplete());
+        document.getElementById('customRulesInput').addEventListener('input', e => handleCustomRulesInput(e.target));
+        document.getElementById('customRulesInput').addEventListener('scroll', () => queueCustomRulesHighlight());
+        if (typeof ResizeObserver !== 'undefined') {
+            new ResizeObserver(() => queueCustomRulesHighlight()).observe(document.getElementById('customRulesInput'));
+        }
         document.getElementById('checkForUpdates').addEventListener('change', e => handleCheckForUpdatesChange(e.target));
         document.getElementById('syncThemeWithOS').addEventListener('change', e => handleSyncThemeWithOSChange(e.target));
         document.getElementById('checkForStaleRules').addEventListener('change', e => handleCheckForStaleRulesChange(e.target));

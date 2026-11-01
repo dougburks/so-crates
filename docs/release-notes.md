@@ -16,6 +16,10 @@
   in the data folder through restarts and upgrades. Suggested by
   popeye1919, whose network forensics course has students write a rule
   for a C2 beacon and reanalyze to see it fire
+- **The custom rules editor colors rules as you type** - action, protocol,
+  keywords, strings, hex bytes and comments, with forbidden keywords
+  underlined - reading options the way Suricata does, so a missing `;`
+  shows up before you save. Lines a save refused are shaded until edited
 - **Alerts with SIDs from 1,000,000 to 1,999,999 show the ruleset "Local /
   Custom Rules"**, not "Suricata (built-in)". Nothing SO-CRATES ships uses
   that range, and Suricata's own rules sit below it, so this also labels

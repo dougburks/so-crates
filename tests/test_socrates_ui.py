@@ -21291,6 +21291,86 @@ class TestCustomRulesEditor(unittest.TestCase):
         self.assertEqual(result['cleared'], '', 'cleared, so loading the same file again fires change')
         self.assertEqual(result['posts'], 0)
 
+    def _tokens(self, rule):
+        from tests.jsdom_helper import js_statements
+        return js_statements(self.PRELUDE + 'window.__jsdom_result = tokenizeSuricataRule(' + json.dumps(rule) + ');')
+
+    def _classes(self, tokens):
+        found = {}
+        for cls, text in tokens:
+            found.setdefault(cls, []).append(text)
+        return found
+
+    def test_tokenizer_colors_header_and_options(self):
+        rule = ('alert http [$HOME_NET, 10.0.0.1] any -> any 80 (msg:"Beacon; to |2F|gate"; '
+                'content:"|2F 67|ate"; pcre:"/a|b/"; sid:1000001; rev:1;)')
+        tokens = self._tokens(rule)
+        self.assertEqual(''.join(t for _c, t in tokens), rule, 'nothing lost or added')
+        found = self._classes(tokens)
+        self.assertEqual(found['cr-action'], ['alert'])
+        self.assertEqual(found['cr-proto'], ['http'])
+        self.assertIn('[$HOME_NET, 10.0.0.1]', found['cr-addr'], 'a list is one part, spaces and all')
+        self.assertEqual(found['cr-dir'], ['->'])
+        self.assertEqual(found['cr-keyword'], ['msg', 'to |2F|gate"', 'content', 'pcre', 'sid', 'rev'],
+                         "a ';' inside quotes still ends the option, as Suricata reads it")
+        self.assertIn('|2F 67|', found['cr-hex'])
+        self.assertNotIn('|b/', ''.join(found['cr-hex']), "pcre's alternation isn't hex")
+        self.assertEqual(found['cr-number'], ['1000001', '1'])
+
+    def test_tokenizer_escapes_comments_forbidden_and_unclosed(self):
+        escaped = self._classes(self._tokens('alert tcp any any -> any any (msg:"a\\;b"; sid:1000002;)'))
+        self.assertEqual(escaped['cr-keyword'], ['msg', 'sid'], "an escaped ';' doesn't end the option")
+        comment = self._tokens('# alert tcp any any -> any any (sid:1;)')
+        self.assertEqual([c for c, _t in comment], ['cr-comment'])
+        forbidden = self._classes(self._tokens('alert dns any any -> any any (dns.query; Dataset:isset,x; sid:1000003;)'))
+        self.assertEqual(forbidden['cr-forbidden'], ['Dataset'])
+        unclosed = 'alert tcp any any -> any any (msg:"x"; sid:1000004'
+        self.assertEqual(''.join(t for _c, t in self._tokens(unclosed)), unclosed)
+
+    def test_forbidden_keywords_match_the_servers(self):
+        import validators
+        match = re.search(r"const CUSTOM_RULE_FORBIDDEN_KEYWORDS = \[([^\]]*)\]", JS_CONTENT)
+        self.assertEqual(set(re.findall(r"'([a-z]+)'", match.group(1))), set(validators.CUSTOM_RULE_FORBIDDEN_KEYWORDS))
+
+    def test_highlight_layer_matches_the_text_and_marks_problems(self):
+        from tests.jsdom_helper import js_statements
+        problems = json.dumps({'error': 'The rules were not saved', 'problems': [{'line': 3, 'message': 'no sid'}]})
+        lines = ['# lab rules',
+                 'alert tcp any any -> any any (msg:"a"; \\',
+                 '  sid:1000001;)',
+                 'alert tcp any any -> any any (msg:"b";)',
+                 '',
+                 '<b>']
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED, problems, 400) + '''
+            await showCustomRulesModal();
+            var t = document.getElementById('customRulesInput');
+            t.value = ''' + json.dumps('\n'.join(lines)) + ''';
+            await saveCustomRules();
+            var layer = document.querySelector('#customRulesHighlight .custom-rules-highlight-lines');
+            var drawn = Array.from(layer.querySelectorAll('.cr-line'));
+            var before = { text: drawn.map(l => l.textContent), problem: drawn.map(l => l.classList.contains('cr-problem')),
+                           continued: drawn[2].innerHTML };
+            t.value = t.value.replace('"b"', '"bb"');
+            t.setSelectionRange(t.value.indexOf('"bb"'), t.value.indexOf('"bb"'));
+            t.dispatchEvent(new Event('input'));
+            var afterOther = Array.from(layer.querySelectorAll('.cr-problem')).length;
+            t.value = t.value.replace('sid:1000001', 'sid:1000002');
+            t.setSelectionRange(t.value.indexOf('sid:'), t.value.indexOf('sid:'));
+            t.dispatchEvent(new Event('input'));
+            await new Promise(r => setTimeout(r, 50));
+            window.__jsdom_result = { before: before, afterOther: afterOther,
+                                      afterEdit: layer.querySelectorAll('.cr-problem').length, html: layer.innerHTML,
+                                      hidden: document.getElementById('customRulesHighlight').getAttribute('aria-hidden') };
+        ''')
+        self.assertEqual(result['before']['text'], lines[:4] + [' ', '<b>'])
+        self.assertEqual(result['before']['problem'], [False, False, True, False, False, False],
+                         'line 3 of the text is the third line drawn')
+        self.assertIn('cr-keyword', result['before']['continued'], 'a continued line is read as part of its rule')
+        self.assertEqual(result['afterOther'], 1, 'editing another line leaves the mark')
+        self.assertEqual(result['afterEdit'], 0, 'editing the marked line clears it')
+        self.assertIn('&lt;b&gt;', result['html'])
+        self.assertEqual(result['hidden'], 'true')
+
     def test_editor_markup(self):
         self.assertIn('id="customRulesModal"', HTML_CONTENT)
         self.assertIn('data-change-action="custom-rules-file"', HTML_CONTENT)
