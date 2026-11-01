@@ -8667,6 +8667,9 @@
             }
 
             function addLabel(at, al, born) {
+                // one label per landing place - a server many alerts land on
+                // shows the latest, rather than a stack of them
+                labels = labels.filter(l => Math.hypot(l.x - at[0], l.y - at[1]) > 40);
                 labels.push({ x: at[0], y: at[1], born, text: al[4], kind: 's' + al[3] });
                 if (labels.length > 4) labels.shift();
             }

@@ -26,6 +26,10 @@ The cards come in three sections - Triage, Protocol records and Connections. tsh
 
 ![Stat-card sections, tshark's protocols, and Findings](../images/so-crates-findings.png)
 
+The Traffic Map replays the capture on a world map - here a week of scans and probes hitting a web server, arriving from 136 countries - with alerts in their severity's color, the top source countries, and a timeline to drag through. Click a country to filter the whole analysis to its traffic:
+
+![Traffic Map](../images/so-crates-traffic-map.png)
+
 Clicking a value in the data table opens a pivot menu for Include/Exclude/Only filtering, Hunt, and Correlate - which searches for every other log across the capture sharing that row's community ID (the cross-tool flow-correlation hash, computed by Suricata - force-enabled in 4.1.0):
 
 ![Pivot menu](../images/so-crates-pivot-menu.png)

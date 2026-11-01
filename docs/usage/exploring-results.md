@@ -16,6 +16,8 @@ After analysis completes, the UI displays different views depending on the file 
 
 ### Traffic Map
 
+![Traffic Map replaying a week of scans hitting a web server](../images/so-crates-traffic-map.png)
+
 The **Traffic Map** heading, under the Sankey Diagram, opens a world map that replays the capture: each flow flies from the country it came from to the one it went to, in the order the flows started, and each alert flies in its severity's color, with its signature shown where it lands. Countries light up as they send or receive traffic, and a faint line stays behind on every route taken, so the map shows where the capture has been even between flows. Nothing is fetched or animated until you open it.
 
 - **Timeline** - the strip under the map shows how busy each moment of the capture was, with a tick for each alert. Click or drag it to jump; the clock beside it shows the capture's time (UTC) at that point. **Replay in** sets how long the whole capture takes to play: 20 seconds, 1 minute or 3 minutes.

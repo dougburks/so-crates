@@ -273,7 +273,7 @@ Before cutting a release:
 4. **Regenerate screenshots.** Run `pip install -r requirements-screenshots.txt
    && python3 scripts/capture_screenshots.py --base-url
    http://127.0.0.1:<port>/socrates.html` against the same container, now
-   that step 3's video is done with it. This refreshes all 9
+   that step 3's video is done with it. This refreshes all 10
    `docs/images/so-crates-*.png` (the Usage page's Screenshot Tour; the
    Home page uses 3 of them) and all 35
    `docs/images/themes/*.png` (Themes page) against the URL box's default
@@ -281,8 +281,12 @@ Before cutting a release:
    traffic on malware-traffic-analysis.net, loaded with the Go button; the
    main screen's Sample PCAP file card is a smaller built-in one, see
    `samples.py`) - no local fixture or hardcoded MD5 needed, but it does
-   need internet access. The last, `so-crates-findings.png`, loads a second
-   capture the same way (`TSHARK_SAMPLE_URL`, a 140 MB 4SICS ICS capture
+   need internet access. `so-crates-traffic-map.png` loads a second capture
+   the same way (`GEO_SAMPLE_URL`, a week of scans hitting a web server,
+   also on malware-traffic-analysis.net - 207,000 flows from 136 countries,
+   where the default sample's 10 reach four) and captures the Traffic Map 24
+   seconds into its replay; `--only traffic-map` re-runs just that one. The
+   last, `so-crates-findings.png`, loads a third capture the same way (`TSHARK_SAMPLE_URL`, a 140 MB 4SICS ICS capture
    from Netresec - the default sample has no protocol tshark adds but
    Windows LAN chatter, and no Findings) and waits for tshark to finish on
    it, which takes a few minutes; `--only findings` re-runs just that one. Run this on every release, not just when the UI visibly changes -
