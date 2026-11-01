@@ -167,7 +167,7 @@ Returns on-disk rule counts, last-updated times, and staleness for all three rul
 
 **Response:** `{"suricata": {"count": <number or null>, "updated": <epoch or null>, "stale": <boolean or null>}, "yara": {"count": ..., "updated": ..., "stale": ...}, "sigma": {"windows": {"count": ..., "updated": ..., "stale": ...}, "linux": {...}}, "staleThresholdHours": <number>}` - `count`/`updated`/`stale` are all `null` if that ruleset has never been set up (rather than `stale: true`, since "never downloaded" is a different, more urgent problem the Rules modal's counts already surface, distinct from "downloaded but old"). `stale` is `true` once `updated` is older than `staleThresholdHours` (the server's `config.RULES_MAX_AGE_HOURS`) - the single source of truth both the Rules modal's own date-color warning and the notification read, rather than each hardcoding its own threshold.
 
-The `suricata` object additionally carries the rule-source configuration the Rules modal edits via `POST /api/update-rules`: `enabledSources` (currently enabled slugs), `showProtocolDecodeAlerts` (boolean), `availableSources` (map of every known slug to its metadata, each with a `bakedIn` boolean telling the modal whether enabling that source for the first time needs internet), `defaultSources` (what "Revert to Default" restores - served here so the frontend can't drift from `DEFAULT_SURICATA_SOURCES`), `sidRanges` (an array of `{"min", "max", "label"}` signature-ID ranges, the single source of truth `classifyRuleset()` in `static/socrates.js` uses to attribute an alert's `signature_id` to its ruleset - the built-in ranges first, then 1000000-1999999 as "Local / Custom Rules", then the curated sources), and `custom` (`{"count", "updated", "enabled", "allowed"}` for the [custom rules](#get-apicustom-rules) - `count`/`updated` `null` when none are saved; never their text, since the Rules modal polls this every 2 seconds).
+The `suricata` object additionally carries the rule-source configuration the Rules modal edits via `POST /api/update-rules`: `enabledSources` (currently enabled slugs), `showProtocolDecodeAlerts` (boolean), `availableSources` (map of every known slug to its metadata, each with a `bakedIn` boolean telling the modal whether enabling that source for the first time needs internet), `defaultSources` (what "Revert to Default" restores - served here so the frontend can't drift from `DEFAULT_SURICATA_SOURCES`), `sidRanges` (an array of `{"min", "max", "label"}` signature-ID ranges, the single source of truth `classifyRuleset()` in `static/socrates.js` uses to attribute an alert's `signature_id` to its ruleset - the built-in ranges first, then 1000000-1999999 as "Local / Custom Rules", then the curated sources), and `custom` (`{"count", "updated", "enabled", "allowed"}` for the [custom rules](#get-apicustom-rules) - `count`/`updated` `null` when none are saved; never their text, since the Rules modal polls this every 2 seconds), and `etpro` (`{"codeSet": <boolean>, "codeHint": <last 4 characters or null>}` for the [ET Pro access code](#post-apietpro-code) - never the code itself).
 
 ---
 
@@ -196,6 +196,18 @@ Starts an update for one ruleset, or all three. Triggered by the Rules modal's p
 The custom Suricata rules, for the Rules modal's editor.
 
 **Response:** `{"rules": <text>, "count": <number or null>, "updated": <epoch or null>, "enabled": <boolean>, "allowed": <boolean>, "sidRange": {"min": 1000000, "max": 1999999}}` - `rules` is `""` and `count`/`updated` are `null` when none are saved. `allowed` is `false` when the server runs with `ALLOW_CUSTOM_RULES=false`.
+
+---
+
+### `POST /api/etpro-code`
+
+Saves the Emerging Threats Pro access code, used to download the `et/pro` source, or with an empty code removes it - which also turns ET Pro off, deletes its downloaded rules, and puts ET Open back if it's enabled. Saving doesn't download anything: the next `POST /api/update-rules` with `et/pro` in `sources` does (the Rules modal starts one straight after).
+
+**Request body:** `{"code": <string>}` - 8 to 64 letters and digits (surrounding spaces are trimmed), or `""` to remove it
+
+**Response:** `{"codeSet": <boolean>, "codeHint": <last 4 characters or null>, "warnings": [<string>, ...]}` - the code itself is never sent back
+
+**Errors:** `400` if `code` isn't a string or isn't 8-64 letters and digits, `409` while a Suricata rules update is running, `415` without `Content-Type: application/json`.
 
 ---
 

@@ -20,6 +20,7 @@ SO-CRATES is built on many excellent open-source projects and freely available r
 | [Positive Technologies PT Rules (Open)](https://rules.ptsecurity.com) | Custom | Suricata network rules (optional) |
 | [PAW Patrules](https://pawpatrules.fr/) | CC-BY-SA-4.0 | Suricata network rules (optional) |
 | [IPFire DBL](https://www.ipfire.org/dbl/) | CC-BY-SA-4.0 | Suricata network rules (optional) |
+| [Emerging Threats Pro](https://www.proofpoint.com/us/threat-insight/et-pro-ruleset) | Commercial | Suricata network rules (optional - needs your own subscription; never included in the app image) |
 | [Stamus Lateral Movement](https://www.stamus-networks.com/) | GPL-3.0-only | Suricata network rules (optional) |
 | [Threat Hunting Rules (tgreen)](https://github.com/travisbgreen/hunting-rules) | GPL-3.0-only | Suricata network rules (optional) |
 | [NMAP Scan Detection](https://github.com/aleksibovellan/opnsense-suricata-nmaps) | MIT | Suricata network rules (optional) |

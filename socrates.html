@@ -379,6 +379,25 @@
             </div>
         </div>
 
+        <div class="modal" id="etproCodeModal" data-action="backdrop" data-arg="close-etpro-code-modal">
+            <div class="modal-content" style="max-width: 480px;">
+                <div class="modal-header">
+                    <h3>Emerging Threats Pro Access Code</h3>
+                    <button class="modal-close" title="Close (Esc)" data-action="close-etpro-code-modal">&times;</button>
+                </div>
+                <div class="custom-rules-hint">The code from your ET Pro subscription. It's kept on this server, never shown again, and used only to download ET Pro, which then replaces ET Open. Saving starts a Suricata rules update.</div>
+                <input type="password" id="etproCodeInput" class="settings-text-input" autocomplete="off" spellcheck="false" style="width: 100%; box-sizing: border-box; padding: 6px 8px;" aria-label="ET Pro access code">
+                <div id="etproCodeError" class="custom-rules-problems" style="display: none; padding-left: 0;"></div>
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-top: 15px; border-top: 1px solid var(--border-color); margin-top: 15px;">
+                    <button id="etproCodeRemoveBtn" data-action="remove-etpro-code" class="modal-btn-secondary">Remove Code</button>
+                    <div style="display: flex; gap: 10px; margin-left: auto;">
+                        <button data-action="close-etpro-code-modal" class="modal-btn-secondary">Cancel</button>
+                        <button id="etproCodeSaveBtn" data-action="save-etpro-code" class="modal-btn-primary">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="modal" id="autocompleteModal" data-action="backdrop" data-arg="close-autocomplete-modal">
             <div class="modal-content" style="max-width: 420px;">
                 <input type="text" id="autocompleteInput" autocomplete="off" spellcheck="false" placeholder="Type a command or theme code&hellip;" class="settings-text-input" style="width: 100%; box-sizing: border-box; margin-bottom: 10px;">

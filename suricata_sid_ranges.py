@@ -43,6 +43,10 @@ that re-deriving this table (same method) may be due.
 SURICATA_SID_RANGES = [
     (2000005, 2527021, 'et/open', 'Emerging Threats Open'),
     (2610178, 2610881, 'tgreen/hunting', 'Threat Hunting Rules (tgreen)'),
+    # Not derived like the rest (that takes an access code): ET Pro's own
+    # documented block. Its copies of ET Open's rules keep their SIDs, so
+    # they're labeled ET Open.
+    (2800000, 2899999, 'et/pro', 'Emerging Threats Pro'),
     (3115102, 3115668, 'stamus/lateral', 'Stamus Lateral Movement'),
     (3300003, 3321492, 'pawpatrules', 'PAW Patrules'),
     (3400001, 3400021, 'aleksibovellan/nmap', 'NMAP Scan Detection'),

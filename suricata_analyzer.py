@@ -13,7 +13,8 @@ from db import create_sqlite_db
 from storage import add_analysis_warning
 import shark_analyzer
 from suricata_sid_ranges import SURICATA_LOCAL_SID_RANGE
-from validators import is_host_reachable, is_epoch_stale, gunzip_atomically, check_custom_rules, custom_rule_lines
+from validators import (is_host_reachable, is_epoch_stale, gunzip_atomically, check_custom_rules, custom_rule_lines,
+                        is_valid_etpro_code)
 from yara_analyzer import run_yara_pipeline
 
 REQUIRED_EXECUTABLES = ['tcpdump', 'tshark', 'suricata', 'suricata-update']
@@ -26,6 +27,10 @@ REQUIRED_EXECUTABLES = ['tcpdump', 'tshark', 'suricata', 'suricata-update']
 # default here too - everything else is opt-in via the Rules modal.
 SURICATA_RULE_SOURCES = {
     'et/open': {'label': 'Emerging Threats Open', 'url': 'https://rules.emergingthreats.net/'},
+    # Commercial: fetched with the access code saved by save_etpro_code,
+    # and never baked in (it's licensed per installation)
+    'et/pro': {'label': 'Emerging Threats Pro', 'url': 'https://www.proofpoint.com/us/threat-insight/et-pro-ruleset',
+               'note': 'Commercial - needs an ET Pro access code'},
     'oisf/trafficid': {'label': 'Suricata Traffic ID', 'url': 'https://openinfosecfoundation.org/rules/trafficid/trafficid.rules'},
     'abuse.ch/sslbl-blacklist': {'label': 'Abuse.ch SSL Blacklist', 'url': 'https://sslbl.abuse.ch/'},
     'abuse.ch/sslbl-ja3': {'label': 'Abuse.ch JA3 Fingerprints', 'url': 'https://sslbl.abuse.ch/ja3-fingerprints/'},
@@ -64,7 +69,15 @@ DEFAULT_SURICATA_SOURCES = ['et/open']
 # SURICATA_RULE_SOURCES so online users can still fetch it on demand via
 # the Rules modal; Dockerfile's bake loop derives its own list from this
 # (BAKED_IN_SURICATA_SOURCES), not a separately hand-maintained one.
-BAKED_IN_SURICATA_SOURCES = [s for s in SURICATA_RULE_SOURCES if s != 'ipfire/dbl']
+BAKED_IN_SURICATA_SOURCES = [s for s in SURICATA_RULE_SOURCES if s not in ('ipfire/dbl', 'et/pro')]
+
+# ET Pro carries every ET Open rule (suricata-update's index says it
+# "replaces" et/open), so while it's active ET Open's file is left out -
+# loading both would load each of those rules twice. ET Open stays in the
+# enabled list, so turning ET Pro off (or a fetch with a bad code) leaves it
+# in place.
+ETPRO_SOURCE = 'et/pro'
+ETPRO_CODE_FILENAME = 'etpro.code'
 
 
 def _source_filename(slug):
@@ -100,6 +113,70 @@ CUSTOM_RULES_FILENAME = 'custom.rules'
 # One save at a time - two at once could leave the saved and active
 # copies from different saves.
 _custom_rules_lock = threading.Lock()
+
+
+def _superseded_sources(enabled):
+    """Enabled sources left inactive because another enabled one includes
+    their rules."""
+    return {'et/open'} if ETPRO_SOURCE in enabled else set()
+
+
+def _etpro_code_path(data_dir):
+    return os.path.join(data_dir, 'suricata', ETPRO_CODE_FILENAME)
+
+
+def get_etpro_code(data_dir):
+    """The saved ET Pro access code, or None."""
+    try:
+        with open(_etpro_code_path(data_dir), 'r') as f:
+            code = f.read().strip()
+    except OSError:
+        return None
+    return code if is_valid_etpro_code(code) else None
+
+
+def get_etpro_info(data_dir):
+    """{'codeSet', 'codeHint'} - the code's last 4 characters, never the
+    code itself."""
+    code = get_etpro_code(data_dir)
+    return {'codeSet': code is not None, 'codeHint': code[-4:] if code else None}
+
+
+def save_etpro_code(code, data_dir):
+    """Save an ET Pro access code (check it with is_valid_etpro_code first),
+    readable by this user only. Takes effect at the next Suricata update."""
+    path = _etpro_code_path(data_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write(code + '\n')
+    os.replace(tmp, path)
+
+
+def remove_etpro_code(data_dir):
+    """Delete the ET Pro access code and turn ET Pro off: its rules are
+    removed (they came with that code), and ET Open comes back if it's
+    enabled. Purely local. Returns a list of warnings."""
+    warnings = []
+    suricata_dir = os.path.join(data_dir, 'suricata')
+    filename = _source_filename(ETPRO_SOURCE)
+    for path in (_etpro_code_path(data_dir), os.path.join(suricata_dir, 'rules', filename),
+                 os.path.join(suricata_dir, 'rules-available', filename)):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            warnings.append(f'Warning: could not remove {os.path.basename(path)}: {e}')
+    enabled = [n for n in get_suricata_enabled_sources(data_dir) if n != ETPRO_SOURCE]
+    _sync_active_sources(suricata_dir, enabled, warnings.append)
+    try:
+        with open(os.path.join(suricata_dir, 'enabled_sources.json'), 'w') as f:
+            json.dump(enabled, f)
+    except OSError as e:
+        warnings.append(f'Warning: could not save ruleset selection: {e}')
+    return warnings
 
 
 def check_executables():
@@ -380,6 +457,19 @@ def _fetch_single_source(suricata_dir, name, dest_path, on_progress):
     what is, from the user's point of view, an instant, uninteresting
     bookkeeping step.
     """
+    parameters = []
+    if name == ETPRO_SOURCE:
+        code = get_etpro_code(os.path.dirname(suricata_dir))
+        if code is None:
+            on_progress(f'Warning: could not fetch {name}: no ET Pro access code is saved')
+            return False
+        parameters = [f'secret-code={code}']
+        # The code is in the command line, so in a timeout's message - never
+        # pass it on
+        report = on_progress
+
+        def on_progress(message):
+            report(message.replace(code, '<access code>'))
     start = time.monotonic()
     scratch_data = tempfile.mkdtemp(dir=suricata_dir, prefix='.fetch-data-')
     scratch_out = tempfile.mkdtemp(dir=suricata_dir, prefix='.fetch-out-')
@@ -394,7 +484,7 @@ def _fetch_single_source(suricata_dir, name, dest_path, on_progress):
 
         try:
             enable_result = subprocess.run(
-                ['suricata-update', 'enable-source', name, '--data-dir', scratch_data],
+                ['suricata-update', 'enable-source', name, *parameters, '--data-dir', scratch_data],
                 capture_output=True, text=True, timeout=config.SURICATA_SOURCE_RECONCILE_TIMEOUT,
             )
         except (OSError, subprocess.TimeoutExpired) as e:
@@ -444,6 +534,17 @@ def _fetch_single_source(suricata_dir, name, dest_path, on_progress):
         if fetch_result.returncode != 0:
             on_progress(f'Warning: could not fetch {name} (suricata-update exited with code {fetch_result.returncode})')
             return False
+        # A failed download still exits 0, with a rules file holding only
+        # Suricata's own bundled rules - taking that as the source's rules
+        # would empty it (and, for ET Pro, switch ET Open off for nothing)
+        output = f'{fetch_result.stdout}\n{fetch_result.stderr}'
+        if 'Failed to fetch' in output:
+            # ET Pro answers an unknown code with a 404, as it would a
+            # Suricata version it has no rules for
+            refused = name == ETPRO_SOURCE and re.search(r'HTTP Error 40[134]', output)
+            on_progress(f'Warning: could not fetch {name} (ET Pro refused the access code, or has no rules for this Suricata version)' if refused
+                        else f'Warning: could not fetch {name} (the download failed)')
+            return False
 
         fetched_file = os.path.join(scratch_out, 'suricata.rules')
         if not os.path.isfile(fetched_file):
@@ -461,6 +562,25 @@ def _fetch_single_source(suricata_dir, name, dest_path, on_progress):
     finally:
         shutil.rmtree(scratch_data, ignore_errors=True)
         shutil.rmtree(scratch_out, ignore_errors=True)
+
+
+def _sync_active_sources(suricata_dir, enabled, on_progress):
+    """Leave out of the active rules/ dir each enabled source another one
+    includes (_superseded_sources), and put back from the library any other
+    enabled source that's missing - ET Open, once ET Pro is off."""
+    superseded = _superseded_sources(enabled)
+    for name in enabled:
+        filename = _source_filename(name)
+        active_path = os.path.join(suricata_dir, 'rules', filename)
+        library_path = os.path.join(suricata_dir, 'rules-available', filename)
+        try:
+            if name in superseded:
+                if os.path.exists(active_path):
+                    os.remove(active_path)
+            elif not os.path.exists(active_path) and os.path.isfile(library_path):
+                shutil.copy2(library_path, active_path)
+        except OSError as e:
+            on_progress(f'Warning: could not update {name}: {e}')
 
 
 def _activate_from_library(library_path, active_path, name, on_progress, verb='activate'):
@@ -553,6 +673,7 @@ def _reconcile_suricata_sources(suricata_dir, data_dir, desired_names, on_progre
                 os.remove(active_path)
         except OSError as e:
             on_progress(f'Warning: could not disable {name}: {e}')
+    _sync_active_sources(suricata_dir, confirmed, on_progress)
 
     state_path = os.path.join(data_dir, 'suricata', 'enabled_sources.json')
     try:
@@ -988,8 +1109,9 @@ def setup_suricata_config(data_dir=None, enable_arp=False, on_progress=print, ne
         # afterward would be pure redundant work, most noticeable (and
         # slowest) right after "Enable All" enables everything at once.
         any_succeeded = bool(freshly_fetched)
+        superseded = _superseded_sources(active_sources)
         for name in active_sources:
-            if name in freshly_fetched:
+            if name in freshly_fetched or name in superseded:
                 continue
             filename = _source_filename(name)
             library_path = os.path.join(library_dir, filename)

@@ -35,6 +35,7 @@ from validators import (
     validate_ip, validate_port, sanitize_filename, is_safe_path,
     is_log_file, is_log_file_by_extension, is_office_file_by_extension,
     is_email_file, is_email_file_by_extension, is_pcap_file,
+    is_valid_etpro_code,
 )
 from url_fetch import FileTooLargeError, fetch_url_safely
 from storage import (
@@ -54,6 +55,7 @@ from suricata_analyzer import (
     get_suricata_rules_info,
     get_suricata_enabled_sources, get_suricata_show_protocol_decode_alerts,
     get_custom_rules, save_custom_rules,
+    get_etpro_info, save_etpro_code, remove_etpro_code,
     SURICATA_RULE_SOURCES, BAKED_IN_SURICATA_SOURCES,
     DEFAULT_SURICATA_SOURCES, find_extracted_file,
 )
@@ -630,6 +632,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/csp-report': 'handle_post_csp_report',
         '/api/update-rules': 'handle_post_update_rules',
         '/api/custom-rules': 'handle_post_custom_rules',
+        '/api/etpro-code': 'handle_post_etpro_code',
     }
 
     # Hostnames accepted in Host/Origin headers beyond localhost and IP
@@ -1695,6 +1698,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         suricata_info['enabledSources'] = get_suricata_enabled_sources(DATA_DIR)
         suricata_info['showProtocolDecodeAlerts'] = get_suricata_show_protocol_decode_alerts(DATA_DIR)
         suricata_info['custom'] = {**get_custom_rules(DATA_DIR), 'allowed': self.ALLOW_CUSTOM_RULES}
+        suricata_info['etpro'] = get_etpro_info(DATA_DIR)
         # bakedIn tells the Rules modal whether a not-yet-staged source
         # needs internet the first time it's enabled (see
         # BAKED_IN_SURICATA_SOURCES's own comment for why ipfire/dbl is the
@@ -1765,6 +1769,36 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_json({'error': 'The rules were not saved', 'problems': problems}, status=400)
             return
         self._send_json({'saved': True, 'count': count})
+
+    def handle_post_etpro_code(self):
+        """Save the ET Pro access code ({'code': '...'}), or remove it -
+        and turn ET Pro off - with an empty one. Never echoed back: the
+        response, like /api/rules-info, has its last 4 characters only."""
+        data = self._read_json_body(config.MAX_REQUEST_BODY_SIZE)
+        if data is None:
+            return
+        code = data.get('code')
+        if not isinstance(code, str):
+            self._send_error(400, 'code must be a string')
+            return
+        code = code.strip()
+        if code and not is_valid_etpro_code(code):
+            self._send_error(400, 'An ET Pro access code is 8-64 letters and digits')
+            return
+        # Not while a Suricata update is running: it may be fetching with
+        # the old code, or about to switch ET Open off for ET Pro
+        with _rule_update_lock:
+            if _rule_update_state['suricata']['running']:
+                self._send_error(409, 'A Suricata rules update is running - try again once it finishes')
+                return
+            if code:
+                save_etpro_code(code, DATA_DIR)
+                warnings = []
+            else:
+                warnings = remove_etpro_code(DATA_DIR)
+        for warning in warnings:
+            print(warning)
+        self._send_json({**get_etpro_info(DATA_DIR), 'warnings': [_sanitize_error_text(w) for w in warnings]})
 
     # Strict per-type allowlist for handle_get_playbook's `id` param - rule_id
     # is a dict key into playbook_lookup's in-memory index, not a filesystem

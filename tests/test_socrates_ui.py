@@ -21377,6 +21377,136 @@ class TestCustomRulesEditor(unittest.TestCase):
         self.assertIn('accept=".rules,.txt,text/plain"', HTML_CONTENT)
 
 
+class TestEtproCode(unittest.TestCase):
+    """ET Pro in the Rules modal: its switch waits for an access code, ET
+    Open shows as included while it's on, and the code dialog saves (then
+    starts the update) or removes the code."""
+
+    PRELUDE = TestCustomRulesEditor.PRELUDE
+
+    def _fetch(self, etpro, enabled=('et/open',), post_status=200, post_response='{codeSet: true, codeHint: "6789", warnings: []}'):
+        info = json.loads(json.dumps(RULES_INFO_RESPONSE))
+        info['suricata']['availableSources']['et/pro'] = {
+            'label': 'Emerging Threats Pro', 'url': 'https://www.proofpoint.com/', 'bakedIn': False,
+            'note': 'Commercial - needs an ET Pro access code'}
+        info['suricata']['enabledSources'] = list(enabled)
+        info['suricata']['etpro'] = etpro
+        return '''
+            window.fetch = function(url, opts) {
+                if (opts && opts.method === 'POST') {
+                    posts.push({ url: url, body: JSON.parse(opts.body) });
+                    if (url === '/api/etpro-code') return respond(''' + post_response + ''', ''' + str(post_status) + ''');
+                    return respond({ status: 'started' });
+                }
+                if (url === '/api/rules-info') return respond(''' + json.dumps(info) + ''');
+                return respond(''' + json.dumps(RULE_UPDATE_STATUS_IDLE) + ''');
+            };
+        '''
+
+    def _switch(self, name):
+        return f'document.querySelector(\'input[data-name="{name}"]\')'
+
+    def test_switch_waits_for_a_code_and_et_open_shows_as_included(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch({'codeSet': False, 'codeHint': None}) + '''
+            await showRulesModal(true);
+            var noCode = { pro: ''' + self._switch('et/pro') + '''.disabled,
+                           row: Array.from(document.querySelectorAll('.custom-rules-row')).map(r => r.textContent).join(' ') };
+            closeRulesModal();
+        ''' + self._fetch({'codeSet': True, 'codeHint': '6789'}, enabled=('et/open', 'et/pro')) + '''
+            await showRulesModal(true);
+            var open = ''' + self._switch('et/open') + ''';
+            var withCode = { pro: ''' + self._switch('et/pro') + '''.disabled, openChecked: open.checked, openDisabled: open.disabled,
+                             openLabel: open.closest('label').textContent,
+                             row: Array.from(document.querySelectorAll('.custom-rules-row')).map(r => r.textContent).join(' ') };
+            handleSuricataSourceToggle('et/pro', false);
+            open = ''' + self._switch('et/open') + ''';
+            window.__jsdom_result = { noCode: noCode, withCode: withCode,
+                                      afterOff: { checked: open.checked, disabled: open.disabled } };
+        ''')
+        self.assertTrue(result['noCode']['pro'], "ET Pro can't be switched on without a code")
+        self.assertIn('no access code', result['noCode']['row'])
+        self.assertIn('Add Access Code', result['noCode']['row'])
+        self.assertFalse(result['withCode']['pro'])
+        self.assertTrue(result['withCode']['openChecked'])
+        self.assertTrue(result['withCode']['openDisabled'])
+        self.assertIn('(in ET Pro)', result['withCode']['openLabel'])
+        self.assertIn('code ending 6789', result['withCode']['row'])
+        self.assertIn('Change Code', result['withCode']['row'])
+        self.assertEqual(result['afterOff'], {'checked': True, 'disabled': False}, 'ET Open is back once ET Pro is off')
+
+    def test_save_sends_the_code_then_starts_the_update(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch({'codeSet': False, 'codeHint': None}) + '''
+            await showRulesModal(true);
+            showEtproCodeModal();
+            var input = document.getElementById('etproCodeInput');
+            var type = input.type;
+            var removeShown = document.getElementById('etproCodeRemoveBtn').style.display !== 'none';
+            input.value = ' abcdef0123456789 ';
+            await saveEtproCode();
+            window.__jsdom_result = { type: type, removeShown: removeShown, posts: posts,
+                                      open: document.getElementById('etproCodeModal').classList.contains('active'),
+                                      cleared: input.value };
+        ''')
+        self.assertEqual(result['type'], 'password')
+        self.assertFalse(result['removeShown'], 'nothing to remove yet')
+        self.assertEqual(result['posts'][0], {'url': '/api/etpro-code', 'body': {'code': 'abcdef0123456789'}})
+        self.assertEqual(result['posts'][1]['url'], '/api/update-rules')
+        self.assertIn('et/pro', result['posts'][1]['body']['sources'])
+        self.assertIn('et/open', result['posts'][1]['body']['sources'])
+        self.assertFalse(result['open'])
+        self.assertEqual(result['cleared'], '', "the code doesn't linger in the page")
+
+    def test_a_refused_code_keeps_the_dialog_open(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(
+                {'codeSet': False, 'codeHint': None}, post_status=400,
+                post_response='{error: "An ET Pro access code is 8-64 letters and digits"}') + '''
+            await showRulesModal(true);
+            showEtproCodeModal();
+            document.getElementById('etproCodeInput').value = 'bad code';
+            await saveEtproCode();
+            var error = document.getElementById('etproCodeError');
+            window.__jsdom_result = { posts: posts.map(p => p.url), error: error.textContent, shown: error.style.display !== 'none',
+                                      open: document.getElementById('etproCodeModal').classList.contains('active') };
+        ''')
+        self.assertEqual(result['posts'], ['/api/etpro-code'])
+        self.assertIn('8-64 letters and digits', result['error'])
+        self.assertTrue(result['shown'])
+        self.assertTrue(result['open'])
+
+    def test_remove_turns_et_pro_off(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(
+                {'codeSet': True, 'codeHint': '6789'}, enabled=('et/open', 'et/pro'),
+                post_response='{codeSet: false, codeHint: null, warnings: []}') + '''
+            await showRulesModal(true);
+            showEtproCodeModal();
+            var removeShown = document.getElementById('etproCodeRemoveBtn').style.display !== 'none';
+            var placeholder = document.getElementById('etproCodeInput').placeholder;
+            await removeEtproCode();
+            await triggerRulesetUpdate('suricata');
+            window.__jsdom_result = { removeShown: removeShown, placeholder: placeholder, posts: posts, toasts: toasts };
+        ''')
+        self.assertTrue(result['removeShown'])
+        self.assertIn('6789', result['placeholder'])
+        self.assertEqual(result['posts'][0]['body'], {'code': ''})
+        self.assertIn('ET Pro is off', result['toasts'][0]['message'])
+        self.assertNotIn('et/pro', result['posts'][1]['body']['sources'])
+
+    def test_escape_backs_out_of_the_dialog_only(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch({'codeSet': False, 'codeHint': None}) + '''
+            await showRulesModal(true);
+            showEtproCodeModal();
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            window.__jsdom_result = [document.getElementById('etproCodeModal').classList.contains('active'),
+                                     document.getElementById('rulesModal').classList.contains('active')];
+        ''')
+        self.assertEqual(result, [False, True])
+
+
 class TestAlertRulesetClassification(unittest.TestCase):
     """classifyRuleset() and its wiring into getColumnsForType/
     buildRowForEvent/extractValue/renderAlertDetails for the alert event

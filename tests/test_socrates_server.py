@@ -5309,7 +5309,7 @@ bright_magenta = "#D9B9D9"
                 os.path.join(self.tmpdir, 'suricata', 'rules', 'custom.rules'))
 
     def tearDown(self):
-        for path in self._custom_rules_paths():
+        for path in (*self._custom_rules_paths(), os.path.join(self.tmpdir, 'suricata', 'etpro.code')):
             if os.path.exists(path):
                 os.remove(path)
 
@@ -5406,6 +5406,54 @@ bright_magenta = "#D9B9D9"
         self.assertIs(mock_suricata.call_args.kwargs['custom_rules_enabled'], False)
         self._post('/api/update-rules', {'ruleset': 'suricata'})
         self.assertIsNone(mock_suricata.call_args.kwargs['custom_rules_enabled'])
+
+    # ---- ET Pro access code ----
+
+    ETPRO_CODE = 'abcdef0123456789'
+
+    def test_etpro_code_saved_and_never_sent_back(self):
+        info = json.loads(self._get('/api/rules-info')[1])['suricata']
+        self.assertEqual(info['etpro'], {'codeSet': False, 'codeHint': None})
+        self.assertIn('et/pro', info['availableSources'])
+        self.assertFalse(info['availableSources']['et/pro']['bakedIn'])
+        status, body = self._post('/api/etpro-code', {'code': f'  {self.ETPRO_CODE} '})
+        self.assertEqual(status, 200)
+        self.assertNotIn(self.ETPRO_CODE, body)
+        self.assertEqual(json.loads(body)['codeHint'], '6789')
+        rules_info = self._get('/api/rules-info')[1]
+        self.assertNotIn(self.ETPRO_CODE, rules_info)
+        self.assertEqual(json.loads(rules_info)['suricata']['etpro'], {'codeSet': True, 'codeHint': '6789'})
+        with open(os.path.join(self.tmpdir, 'suricata', 'etpro.code')) as f:
+            self.assertEqual(f.read().strip(), self.ETPRO_CODE)
+
+    def test_etpro_code_empty_removes_it(self):
+        self._post('/api/etpro-code', {'code': self.ETPRO_CODE})
+        status, body = self._post('/api/etpro-code', {'code': ''})
+        self.assertEqual(status, 200)
+        self.assertFalse(json.loads(body)['codeSet'])
+        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'suricata', 'etpro.code')))
+
+    def test_etpro_code_must_be_letters_and_digits(self):
+        for bad in ({'code': '../../x?y=1'}, {'code': 'short'}, {'code': 12345678}, {}):
+            status, _ = self._post('/api/etpro-code', bad)
+            self.assertEqual(status, 400, bad)
+        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'suricata', 'etpro.code')))
+
+    def test_etpro_code_waits_for_a_running_suricata_update(self):
+        with server._rule_update_lock:
+            previous = server._rule_update_state['suricata']
+            server._rule_update_state['suricata'] = {'running': True, 'lines': [], 'done': False, 'error': None}
+        try:
+            status, _ = self._post('/api/etpro-code', {'code': self.ETPRO_CODE})
+        finally:
+            with server._rule_update_lock:
+                server._rule_update_state['suricata'] = previous
+        self.assertEqual(status, 409)
+        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'suricata', 'etpro.code')))
+
+    def test_rules_info_labels_et_pro_sids(self):
+        ranges = json.loads(self._get('/api/rules-info')[1])['suricata']['sidRanges']
+        self.assertIn({'min': 2800000, 'max': 2899999, 'label': 'Emerging Threats Pro'}, ranges)
 
 
 @unittest.skipUnless(shutil.which('suricata') and os.path.isdir('/etc/suricata'), 'needs Suricata installed')

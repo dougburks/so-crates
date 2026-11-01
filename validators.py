@@ -589,6 +589,16 @@ def rule_options(rule):
     return pairs
 
 
+# An Emerging Threats Pro access code goes into its download URL's path
+# (suricata-update's et/pro source), so letters and digits only - nothing
+# that could change where the URL points.
+_ETPRO_CODE_RE = re.compile(r'[A-Za-z0-9]{8,64}')
+
+
+def is_valid_etpro_code(code):
+    return isinstance(code, str) and bool(_ETPRO_CODE_RE.fullmatch(code))
+
+
 def check_custom_rules(text, sid_range):
     """The checks on custom Suricata rules that need no Suricata: size,
     forbidden keywords, and each rule's sid - present, inside sid_range

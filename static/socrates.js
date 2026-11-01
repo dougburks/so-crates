@@ -5018,7 +5018,7 @@
         // again" checkbox state) that must only fire if Help was actually
         // open.
         function closeOtherMenuModals(exceptId) {
-            const closers = { helpModal: closeHelpModal, settingsModal: closeSettingsModal, themesModal: closeThemesModal, rulesModal: closeRulesModal, customRulesModal: closeCustomRulesModal, aboutModal: closeAboutModal, notesModal: closeNotesModal, securityOnionModal: closeSecurityOnionModal };
+            const closers = { helpModal: closeHelpModal, settingsModal: closeSettingsModal, themesModal: closeThemesModal, rulesModal: closeRulesModal, customRulesModal: closeCustomRulesModal, etproCodeModal: closeEtproCodeModal, aboutModal: closeAboutModal, notesModal: closeNotesModal, securityOnionModal: closeSecurityOnionModal };
             Object.keys(closers).forEach(function(id) {
                 if (id === exceptId) return;
                 const modal = document.getElementById(id);
@@ -5484,6 +5484,7 @@
             closeDeleteAllModal();
             closeReanalyzeModal();
             closeCustomRulesModal();
+            closeEtproCodeModal();
             closeRulesModal();
             closeAboutModal();
             closeNotesModal();
@@ -6682,6 +6683,10 @@
                 closeCustomRulesModal();
                 return;
             }
+            if (e.key === 'Escape' && document.getElementById('etproCodeModal')?.classList.contains('active')) {
+                closeEtproCodeModal();
+                return;
+            }
             if (e.key === 'Escape') {
                 // Escape backs out one level at a time: close whatever's
                 // open (a modal, the gear dropdown, a pivot menu) if
@@ -7131,9 +7136,15 @@
             const available = (info.suricata && info.suricata.availableSources) || {};
             const names = Object.keys(available);
             if (!names.length) return '';
+            const etproCodeSet = !!(info.suricata.etpro && info.suricata.etpro.codeSet);
             const rows = names.map(function(name) {
                 const src = available[name];
-                const checked = suricataSourceSelection[name] ? 'checked' : '';
+                // ET Pro needs its code first; while it's on, ET Open's rules
+                // come with it - shown on, and kept on, so it's back if ET
+                // Pro goes off or its download fails
+                const includedInPro = name === 'et/open' && suricataSourceSelection['et/pro'];
+                const checked = suricataSourceSelection[name] || includedInPro ? 'checked' : '';
+                const disabled = (name === 'et/pro' && !etproCodeSet) || includedInPro ? 'disabled' : '';
                 // Surfaces per-source caveats worth knowing before enabling
                 // (e.g. ipfire/dbl's ~51 MiB / 30+ second first fetch) plus
                 // a generic "needs internet the first time" callout for any
@@ -7170,10 +7181,10 @@
                 return `
                     <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.85rem; color: var(--text-primary); cursor: pointer; break-inside: avoid;">
                         <span class="theme-switch">
-                            <input type="checkbox" ${checked} data-change-action="suricata-source-toggle" data-name="${escapeHtml(name)}">
+                            <input type="checkbox" ${checked} ${disabled} data-change-action="suricata-source-toggle" data-name="${escapeHtml(name)}">
                             <span class="theme-switch-slider"></span>
                         </span>
-                        <span>${escapeHtml(src.label)}</span>
+                        <span>${escapeHtml(src.label)}${includedInPro ? ' <span style="color: var(--text-muted); font-size: 0.75rem;">(in ET Pro)</span>' : ''}</span>
                         <a href="${escapeHtml(src.url)}" target="_blank" rel="noopener noreferrer" style="color: var(--text-muted); font-size: 0.75rem; text-decoration: none;" data-action="stop-propagation">(source)</a>
                         ${noteHtml}
                     </label>`;
@@ -7218,8 +7229,21 @@
             // (renderRuleSection()) is the only way to expand/collapse
             // this, so when collapsed there's nothing to render at all.
             return suricataSourcesExpanded
-                ? `<div style="margin-top: 8px;">${decodeAlertsRow}${bulkLinks}<div class="suricata-sources-list" style="columns: 2; column-gap: 16px; max-height: 260px; overflow-y: auto; border: 1px solid var(--bg-hover); border-radius: 6px; padding: 4px 12px;">${rows}</div>${renderCustomRulesRow(info.suricata.custom)}</div>`
+                ? `<div style="margin-top: 8px;">${decodeAlertsRow}${bulkLinks}<div class="suricata-sources-list" style="columns: 2; column-gap: 16px; max-height: 260px; overflow-y: auto; border: 1px solid var(--bg-hover); border-radius: 6px; padding: 4px 12px;">${rows}</div>${renderEtproRow(info.suricata.etpro)}${renderCustomRulesRow(info.suricata.custom)}</div>`
                 : '';
+        }
+
+        // ET Pro's access code: ET Pro's switch (in the list above) stays off
+        // until one is saved.
+        function renderEtproRow(etpro) {
+            if (!etpro) return '';
+            const meta = etpro.codeSet ? `code ending ${escapeHtml(etpro.codeHint || '')}` : 'no access code';
+            return `
+                <div class="custom-rules-row">
+                    <span>Emerging Threats Pro</span>
+                    <span class="custom-rules-meta">— ${meta}</span>
+                    <button data-action="open-etpro-code">${etpro.codeSet ? 'Change Code' : 'Add Access Code'}</button>
+                </div>`;
         }
 
         // The analyst's own rules, one more source after the curated ones:
@@ -7266,6 +7290,11 @@
 
         function handleSuricataSourceToggle(name, checked) {
             suricataSourceSelection[name] = checked;
+            if (name === 'et/pro') {
+                // ET Open stays on underneath (see renderSuricataSourcesSection)
+                if (checked) suricataSourceSelection['et/open'] = true;
+                reRenderRulesModalFromCache();
+            }
         }
 
         function handleShowProtocolDecodeAlertsToggle(checked) {
@@ -7497,6 +7526,7 @@
         function closeRulesModal() {
             document.getElementById('rulesModal').classList.remove('active');
             closeCustomRulesModal();
+            closeEtproCodeModal();
             if (rulesPollInterval) {
                 clearInterval(rulesPollInterval);
                 rulesPollInterval = null;
@@ -7767,6 +7797,72 @@
             }
             customRulesLineCount = lineCount;
             queueCustomRulesHighlight();
+        }
+
+        function showEtproCodeModal() {
+            const etpro = (lastRulesInfo && lastRulesInfo.suricata && lastRulesInfo.suricata.etpro) || {};
+            const input = document.getElementById('etproCodeInput');
+            input.value = '';
+            input.placeholder = etpro.codeSet ? `Saved code ends ${etpro.codeHint} - enter a new one to replace it` : 'Access code';
+            document.getElementById('etproCodeRemoveBtn').style.display = etpro.codeSet ? '' : 'none';
+            showEtproCodeError('');
+            document.getElementById('etproCodeModal').classList.add('active');
+            input.focus();
+        }
+
+        function closeEtproCodeModal() {
+            document.getElementById('etproCodeModal').classList.remove('active');
+            document.getElementById('etproCodeInput').value = '';
+        }
+
+        function showEtproCodeError(message) {
+            const el = document.getElementById('etproCodeError');
+            el.textContent = message;
+            el.style.display = message ? '' : 'none';
+        }
+
+        // Saving turns ET Pro on and starts the Suricata update that
+        // downloads it - Save is the click that consents to going online,
+        // as Update is. Its result shows in the Suricata log.
+        async function postEtproCode(code) {
+            let resp;
+            let data = {};
+            try {
+                resp = await fetch('/api/etpro-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: code }),
+                });
+                try { data = await resp.json(); } catch (e) { /* no JSON body */ }
+            } catch (e) {
+                showEtproCodeError("SO-CRATES couldn't be reached");
+                return false;
+            }
+            if (!resp.ok) {
+                showEtproCodeError(data.error || 'The code was not saved');
+                return false;
+            }
+            closeEtproCodeModal();
+            return true;
+        }
+
+        async function saveEtproCode() {
+            const code = document.getElementById('etproCodeInput').value.trim();
+            if (!code) {
+                showEtproCodeError('Enter the access code');
+                return;
+            }
+            if (!await postEtproCode(code)) return;
+            suricataSourceSelection['et/pro'] = true;
+            suricataSourceSelection['et/open'] = true;
+            await triggerRulesetUpdate('suricata');
+        }
+
+        async function removeEtproCode() {
+            if (!await postEtproCode('')) return;
+            suricataSourceSelection['et/pro'] = false;
+            showToast('ET Pro access code removed - ET Pro is off');
+            await refreshRulesModal();
         }
 
         // Read in the browser and put in the editor to look over - only
@@ -14722,6 +14818,10 @@
             'close-notes-modal': () => closeNotesModal(),
             'close-rules-modal': () => closeRulesModal(),
             'close-custom-rules-modal': () => closeCustomRulesModal(),
+            'open-etpro-code': () => showEtproCodeModal(),
+            'close-etpro-code-modal': () => closeEtproCodeModal(),
+            'save-etpro-code': () => saveEtproCode(),
+            'remove-etpro-code': () => removeEtproCode(),
             'open-custom-rules': () => showCustomRulesModal(),
             'save-custom-rules': () => saveCustomRules(),
             'load-custom-rules-file': () => document.getElementById('customRulesFileInput').click(),
@@ -15003,6 +15103,9 @@
         });
         document.getElementById('autocompleteInput').addEventListener('input', () => filterAutocomplete());
         document.getElementById('customRulesInput').addEventListener('input', e => handleCustomRulesInput(e.target));
+        document.getElementById('etproCodeInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') saveEtproCode();
+        });
         document.getElementById('customRulesInput').addEventListener('scroll', () => queueCustomRulesHighlight());
         if (typeof ResizeObserver !== 'undefined') {
             new ResizeObserver(() => queueCustomRulesHighlight()).observe(document.getElementById('customRulesInput'));

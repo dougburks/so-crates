@@ -661,9 +661,6 @@ class TestModelsFallbacks(unittest.TestCase):
         self.assertEqual(models.get_dest_ip({'destination': {'ip': '5.6.7.8'}}), '5.6.7.8')
 
 
-if __name__ == '__main__':
-    unittest.main(verbosity=2)
-
 
 class TestSecurityValidatorsHardening(unittest.TestCase):
     """Release-review findings: CGNAT reachable through Load from URL, and
@@ -768,8 +765,8 @@ class TestCustomRuleChecks(unittest.TestCase):
 
     def test_rule_options_split_like_suricata(self):
         options = validators.rule_options(
-            'alert tcp any any -> any any (msg:"uses dataset\; really"; content:"lua"; nocase; sid:1000001;)')
-        self.assertEqual(options, [('msg', '"uses dataset\; really"'), ('content', '"lua"'),
+            'alert tcp any any -> any any (msg:"uses dataset\\; really"; content:"lua"; nocase; sid:1000001;)')
+        self.assertEqual(options, [('msg', '"uses dataset\\; really"'), ('content', '"lua"'),
                                    ('nocase', None), ('sid', '1000001')])
         self.assertIsNone(validators.rule_options('not a rule at all'))
 
@@ -820,3 +817,15 @@ class TestCustomRuleChecks(unittest.TestCase):
             self.assertEqual(self._problems(just_fits), [])
             self.assertIsNone(self._problems(just_fits + ' ')[0]['line'])
         self.assertIn('NUL', self._problems('alert\x00')[0]['message'])
+
+
+class TestEtproCode(unittest.TestCase):
+    def test_letters_and_digits_only(self):
+        from validators import is_valid_etpro_code
+        self.assertTrue(is_valid_etpro_code('0123456789abcdef'))
+        self.assertTrue(is_valid_etpro_code('ABCDEFGH'))
+        for bad in ['short', 'a' * 65, '../../etc/passwd', 'abcd efgh', 'abcdefgh?x=1', 'abcdefgh/', '', None, 12345678]:
+            self.assertFalse(is_valid_etpro_code(bad), bad)
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

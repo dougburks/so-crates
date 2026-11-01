@@ -28,6 +28,24 @@
   shared instance or a public demo, where everyone's analyses would run
   them
 
+### Emerging Threats Pro
+
+- **Add an Emerging Threats Pro access code** in the Rules modal, and
+  SO-CRATES downloads ET Pro in place of ET Open (which it includes). If
+  ET Pro can't be downloaded - a wrong or expired code, no internet - ET
+  Open stays in use, and turning ET Pro off goes back to it. The code is
+  kept in the data folder readable only by SO-CRATES's user, never shown
+  again or logged. ET Pro's own rules show the ruleset "Emerging Threats
+  Pro"; the ET Open rules it carries keep their SIDs and their "Emerging
+  Threats Open" label
+
+### Fixes
+
+- **A rule source whose download failed was taken as fetched**, its rules
+  replaced by Suricata's own bundled ones alone: `suricata-update` exits
+  successfully when a download fails. Its output is checked now, and the
+  source's last good rules stay in use
+
 ## 5.1.0
 
 ### Improvements

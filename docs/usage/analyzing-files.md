@@ -14,6 +14,17 @@ Every analysis starts on the main screen, which has the sample cards, the Load f
 4. **Reopen a previous analysis** - previously analyzed files are listed on the main screen
 5. **Reanalyze or delete an open analysis** - once an analysis is open, its header (next to the notes icon) has reanalyze and delete icons - reanalyze deletes the existing results and re-runs the pipeline in place; delete removes the analysis and returns to the main screen (not while it's still being analyzed - wait for it to finish). To delete every previous analysis at once, use the Danger Zone section in Settings ([Gear Menu](keyboard-and-menus.md#gear-menu) → Settings) instead; it leaves any still being analyzed, and says how many
 
+## Emerging Threats Pro
+
+If you have an Emerging Threats Pro (ETPRO) subscription, SO-CRATES can download ET Pro in place of ET Open:
+
+1. Open **Rules** from the [Gear Menu](keyboard-and-menus.md#gear-menu) and click **(Enable/Disable Rulesets)**. Below the sources, click **Add Access Code** beside **Emerging Threats Pro**
+2. Enter your ET Pro access code and click **Save**. That turns **Emerging Threats Pro** on and starts a Suricata rules update, which downloads it - this needs internet access. The update's log says whether ET Pro was downloaded, or why not
+
+ET Pro includes every ET Open rule, so while it's on, ET Open's own copy isn't loaded - its switch shows **(in ET Pro)**. Alerts from those rules still show the ruleset **Emerging Threats Open**, since they keep their SIDs; ET Pro's own rules (SIDs 2,800,000-2,899,999) show **Emerging Threats Pro**. If ET Pro can't be downloaded - a mistyped or expired code, or no internet - ET Open stays in use. Turn **Emerging Threats Pro** off to go back to ET Open.
+
+The code is kept in your data folder, readable only by the user SO-CRATES runs as. It's never shown again (the row shows its last four characters), and it's never written to a log. **Change Code** replaces it; **Remove Code** deletes it along with the downloaded ET Pro rules, and switches back to ET Open. ET Pro is licensed per installation, so it's never included in the app image, and Security Onion Playbooks and AI summaries don't cover its rules.
+
 ## Custom Suricata Rules
 
 You can add your own Suricata rules: to test one you just wrote against a capture, or to run private IOC rules, without leaving SO-CRATES or going online.
