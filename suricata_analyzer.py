@@ -36,7 +36,6 @@ SURICATA_RULE_SOURCES = {
     'abuse.ch/sslbl-ja3': {'label': 'Abuse.ch JA3 Fingerprints', 'url': 'https://sslbl.abuse.ch/ja3-fingerprints/'},
     'abuse.ch/feodotracker': {'label': 'Abuse.ch Feodo Tracker', 'url': 'https://feodotracker.abuse.ch/'},
     'etnetera/aggressive': {'label': 'Etnetera Aggressive IP Blacklist', 'url': 'https://security.etnetera.cz/'},
-    'ptrules/open': {'label': 'Positive Technologies PT Rules (Open)', 'url': 'https://rules.ptsecurity.com'},
     'pawpatrules': {'label': 'PAW Patrules', 'url': 'https://pawpatrules.fr/'},
     'stamus/lateral': {'label': 'Stamus Lateral Movement', 'url': 'https://www.stamus-networks.com/'},
     'tgreen/hunting': {'label': 'Threat Hunting Rules (tgreen)', 'url': 'https://github.com/travisbgreen/hunting-rules'},
@@ -57,6 +56,10 @@ SURICATA_RULE_SOURCES = {
 # analyses run with older rules; an old enabled_sources.json naming it is
 # filtered by get_suricata_enabled_sources(), and suricata.yaml's
 # rule-files list no longer includes its file.
+# ptrules/open (Positive Technologies) went the same way in 5.2.0: its
+# server began presenting a certificate from the Russian Trusted Root CA,
+# which public trust stores don't carry, so every download of it fails -
+# don't trust that CA in the image to get it back.
 DEFAULT_SURICATA_SOURCES = ['et/open']
 
 # ipfire/dbl deliberately excluded from what the Docker image bakes in -

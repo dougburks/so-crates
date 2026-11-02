@@ -61,6 +61,12 @@
 
 ### Fixes
 
+- **Positive Technologies PT Rules (Open)** is no longer a Suricata rule
+  source: its server now presents a certificate from the Russian Trusted
+  Root CA, which isn't in the usual trusted certificate stores, so every
+  download of it fails. An install that had it enabled simply stops
+  using it; alerts from its rules in earlier analyses are still labeled
+  Positive Technologies. The image now bakes in 12 sources
 - **A rule source whose download failed was taken as fetched**, its rules
   replaced by Suricata's own bundled ones alone: `suricata-update` exits
   successfully when a download fails. Its output is checked now, and the

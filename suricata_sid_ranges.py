@@ -65,8 +65,10 @@ SURICATA_SID_RANGES = [
 # Sources no longer offered (no longer in suricata_analyzer's
 # SURICATA_RULE_SOURCES) whose ranges stay above, so the alerts in an
 # analysis run with their rules still name them: abuse.ch retired
-# URLhaus's Suricata feed (dropped in 5.0.1).
-RETIRED_SOURCES = {'abuse.ch/urlhaus'}
+# URLhaus's Suricata feed (dropped in 5.0.1), and Positive Technologies'
+# server stopped presenting a publicly trusted certificate (dropped in
+# 5.2.0 - see suricata_analyzer.py).
+RETIRED_SOURCES = {'abuse.ch/urlhaus', 'ptrules/open'}
 
 # Suricata's own bundled decoder/stream/app-layer/file rules - always
 # loaded from /etc/suricata/rules/* regardless of which curated online
