@@ -8350,6 +8350,7 @@
             if (trafficMap) trafficMap.destroy();
             trafficMap = null;
             trafficMapDataKey = null;
+            trafficMapFetchGen++;   // a fetch still in flight builds nothing
         }
 
         function loadTrafficMapWorld() {
@@ -15495,7 +15496,10 @@
         window.addEventListener('resize', () => {
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
-                if (diagramMode && currentMd5) {
+                // currentMd5 outlives a return to the welcome screen, so
+                // check the analysis is still on screen - redrawing then
+                // brought the Traffic Map back above the welcome screen.
+                if (diagramMode && currentMd5 && document.getElementById('dataPanel').style.display !== 'none') {
                     updateSankeyDiagram();
                 }
             }, CONFIG.SEARCH_DEBOUNCE_MS);

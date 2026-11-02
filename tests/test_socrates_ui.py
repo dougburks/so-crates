@@ -23331,6 +23331,29 @@ class TestTrafficMap(unittest.TestCase):
         self.assertEqual(result['email'], 'none')
         self.assertEqual(result['fetches'], [], 'nothing is fetched until the map is opened')
 
+    def test_resize_on_the_welcome_screen_leaves_it_hidden(self):
+        """currentMd5 outlives a return to the welcome screen - a resize
+        there redrew the diagrams and brought the map back above it."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            window.fetch = function() { return new Promise(() => {}); };
+            currentMd5 = 'a'.repeat(32);
+            diagramMode = true;
+            trafficMapMode = true;
+            showAnalysisUI();
+            updateTrafficMap();
+            var panel = document.getElementById('trafficMapPanel');
+            var shown = panel.style.display;
+            clearAnalysisContainers();
+            showWelcomeUI();
+            window.dispatchEvent(new Event('resize'));
+            await new Promise(r => setTimeout(r, 500));
+            window.__jsdom_result = { shown: shown, after: panel.style.display, html: panel.innerHTML };
+        """)
+        self.assertEqual(result['shown'], '')
+        self.assertEqual(result['after'], 'none')
+        self.assertEqual(result['html'], '')
+
     def test_country_click_toggles_its_search_term(self):
         from tests.jsdom_helper import js_statements
         # currentSearch is a `let` binding test code can't reach (see
