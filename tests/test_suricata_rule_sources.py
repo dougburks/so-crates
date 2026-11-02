@@ -22,6 +22,7 @@ import gzip
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -63,7 +64,12 @@ class TestSourceFilename(unittest.TestCase):
                        'must stay selectable for online users even though never baked in')
         self.assertEqual(
             set(suricata_analyzer.BAKED_IN_SURICATA_SOURCES),
-            set(suricata_analyzer.SURICATA_RULE_SOURCES) - {'ipfire/dbl'})
+            set(suricata_analyzer.SURICATA_RULE_SOURCES) - {'ipfire/dbl', 'et/pro'})
+
+    def test_baked_in_sources_excludes_et_pro(self):
+        """ET Pro is licensed per installation, and needs a code."""
+        self.assertNotIn('et/pro', suricata_analyzer.BAKED_IN_SURICATA_SOURCES)
+        self.assertNotIn('et/pro', suricata_analyzer.DEFAULT_SURICATA_SOURCES)
 
 
 class TestGetSuricataEnabledSources(unittest.TestCase):
@@ -701,6 +707,296 @@ class TestSetupSuricataConfigProtocolDecodeAlerts(unittest.TestCase):
             self.tmpdir, network_allowed=False, show_protocol_decode_alerts=None)
         self.assertEqual(self._disable_conf_content(), '')
         self.assertIs(suricata_analyzer.get_suricata_show_protocol_decode_alerts(self.tmpdir), True)
+
+
+
+class TestCustomRules(unittest.TestCase):
+    """Custom rules on disk: saved only when every check passes, turned
+    on or off without losing them, and never touched by source
+    reconciliation. Parts of these follow the reference patch in issue
+    #75."""
+
+    RULE = 'alert tcp any any -> any any (msg:"local"; content:"x"; sid:1000001; rev:1;)'
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        self.suricata_dir = os.path.join(self.tmpdir, 'suricata')
+        self.saved = os.path.join(self.suricata_dir, 'custom.rules')
+        self.active = os.path.join(self.suricata_dir, 'rules', 'custom.rules')
+        patcher = unittest.mock.patch('suricata_analyzer.check_rules_with_suricata', return_value=[])
+        self.mock_check = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_none_saved(self):
+        self.assertEqual(suricata_analyzer.get_custom_rules(self.tmpdir), {'count': None, 'updated': None, 'enabled': False})
+        self.assertEqual(suricata_analyzer.get_custom_rules(self.tmpdir, include_text=True)['rules'], '')
+
+    def test_save_writes_both_copies_with_unix_line_endings(self):
+        count, problems = suricata_analyzer.save_custom_rules(f'# mine\r\n{self.RULE}', self.tmpdir)
+        self.assertEqual((count, problems), (1, []))
+        for path in (self.saved, self.active):
+            with open(path, newline='') as f:
+                self.assertEqual(f.read(), f'# mine\n{self.RULE}\n')
+        info = suricata_analyzer.get_custom_rules(self.tmpdir, include_text=True)
+        self.assertEqual((info['count'], info['enabled']), (1, True))
+
+    def test_problems_write_nothing(self):
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        self.mock_check.return_value = [{'line': 1, 'message': "unknown rule keyword 'foo'"}]
+        count, problems = suricata_analyzer.save_custom_rules(self.RULE.replace('content:"x"', 'foo:bar'), self.tmpdir)
+        self.assertEqual(problems, [{'line': 1, 'message': "unknown rule keyword 'foo'"}])
+        for path in (self.saved, self.active):
+            with open(path) as f:
+                self.assertIn('content:"x"', f.read())
+
+    def test_turning_off_keeps_the_saved_rules(self):
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        suricata_analyzer._set_custom_rules_enabled(self.tmpdir, False, lambda m: None)
+        self.assertFalse(os.path.exists(self.active))
+        self.assertTrue(os.path.exists(self.saved))
+        self.assertFalse(suricata_analyzer.get_custom_rules(self.tmpdir)['enabled'])
+        suricata_analyzer._set_custom_rules_enabled(self.tmpdir, True, lambda m: None)
+        self.assertTrue(os.path.exists(self.active))
+
+    def test_turning_on_with_none_saved_warns(self):
+        messages = []
+        suricata_analyzer._set_custom_rules_enabled(self.tmpdir, True, messages.append)
+        self.assertFalse(os.path.exists(self.active))
+        self.assertIn('no custom rules are saved yet', messages[0])
+
+    def test_empty_text_removes_them(self):
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        self.assertEqual(suricata_analyzer.save_custom_rules('\n  \n', self.tmpdir), (0, []))
+        self.assertFalse(os.path.exists(self.saved) or os.path.exists(self.active))
+
+    def test_reconciling_sources_leaves_custom_rules_alone(self):
+        library_dir = os.path.join(self.suricata_dir, 'rules-available')
+        _write_fake_rule_file(os.path.join(library_dir, 'et-open.rules'))
+        _write_fake_rule_file(os.path.join(library_dir, 'oisf-trafficid.rules'))
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        for sources in (['oisf/trafficid'], ['et/open']):
+            suricata_analyzer._reconcile_suricata_sources(
+                self.suricata_dir, self.tmpdir, sources, lambda m: None, network_allowed=False)
+        self.assertTrue(os.path.isfile(self.active))
+        # and they aren't counted as a curated source's rules
+        self.assertEqual(suricata_analyzer.get_suricata_rules_info(self.tmpdir)['count'], 1)
+
+    def test_setup_lists_custom_rules_and_switches_them(self):
+        os.makedirs(self.suricata_dir, exist_ok=True)
+        with open(os.path.join(self.suricata_dir, 'suricata.yaml'), 'w') as f:
+            f.write('%YAML 1.1\n---\nrule-files:\n  - suricata.rules\n')
+        suricata_analyzer.save_custom_rules(self.RULE, self.tmpdir)
+        suricata_analyzer.setup_suricata_config(self.tmpdir, on_progress=lambda m: None, network_allowed=False,
+                                                custom_rules_enabled=False)
+        with open(os.path.join(self.suricata_dir, 'suricata.yaml')) as f:
+            self.assertTrue(f.read().endswith('  - custom.rules\n'))
+        self.assertFalse(os.path.exists(self.active))
+        # None leaves them as they are
+        suricata_analyzer.setup_suricata_config(self.tmpdir, on_progress=lambda m: None, network_allowed=False)
+        self.assertFalse(os.path.exists(self.active))
+
+
+class TestCheckRulesWithSuricata(unittest.TestCase):
+    """Suricata's own parser check: its errors mapped to the lines they're
+    about, and never a pass when the check couldn't run."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        os.makedirs(os.path.join(self.tmpdir, 'suricata'))
+        with open(os.path.join(self.tmpdir, 'suricata', 'suricata.yaml'), 'w') as f:
+            f.write('%YAML 1.1\n---\n')
+
+    def test_errors_map_to_lines(self):
+        output = (
+            'i: suricata: This is Suricata version 8.0.7 RELEASE running in SYSTEM mode\n'
+            "E: detect-parse: unknown rule keyword 'foo'.\n"
+            'E: detect: error parsing signature "alert tcp any any -> any any (foo:bar; sid:1000003;)" from file /tmp/x/custom.rules at line 3\n'
+            'E: detect-pcre: pcre2 compile of "/(/" failed at offset 1: missing closing parenthesis\n'
+            'E: detect: error parsing signature "alert http any any -> any any (pcre:\"/(/\"; sid:1000004;)" from file /tmp/x/custom.rules at line 5\n'
+            'E: suricata: Loading signatures failed.\n')
+        self.assertEqual(suricata_analyzer._suricata_rule_problems(output, '/tmp/x/custom.rules'), [
+            {'line': 3, 'message': "unknown rule keyword 'foo'"},
+            {'line': 5, 'message': 'pcre2 compile of "/(/" failed at offset 1: missing closing parenthesis'},
+        ])
+
+    def test_an_error_with_no_line_still_fails(self):
+        problems = suricata_analyzer._suricata_rule_problems('E: suricata: failed to load /tmp/x/custom.rules.\n', '/tmp/x/custom.rules')
+        self.assertEqual(problems, [{'line': None, 'message': 'failed to load custom.rules'}])
+
+    def test_runs_suricata_on_the_rules_alone(self):
+        result = unittest.mock.Mock(returncode=0, stdout='', stderr='')
+        with unittest.mock.patch('suricata_analyzer.shutil.which', return_value='/usr/bin/suricata'), \
+             unittest.mock.patch('suricata_analyzer.subprocess.run', return_value=result) as mock_run:
+            self.assertEqual(suricata_analyzer.check_rules_with_suricata('alert ...', self.tmpdir), [])
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[:2], ['suricata', '-T'])
+        self.assertIn('-S', cmd)
+        self.assertIn('detect.sgh-mpm-caching=no', cmd)
+
+    def test_never_passes_unchecked(self):
+        with unittest.mock.patch('suricata_analyzer.shutil.which', return_value=None):
+            self.assertIn("isn't installed", suricata_analyzer.check_rules_with_suricata('x', self.tmpdir)[0]['message'])
+        with unittest.mock.patch('suricata_analyzer.shutil.which', return_value='/usr/bin/suricata'):
+            empty = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, empty, ignore_errors=True)
+            self.assertIn("isn't set up", suricata_analyzer.check_rules_with_suricata('x', empty)[0]['message'])
+            with unittest.mock.patch('suricata_analyzer.subprocess.run',
+                                     side_effect=subprocess.TimeoutExpired('suricata', 30)):
+                self.assertIn('took longer', suricata_analyzer.check_rules_with_suricata('x', self.tmpdir)[0]['message'])
+
+
+class TestEtPro(unittest.TestCase):
+    """ET Pro: its access code (saved readable by this user only, never
+    shown back or logged), its fetch, and ET Open stepping aside while it's
+    active."""
+
+    CODE = 'abcdef0123456789'
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.suricata_dir = os.path.join(self.tmpdir, 'suricata')
+        self.library_dir = os.path.join(self.suricata_dir, 'rules-available')
+        self.active_dir = os.path.join(self.suricata_dir, 'rules')
+        os.makedirs(self.library_dir)
+        os.makedirs(self.active_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _active(self):
+        return sorted(f for f in os.listdir(self.active_dir) if f.endswith('.rules'))
+
+    def _enable_et_open(self):
+        for d in (self.library_dir, self.active_dir):
+            _write_fake_rule_file(os.path.join(d, 'et-open.rules'))
+        with open(os.path.join(self.suricata_dir, 'enabled_sources.json'), 'w') as f:
+            json.dump(['et/open'], f)
+
+    def _fake_fetch(self, suricata_dir, name, dest_path, on_progress):
+        _write_fake_rule_file(dest_path, sid=2800001)
+        return True
+
+    def test_code_saved_privately_and_only_its_end_shown(self):
+        self.assertEqual(suricata_analyzer.get_etpro_info(self.tmpdir), {'codeSet': False, 'codeHint': None})
+        suricata_analyzer.save_etpro_code(self.CODE, self.tmpdir)
+        path = os.path.join(self.suricata_dir, 'etpro.code')
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        self.assertEqual(suricata_analyzer.get_etpro_code(self.tmpdir), self.CODE)
+        self.assertEqual(suricata_analyzer.get_etpro_info(self.tmpdir), {'codeSet': True, 'codeHint': '6789'})
+
+    def test_a_tampered_code_file_counts_as_no_code(self):
+        with open(os.path.join(self.suricata_dir, 'etpro.code'), 'w') as f:
+            f.write('abc/../../evil\n')
+        self.assertIsNone(suricata_analyzer.get_etpro_code(self.tmpdir))
+
+    def test_fetch_passes_the_code_and_never_reports_it(self):
+        suricata_analyzer.save_etpro_code(self.CODE, self.tmpdir)
+        calls, messages = [], []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            if args[1] == 'enable-source':
+                raise subprocess.TimeoutExpired(args, 5)
+            return unittest.mock.Mock(returncode=0, stdout='', stderr='')
+
+        with unittest.mock.patch('suricata_analyzer.subprocess.run', side_effect=fake_run):
+            ok = suricata_analyzer._fetch_single_source(
+                self.suricata_dir, 'et/pro', os.path.join(self.library_dir, 'et-pro.rules'), messages.append)
+        self.assertFalse(ok)
+        self.assertIn(f'secret-code={self.CODE}', calls[1])
+        self.assertTrue(messages)
+        self.assertFalse(any(self.CODE in m for m in messages), messages)
+        self.assertTrue(any('<access code>' in m for m in messages), messages)
+
+    def test_no_code_no_fetch(self):
+        messages = []
+        with unittest.mock.patch('suricata_analyzer.subprocess.run') as mock_run:
+            ok = suricata_analyzer._fetch_single_source(
+                self.suricata_dir, 'et/pro', os.path.join(self.library_dir, 'et-pro.rules'), messages.append)
+        self.assertFalse(ok)
+        mock_run.assert_not_called()
+        self.assertIn('no ET Pro access code', messages[0])
+
+    def _fetch_with_output(self, name, output):
+        messages = []
+        dest = os.path.join(self.library_dir, suricata_analyzer._source_filename(name))
+        with unittest.mock.patch('suricata_analyzer.subprocess.run',
+                                 return_value=unittest.mock.Mock(returncode=0, stdout='', stderr=output)), \
+             unittest.mock.patch('suricata_analyzer.os.path.isfile', return_value=True), \
+             unittest.mock.patch('suricata_analyzer.shutil.move') as mock_move:
+            ok = suricata_analyzer._fetch_single_source(self.suricata_dir, name, dest, messages.append)
+        return ok, messages, mock_move
+
+    def test_a_failed_download_is_a_failed_fetch(self):
+        """suricata-update exits 0 when its download fails, writing only
+        Suricata's bundled rules - that file must not replace the source's."""
+        suricata_analyzer.save_etpro_code(self.CODE, self.tmpdir)
+        ok, messages, mock_move = self._fetch_with_output(
+            'et/pro', '<Error> -- Failed to fetch https://rules.emergingthreatspro.com/<secret-code>/x: HTTP Error 403: Forbidden')
+        self.assertFalse(ok)
+        mock_move.assert_not_called()
+        self.assertIn('ET Pro refused the access code', messages[-1])
+        ok, messages, mock_move = self._fetch_with_output(
+            'oisf/trafficid', '<Error> -- Failed to fetch https://example/x: <urlopen error timed out>')
+        self.assertFalse(ok)
+        mock_move.assert_not_called()
+        self.assertIn('the download failed', messages[-1])
+
+    def test_et_pro_replaces_et_open_while_active(self):
+        self._enable_et_open()
+        with unittest.mock.patch('suricata_analyzer._fetch_single_source', side_effect=self._fake_fetch), \
+             unittest.mock.patch('suricata_analyzer.has_internet_access', return_value=True):
+            suricata_analyzer._reconcile_suricata_sources(
+                self.suricata_dir, self.tmpdir, ['et/open', 'et/pro'], lambda m: None, network_allowed=True)
+        self.assertEqual(self._active(), ['et-pro.rules'])
+        self.assertEqual(set(suricata_analyzer.get_suricata_enabled_sources(self.tmpdir)), {'et/open', 'et/pro'},
+                         'ET Open stays enabled underneath')
+        self.assertTrue(os.path.isfile(os.path.join(self.library_dir, 'et-open.rules')))
+
+        suricata_analyzer._reconcile_suricata_sources(
+            self.suricata_dir, self.tmpdir, ['et/open'], lambda m: None, network_allowed=False)
+        self.assertEqual(self._active(), ['et-open.rules'], 'turning ET Pro off brings ET Open back')
+
+    def test_a_failed_et_pro_fetch_leaves_et_open_on(self):
+        self._enable_et_open()
+        with unittest.mock.patch('suricata_analyzer._fetch_single_source', return_value=False), \
+             unittest.mock.patch('suricata_analyzer.has_internet_access', return_value=True):
+            suricata_analyzer._reconcile_suricata_sources(
+                self.suricata_dir, self.tmpdir, ['et/open', 'et/pro'], lambda m: None, network_allowed=True)
+        self.assertEqual(self._active(), ['et-open.rules'])
+        self.assertEqual(suricata_analyzer.get_suricata_enabled_sources(self.tmpdir), ['et/open'])
+
+    @unittest.mock.patch('suricata_analyzer.has_internet_access', return_value=True)
+    def test_refresh_skips_et_open_while_et_pro_is_active(self, _internet):
+        self._enable_et_open()
+        fetched = []
+
+        def fake_fetch(suricata_dir, name, dest_path, on_progress):
+            fetched.append(name)
+            return self._fake_fetch(suricata_dir, name, dest_path, on_progress)
+
+        with unittest.mock.patch('suricata_analyzer._fetch_single_source', side_effect=fake_fetch):
+            suricata_analyzer.setup_suricata_config(self.tmpdir, network_allowed=True, enabled_sources=['et/open', 'et/pro'])
+            fetched.clear()
+            suricata_analyzer.setup_suricata_config(self.tmpdir, network_allowed=True)
+        self.assertEqual(fetched, ['et/pro'])
+        self.assertNotIn('et-open.rules', self._active())
+
+    def test_removing_the_code_turns_et_pro_off_and_brings_et_open_back(self):
+        self._enable_et_open()
+        suricata_analyzer.save_etpro_code(self.CODE, self.tmpdir)
+        with unittest.mock.patch('suricata_analyzer._fetch_single_source', side_effect=self._fake_fetch), \
+             unittest.mock.patch('suricata_analyzer.has_internet_access', return_value=True):
+            suricata_analyzer._reconcile_suricata_sources(
+                self.suricata_dir, self.tmpdir, ['et/open', 'et/pro'], lambda m: None, network_allowed=True)
+        self.assertEqual(suricata_analyzer.remove_etpro_code(self.tmpdir), [])
+        self.assertEqual(self._active(), ['et-open.rules'])
+        self.assertEqual(suricata_analyzer.get_suricata_enabled_sources(self.tmpdir), ['et/open'])
+        self.assertFalse(os.path.exists(os.path.join(self.library_dir, 'et-pro.rules')),
+                         'its rules came with that code')
+        self.assertEqual(suricata_analyzer.get_etpro_info(self.tmpdir)['codeSet'], False)
 
 
 if __name__ == '__main__':

@@ -35,6 +35,7 @@ from validators import (
     validate_ip, validate_port, sanitize_filename, is_safe_path,
     is_log_file, is_log_file_by_extension, is_office_file_by_extension,
     is_email_file, is_email_file_by_extension, is_pcap_file,
+    is_valid_etpro_code,
 )
 from url_fetch import FileTooLargeError, fetch_url_safely
 from storage import (
@@ -45,7 +46,7 @@ from storage import (
     non_artifact_files, resolve_display_name, remove_artifacts, restore_meta, finished_analysis_dirs,
 )
 from analysis_cache import (
-    SANKEY_CACHE, AGGREGATION_CACHE, AGGREGATION_TOTALS_CACHE, ALL_CACHES, CACHE_LOCK,
+    SANKEY_CACHE, AGGREGATION_CACHE, AGGREGATION_TOTALS_CACHE, TRAFFIC_MAP_CACHE, ALL_CACHES, CACHE_LOCK,
     cache_put, evict_analysis_cache, cacheable_aggregation_key,
 )
 from suricata_analyzer import (
@@ -53,12 +54,15 @@ from suricata_analyzer import (
     _set_error, _set_phase, _clear_phase, read_error, read_phase, analysis_running,
     get_suricata_rules_info,
     get_suricata_enabled_sources, get_suricata_show_protocol_decode_alerts,
+    get_custom_rules, save_custom_rules,
+    get_etpro_info, save_etpro_code, remove_etpro_code,
     SURICATA_RULE_SOURCES, BAKED_IN_SURICATA_SOURCES,
     DEFAULT_SURICATA_SOURCES, find_extracted_file,
 )
 from stream_payload import DIRECTIONS as STREAM_DIRECTIONS, run_follow_raw, transcript_lines, parse_hexdump
 from suricata_sid_ranges import (
     SURICATA_SID_RANGES, SURICATA_BUILTIN_SID_RANGES, SURICATA_BUILTIN_LABEL,
+    SURICATA_LOCAL_SID_RANGE, SURICATA_LOCAL_LABEL,
 )
 from yara_analyzer import (
     check_yara_executable, setup_yara_rules, scan_single_file, get_yara_rules_info, analyze_standalone_file,
@@ -72,6 +76,7 @@ from ohmydebn_colors import (
 from email_analyzer import analyze_message, remove_filestore
 import shark_analyzer
 from findings import query_findings
+from traffic_map import empty_traffic_map, get_traffic_map_data
 from playbook_lookup import get_playbook
 from samples import SAMPLES
 from ai_summary_lookup import get_ai_summary
@@ -79,7 +84,7 @@ import config
 import cyberchef
 import tomllib
 
-VERSION = '5.1.0'
+VERSION = '5.2.0'
 GITHUB_RELEASES_API = 'https://api.github.com/repos/dougburks/so-crates/releases/latest'
 PORT = int(os.environ.get('PORT', 8000))
 BIND_ADDRESS = os.environ.get('BIND_ADDRESS', '127.0.0.1')
@@ -233,7 +238,7 @@ _rule_update_state = {
 _RULESET_LABELS = {'suricata': 'Suricata', 'yara': 'YARA', 'sigma': 'Sigma'}
 
 
-def _run_ruleset_update(name, sources=None, show_protocol_decode_alerts=None):
+def _run_ruleset_update(name, sources=None, show_protocol_decode_alerts=None, custom_rules_enabled=None):
     def on_progress(message):
         print(message)
         with _rule_update_lock:
@@ -241,7 +246,7 @@ def _run_ruleset_update(name, sources=None, show_protocol_decode_alerts=None):
 
     try:
         if name == 'suricata':
-            setup_suricata_config(DATA_DIR, enable_arp=bool(os.environ.get('ENABLE_ARP_LOGGING')), on_progress=on_progress, enabled_sources=sources, show_protocol_decode_alerts=show_protocol_decode_alerts)
+            setup_suricata_config(DATA_DIR, enable_arp=bool(os.environ.get('ENABLE_ARP_LOGGING')), on_progress=on_progress, enabled_sources=sources, show_protocol_decode_alerts=show_protocol_decode_alerts, custom_rules_enabled=custom_rules_enabled)
         elif name == 'yara':
             setup_yara_rules(DATA_DIR, on_progress=on_progress, force=True)
         elif name == 'sigma':
@@ -582,6 +587,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/count': 'handle_get_count',
         '/api/findings': 'handle_get_findings',
         '/api/sankey-data': 'handle_get_sankey_data',
+        '/api/traffic-map': 'handle_get_traffic_map',
         '/api/aggregation-data': 'handle_get_aggregation_data',
         '/api/aggregation-totals': 'handle_get_aggregation_totals',
         '/api/download-stream': 'handle_get_download_stream',
@@ -605,6 +611,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/shark-settings': 'handle_get_shark_settings',
         '/api/rule-update-status': 'handle_get_rule_update_status',
         '/api/rules-info': 'handle_get_rules_info',
+        '/api/custom-rules': 'handle_get_custom_rules',
         '/api/playbook': 'handle_get_playbook',
         '/api/ai-summary': 'handle_get_ai_summary',
     }
@@ -626,6 +633,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '/api/delete-all-analyses': 'handle_post_delete_all_analyses',
         '/api/csp-report': 'handle_post_csp_report',
         '/api/update-rules': 'handle_post_update_rules',
+        '/api/custom-rules': 'handle_post_custom_rules',
+        '/api/etpro-code': 'handle_post_etpro_code',
     }
 
     # Hostnames accepted in Host/Origin headers beyond localhost and IP
@@ -640,6 +649,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         h.strip().lower()
         for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()
     )
+
+    # ALLOW_CUSTOM_RULES=false stops anyone saving custom Suricata rules -
+    # for a shared instance or a public demo, where one person's rules
+    # would change everyone's results. Rules already saved stay as they
+    # are, and can still be turned on or off.
+    ALLOW_CUSTOM_RULES = os.environ.get('ALLOW_CUSTOM_RULES', 'true').strip().lower() not in ('false', '0', 'no', 'off')
 
     def _trusted_host(self, netloc):
         """True when a Host/Origin host is safe for this localhost-first app.
@@ -922,6 +937,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     cache_put(SANKEY_CACHE, cache_key, data)
             else:
                 data = get_sankey_data_sqlite(db_file, event_type, q)
+        except Exception:
+            self._send_error(500, 'Database error')
+            return
+        self._send_json(data)
+
+    def handle_get_traffic_map(self, params):
+        md5 = params.get('md5', [''])[0]
+        dir_path, error = self._resolve_md5_dir(md5)
+        if error:
+            self._send_error(400, error)
+            return
+        q = self._parse_search_terms(params)
+        db_file = os.path.join(dir_path, 'events.db')
+        if not os.path.exists(db_file):
+            self._send_json(empty_traffic_map())
+            return
+        try:
+            if q is None:
+                with CACHE_LOCK:
+                    cached = TRAFFIC_MAP_CACHE.get((md5,))
+                if cached is not None:
+                    self._send_json(cached)
+                    return
+                data = get_traffic_map_data(db_file)
+                with CACHE_LOCK:
+                    cache_put(TRAFFIC_MAP_CACHE, (md5,), data)
+            else:
+                data = get_traffic_map_data(db_file, q)
         except Exception:
             self._send_error(500, 'Database error')
             return
@@ -1625,10 +1668,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         sources = data.get('sources')
+        custom_rules_enabled = None
         if sources is not None:
             if not isinstance(sources, list) or not all(isinstance(s, str) for s in sources):
                 self._send_error(400, "sources must be a list of strings")
                 return
+            # 'custom' turns the saved custom rules on; it isn't one of
+            # suricata-update's sources
+            custom_rules_enabled = 'custom' in sources
+            sources = [s for s in sources if s != 'custom']
             unknown = [s for s in sources if s not in SURICATA_RULE_SOURCES]
             if unknown:
                 self._send_error(400, f"unknown suricata source(s): {', '.join(unknown)}")
@@ -1653,7 +1701,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         for n in names:
             threading.Thread(
                 target=_run_ruleset_update,
-                args=(n, sources if n == 'suricata' else None, show_protocol_decode_alerts if n == 'suricata' else None),
+                args=(n, sources if n == 'suricata' else None, show_protocol_decode_alerts if n == 'suricata' else None,
+                      custom_rules_enabled if n == 'suricata' else None),
                 daemon=True).start()
         self._send_json({'status': 'started'})
 
@@ -1678,6 +1727,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         suricata_info = get_suricata_rules_info(DATA_DIR)
         suricata_info['enabledSources'] = get_suricata_enabled_sources(DATA_DIR)
         suricata_info['showProtocolDecodeAlerts'] = get_suricata_show_protocol_decode_alerts(DATA_DIR)
+        suricata_info['custom'] = {**get_custom_rules(DATA_DIR), 'allowed': self.ALLOW_CUSTOM_RULES}
+        suricata_info['etpro'] = get_etpro_info(DATA_DIR)
         # bakedIn tells the Rules modal whether a not-yet-staged source
         # needs internet the first time it's enabled (see
         # BAKED_IN_SURICATA_SOURCES's own comment for why ipfire/dbl is the
@@ -1706,6 +1757,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         suricata_info['sidRanges'] = (
             [{'min': lo, 'max': hi, 'label': SURICATA_BUILTIN_LABEL}
              for lo, hi in SURICATA_BUILTIN_SID_RANGES]
+            + [{'min': SURICATA_LOCAL_SID_RANGE[0], 'max': SURICATA_LOCAL_SID_RANGE[1], 'label': SURICATA_LOCAL_LABEL}]
             + [{'min': min_sid, 'max': max_sid, 'label': label}
                for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES]
         )
@@ -1719,6 +1771,64 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # above the way it used to (see config.RULES_MAX_AGE_HOURS).
             'staleThresholdHours': config.RULES_MAX_AGE_HOURS,
         })
+
+    def handle_get_custom_rules(self, params):
+        self._send_json({
+            **get_custom_rules(DATA_DIR, include_text=True),
+            'allowed': self.ALLOW_CUSTOM_RULES,
+            'sidRange': {'min': SURICATA_LOCAL_SID_RANGE[0], 'max': SURICATA_LOCAL_SID_RANGE[1]},
+        })
+
+    def handle_post_custom_rules(self):
+        if not self.ALLOW_CUSTOM_RULES:
+            self._send_error(403, 'Custom rules are turned off on this server (ALLOW_CUSTOM_RULES)')
+            return
+        # Room for the text JSON-escaped: quotes and backslashes at most
+        # double it, and check_custom_rules refuses it past
+        # CUSTOM_RULES_MAX_BYTES itself
+        data = self._read_json_body(2 * config.CUSTOM_RULES_MAX_BYTES + 65536)
+        if data is None:
+            return
+        rules = data.get('rules')
+        if not isinstance(rules, str):
+            self._send_error(400, 'rules must be a string')
+            return
+        count, problems = save_custom_rules(rules, DATA_DIR)
+        if problems:
+            problems = [{**p, 'message': _sanitize_error_text(p['message'])} for p in problems]
+            self._send_json({'error': 'The rules were not saved', 'problems': problems}, status=400)
+            return
+        self._send_json({'saved': True, 'count': count})
+
+    def handle_post_etpro_code(self):
+        """Save the ET Pro access code ({'code': '...'}), or remove it -
+        and turn ET Pro off - with an empty one. Never echoed back: the
+        response, like /api/rules-info, has its last 4 characters only."""
+        data = self._read_json_body(config.MAX_REQUEST_BODY_SIZE)
+        if data is None:
+            return
+        code = data.get('code')
+        if not isinstance(code, str):
+            self._send_error(400, 'code must be a string')
+            return
+        code = code.strip()
+        if code and not is_valid_etpro_code(code):
+            self._send_error(400, 'An ET Pro access code is 8-64 letters and digits')
+            return
+        # Not while a Suricata update is running: it may be fetching with
+        # the old code, or about to switch ET Open off for ET Pro
+        with _rule_update_lock:
+            if _rule_update_state['suricata']['running']:
+                self._send_error(409, 'A Suricata rules update is running - try again once it finishes')
+                return
+            if code:
+                save_etpro_code(code, DATA_DIR)
+                warnings = []
+            else:
+                warnings = remove_etpro_code(DATA_DIR)
+        for warning in warnings:
+            print(warning)
+        self._send_json({**get_etpro_info(DATA_DIR), 'warnings': [_sanitize_error_text(w) for w in warnings]})
 
     # Strict per-type allowlist for handle_get_playbook's `id` param - rule_id
     # is a dict key into playbook_lookup's in-memory index, not a filesystem

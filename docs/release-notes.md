@@ -1,5 +1,80 @@
 # Release Notes
 
+## 5.2.0
+
+### Traffic Map
+
+- **A Traffic Map replays a capture on a world map** - open the new
+  **Traffic Map** section under the Sankey Diagram and each flow flies
+  from the country it came from to the one it went to, in the order the
+  flows started, while each alert flies in its severity's color with its
+  signature where it lands. Countries light up with their traffic, routes
+  stay faintly behind, and a timeline shows how busy each moment was -
+  drag it to jump, or replay the whole capture in 20 seconds, a minute or
+  three. Top sources and the latest alerts are listed beside the map.
+  Turn off **Animate** for a still map of every route (it starts off if
+  your system asks for reduced motion); it follows the theme
+- **Filter by country** - click a country on the map to filter the whole
+  analysis to traffic to or from it, as a `country:FR` search term you
+  can also type yourself (`country:LAN` for private addresses). Click it
+  again to undo
+- **Country data from DB-IP** - the free IP to Country Lite database
+  (CC BY 4.0) is built into the container image, refreshed with every
+  build; nothing is looked up online
+
+### Custom Suricata rules
+
+- **Add your own Suricata rules** in the Rules modal: paste them, or load a
+  `.rules` file, under **Custom rules** at the end of the Suricata
+  sources. Each rule needs a SID from 1,000,000 to 1,999,999. Every save
+  is checked first - size, no `dataset`, `datarep`, `iprep`, Lua or hash
+  lists (`filemd5`...), each SID in range and used once, then Suricata's own parser - and nothing is
+  saved unless every rule passes, with each problem listed by line -
+  Suricata itself skips a rule it can't parse without a word, so a typo
+  would otherwise just be an alert that never fires. Saved rules apply to every capture analyzed from then on,
+  there's a switch to turn them off without losing them, and they're kept
+  in the data folder through restarts and upgrades. Suggested by
+  popeye1919, whose network forensics course has students write a rule
+  for a C2 beacon and reanalyze to see it fire
+- **The custom rules editor colors rules as you type** - action, protocol,
+  keywords, strings, hex bytes and comments, with forbidden keywords
+  underlined - reading options the way Suricata does, so a missing `;`
+  shows up before you save. Lines a save refused are shaded until edited
+- **Alerts with SIDs from 1,000,000 to 1,999,999 show the ruleset "Local /
+  Custom Rules"**, not "Suricata (built-in)". Nothing SO-CRATES ships uses
+  that range, and Suricata's own rules sit below it, so this also labels
+  older analyses' local rules correctly. From popeye1919's reference patch
+- **`ALLOW_CUSTOM_RULES=false`** stops anyone adding custom rules - for a
+  shared instance or a public demo, where everyone's analyses would run
+  them
+
+### Emerging Threats Pro
+
+- **Add an Emerging Threats Pro access code** in the Rules modal, and
+  SO-CRATES downloads ET Pro in place of ET Open (which it includes). If
+  ET Pro can't be downloaded - a wrong or expired code, no internet - ET
+  Open stays in use, and turning ET Pro off goes back to it. The code is
+  kept in the data folder readable only by SO-CRATES's user, never shown
+  again or logged. ET Pro's own rules show the ruleset "Emerging Threats
+  Pro"; the ET Open rules it carries keep their SIDs and their "Emerging
+  Threats Open" label
+
+### Fixes
+
+- **Positive Technologies PT Rules (Open)** is no longer a Suricata rule
+  source: its server now presents a certificate from the Russian Trusted
+  Root CA, which isn't in the usual trusted certificate stores, so every
+  download of it fails. An install that had it enabled simply stops
+  using it; alerts from its rules in earlier analyses are still labeled
+  Positive Technologies. The image now bakes in 12 sources
+- **A rule source whose download failed was taken as fetched**, its rules
+  replaced by Suricata's own bundled ones alone: `suricata-update` exits
+  successfully when a download fails. Its output is checked now, and the
+  source's last good rules stay in use
+- **Arrow keys in a menu moved the page's keyboard selection** instead of
+  the menu's choice - the aggregation tables' page size, and now the
+  Traffic Map's options
+
 ## 5.1.0
 
 ### Improvements

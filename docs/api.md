@@ -10,7 +10,7 @@ These apply to every request, before any endpoint-specific checks:
 
 - **Host header:** a DNS name other than `localhost` or a `*.localhost` name is rejected with `403` unless it's allowed by the `ALLOWED_HOSTS` environment variable (see [Configuration](configuration.md)); IP literals always work, as does a request with no Host header (curl, scripts)
 - **Cross-site POSTs:** a POST whose `Origin` names an untrusted host, or whose `Sec-Fetch-Site` is `cross-site`, is rejected with `403`
-- **JSON bodies:** every POST endpoint that takes a JSON body - all of them except `/api/upload` (multipart) and `/api/csp-report` - requires `Content-Type: application/json` (`415` otherwise) and a JSON object body of at most 1 MB (`MAX_REQUEST_BODY_SIZE`)
+- **JSON bodies:** every POST endpoint that takes a JSON body - all of them except `/api/upload` (multipart) and `/api/csp-report` - requires `Content-Type: application/json` (`415` otherwise) and a JSON object body of at most 1 MB (`MAX_REQUEST_BODY_SIZE`) - `/api/custom-rules` takes up to about 2 MB, so 1 MB of rules still fits once JSON-escaped
 - **Methods:** only GET and POST are served. `HEAD` returns `405` with `Allow: GET, POST` and no body; other methods return `501`
 - **Unknown paths** return `404` with a JSON error - except a missing file under `/socrates.html`, `/static/*` or `/cyberchef/*`, which gets the HTTP server's own HTML `404` page
 
@@ -25,6 +25,10 @@ These apply to every request, before any endpoint-specific checks:
 
 Directory listings are never served (`404`).
 
+## Search Terms
+
+Every endpoint with a `q` parameter takes any number of them, ANDed together. A term is matched against the whole event (SQLite FTS5, or `LIKE` without it) - except a term of the form `country:XX`, which instead keeps events whose source or destination address is in country `XX` (an ISO 3166-1 alpha-2 code, any case), `country:LAN` (addresses that don't route on the internet) or `country:??` (no known country). It's the Traffic Map's click; two of them keep the traffic between those two countries. Countries come from the image's IP location data (`geo_lookup.py`) - without it, every public address is `??`. Sigma alerts have no addresses to place, so `/api/sigma-alerts` and `/api/sigma-count` ignore `country:` terms.
+
 ## GET Endpoints
 
 ### `GET /`
@@ -37,7 +41,7 @@ Redirects to `/socrates.html`.
 
 Returns the running SO-CRATES version.
 
-**Response:** `{"version": "5.1.0"}`
+**Response:** `{"version": "5.2.0"}`
 
 ---
 
@@ -165,9 +169,9 @@ Returns server-enforced limits the client should respect (e.g. when validating t
 
 Returns on-disk rule counts, last-updated times, and staleness for all three rulesets, for the Rules modal (gear menu > Rules) and the opt-in stale-rules notification (`checkForStaleRules()`). Purely a snapshot of what's currently on disk - no job/update state involved (that's `/api/rule-update-status`'s job), and no network access either.
 
-**Response:** `{"suricata": {"count": <number or null>, "updated": <epoch or null>, "stale": <boolean or null>}, "yara": {"count": ..., "updated": ..., "stale": ...}, "sigma": {"windows": {"count": ..., "updated": ..., "stale": ...}, "linux": {...}}, "staleThresholdHours": <number>}` - `count`/`updated`/`stale` are all `null` if that ruleset has never been set up (rather than `stale: true`, since "never downloaded" is a different, more urgent problem the Rules modal's counts already surface, distinct from "downloaded but old"). `stale` is `true` once `updated` is older than `staleThresholdHours` (the server's `config.RULES_MAX_AGE_HOURS`) - the single source of truth both the Rules modal's own date-color warning and the notification read, rather than each hardcoding its own threshold.
+**Response:** `{"suricata": {"count": <number or null>, "updated": <epoch or null>, "stale": <boolean or null>}, "yara": {"count": ..., "updated": ..., "stale": ...}, "sigma": {"windows": {"count": ..., "updated": ..., "stale": ...}, "linux": {...}}, "staleThresholdHours": <number>}` - `count`/`updated`/`stale` are all `null` if that ruleset has never been set up (rather than `stale: true`, since "never downloaded" is a different, more urgent problem the Rules modal's counts already surface, distinct from "downloaded but old"). `stale` is `true` once `updated` is older than `staleThresholdHours` (the server's `config.RULES_MAX_AGE_HOURS`). The Rules modal's date-color warning and the stale-rules notification don't read `stale`: they work it out from `updated` and `staleThresholdHours` - or the user's own threshold, set in the Rules modal, which the server can't know. For Suricata, `updated` is the oldest active rule source's time.
 
-The `suricata` object additionally carries the rule-source configuration the Rules modal edits via `POST /api/update-rules`: `enabledSources` (currently enabled slugs), `showProtocolDecodeAlerts` (boolean), `availableSources` (map of every known slug to its metadata, each with a `bakedIn` boolean telling the modal whether enabling that source for the first time needs internet), `defaultSources` (what "Revert to Default" restores - served here so the frontend can't drift from `DEFAULT_SURICATA_SOURCES`), and `sidRanges` (an array of `{"min", "max", "label"}` signature-ID ranges, the single source of truth `classifyRuleset()` in `static/socrates.js` uses to attribute an alert's `signature_id` to its ruleset).
+The `suricata` object additionally carries the rule-source configuration the Rules modal edits via `POST /api/update-rules`: `enabledSources` (currently enabled slugs), `showProtocolDecodeAlerts` (boolean), `availableSources` (map of every known slug to its metadata, each with a `bakedIn` boolean telling the modal whether enabling that source for the first time needs internet), `defaultSources` (what "Revert to Default" restores - served here so the frontend can't drift from `DEFAULT_SURICATA_SOURCES`), `sidRanges` (an array of `{"min", "max", "label"}` signature-ID ranges, the single source of truth `classifyRuleset()` in `static/socrates.js` uses to attribute an alert's `signature_id` to its ruleset - the built-in ranges first, then 1000000-1999999 as "Local / Custom Rules", then the curated sources), and `custom` (`{"count", "updated", "enabled", "allowed"}` for the [custom rules](#get-apicustom-rules) - `count`/`updated` `null` when none are saved; never their text, since the Rules modal polls this every 2 seconds), and `etpro` (`{"codeSet": <boolean>, "codeHint": <last 4 characters or null>}` for the [ET Pro access code](#post-apietpro-code) - never the code itself).
 
 ---
 
@@ -183,11 +187,45 @@ Returns the live/last-run state of each ruleset's update job, polled by the Rule
 
 Starts an update for one ruleset, or all three. Triggered by the Rules modal's per-ruleset "Update" buttons and its "Update All" button.
 
-**Request body:** `{"ruleset": "suricata"|"yara"|"sigma"|"all"}` - plus two optional Suricata-only fields (ignored for the other rulesets even under `"all"`): `sources`, a list of Suricata rule-source slugs to enable (validated against `SURICATA_RULE_SOURCES`), and `showProtocolDecodeAlerts`, a boolean.
+**Request body:** `{"ruleset": "suricata"|"yara"|"sigma"|"all"}` - plus two optional Suricata-only fields (ignored for the other rulesets even under `"all"`): `sources`, a list of Suricata rule-source slugs to enable (validated against `SURICATA_RULE_SOURCES`), and `showProtocolDecodeAlerts`, a boolean. `sources` may also include `"custom"`, which turns the saved custom rules on - leaving it out of a `sources` list turns them off (they stay saved); omitting `sources` leaves them as they are.
 
 **Response:** `{"status": "started"}`
 
 **Errors:** `400` if `ruleset` isn't one of the four allowed values, if `sources` isn't a list of strings or names an unknown slug, or if `showProtocolDecodeAlerts` isn't a boolean. `409` ("Rule update already in progress") if the targeted ruleset (or, for `"all"`, any one of the three) is already running.
+
+---
+
+### `GET /api/custom-rules`
+
+The custom Suricata rules, for the Rules modal's editor.
+
+**Response:** `{"rules": <text>, "count": <number or null>, "updated": <epoch or null>, "enabled": <boolean>, "allowed": <boolean>, "sidRange": {"min": 1000000, "max": 1999999}}` - `rules` is `""` and `count`/`updated` are `null` when none are saved. `allowed` is `false` when the server runs with `ALLOW_CUSTOM_RULES=false`.
+
+---
+
+### `POST /api/etpro-code`
+
+Saves the Emerging Threats Pro access code, used to download the `et/pro` source, or with an empty code removes it - which also turns ET Pro off, deletes its downloaded rules, and puts ET Open back if it's enabled. Saving doesn't download anything: the next `POST /api/update-rules` with `et/pro` in `sources` does (the Rules modal starts one straight after).
+
+**Request body:** `{"code": <string>}` - 8 to 64 letters and digits (surrounding spaces are trimmed), or `""` to remove it
+
+**Response:** `{"codeSet": <boolean>, "codeHint": <last 4 characters or null>, "warnings": [<string>, ...]}` - the code itself is never sent back
+
+**Errors:** `400` if `code` isn't a string or isn't 8-64 letters and digits, `409` while a Suricata rules update is running, `415` without `Content-Type: application/json`.
+
+---
+
+### `POST /api/custom-rules`
+
+Checks custom Suricata rules and, only if every rule passes, saves them and turns them on for the next analysis. Empty text deletes them.
+
+**Request body:** `{"rules": <text>}`
+
+The checks, in order (each stops the save): at most 1 MB and 5,000 rules, and no control character but tabs and line breaks (Windows line endings are fine); then, together, no rule indented with a space or tab (Suricata skips the line), no `dataset`, `datarep`, `iprep`, `lua`, `luajit`, `luaxform`, `filemd5`, `filesha1` or `filesha256` in any rule, and every rule's `sid` present, in 1000000-1999999, and used once; then `suricata -T` over the rules alone.
+
+**Response:** `{"saved": true, "count": <number>}`
+
+**Errors:** `400` `{"error": "The rules were not saved", "problems": [{"line": <number or null>, "message": <string>}, ...]}` when a check fails - nothing is written; `line` is `null` for a problem with the whole text. `400` if `rules` isn't a string, `415` without `Content-Type: application/json`, `403` when the server runs with `ALLOW_CUSTOM_RULES=false`.
 
 ---
 
@@ -211,6 +249,32 @@ Returns a pre-aggregated `{nodes, links}` Sankey diagram (Source IP → Dest IP 
 Each column is capped to the top 50 nodes by event count; the remainder is bucketed into a synthetic `Other` node per column so the response size doesn't grow with the dataset. `column` is `0` (Source IP), `1` (Dest IP), or `2` (Dest Port).
 
 Unfiltered (no `q`) responses are cached server-side per `(md5, type)` and invalidated on delete/reanalyze - repeat requests for the same view are effectively instant.
+
+---
+
+### `GET /api/traffic-map`
+
+The Traffic Map's data: an analysis's Suricata flows and alerts by country over time (`traffic_map.py`). Flows are placed at their start and grouped into `bins` time bins per source and destination country, so the payload stays small however many flows there are; alerts are listed one by one.
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `md5` | Yes | - | MD5 hash of the analysis |
+| `q` | No | none | Search terms, as for every other endpoint - `country:` terms included (see [Search Terms](#search-terms)). |
+
+**Response:**
+```json
+{"start": 1784926838.08, "span": 604800.57, "bins": 1200,
+ "buckets": [[0, "FR", "US", 11, 11562], ...],
+ "alerts": [[12.5, "CN", "US", 2, "ET SCAN Zmap User-Agent (Inbound)", "1.2.3.4", "203.0.113.8"], ...],
+ "totals": {"US": [207010, 39914993], "FR": [86840, 10831078], ...},
+ "flows": 207010, "alertCount": 157,
+ "geo": {"source": "DB-IP IP to Country Lite", "date": "2026-11"}}
+```
+`start` is the first flow's or alert's time (epoch seconds) and `span` the seconds to the last. Each bucket is `[bin, source country, destination country, flows, bytes]`; each alert is `[seconds after start, source country, destination country, severity, signature, source IP, destination IP]`, at most 2,000 of them, in time order - when there are more, the 2,000 most severe are kept (`alertCount` is the full count). `totals` is flows and bytes per country, as source or destination. A country is an ISO 3166-1 alpha-2 code, `LAN` for an address that doesn't route on the internet, or `??` when there's none. `geo` is `null` when the image's IP location data isn't installed (a local development run), in which case every public address is `??`. An analysis with no flows or alerts gets `"start": null` and empty lists.
+
+Unfiltered (no `q`) responses are cached per analysis, like `/api/sankey-data`.
 
 ---
 
@@ -436,7 +500,7 @@ A `ready` analysis can also have `warnings`, a list of what went wrong without f
 
 ### `GET /api/shark-status`
 
-Where tshark stands for a PCAP analysis. Alongside Suricata, tshark decodes the capture (captures up to `SHARK_BACKGROUND_MAX_PACKETS`, 3 million packets by default; bigger ones only on request - see `POST /api/shark-start`. A run whose processes pass `SHARK_MAX_MEMORY_BYTES`, 4 GB by default, is stopped with an error), and once both are done, what Suricata lacks - records of protocols it doesn't parse, and connection rows (`conn_<protocol>`) - joins Suricata's in the analysis's `events.db`, so every data endpoint returns it (`GET /api/stats`'s `tshark_types` lists those types). Rows from tshark carry `"source": "tshark"`. An analysis that has never been queued (one from before tshark ran alongside Suricata, or whose queued run was lost to a server restart) is queued by its first status request, if it's under the packet limit. While tshark is switched off (`POST /api/shark-settings`), every PCAP analysis's status is `disabled` and nothing runs.
+Where tshark stands for a PCAP analysis. Alongside Suricata, tshark decodes the capture (captures up to `SHARK_BACKGROUND_MAX_PACKETS`, 3 million packets by default - or, when the packets can't be counted, up to `SHARK_BACKGROUND_MAX_BYTES`, 250 MB; bigger ones only on request - see `POST /api/shark-start`. A run whose processes pass `SHARK_MAX_MEMORY_BYTES`, 4 GB by default, is stopped with an error), and once both are done, what Suricata lacks - records of protocols it doesn't parse, and connection rows (`conn_<protocol>`) - joins Suricata's in the analysis's `events.db`, so every data endpoint returns it (`GET /api/stats`'s `tshark_types` lists those types). Rows from tshark carry `"source": "tshark"`. An analysis that has never been queued (one from before tshark ran alongside Suricata, or whose queued run was lost to a server restart) is queued by its first status request, if it's under the packet limit. While tshark is switched off (`POST /api/shark-settings`), every PCAP analysis's status is `disabled` and nothing runs.
 
 **Query Parameters:**
 
@@ -887,7 +951,7 @@ Sink for Content-Security-Policy violation reports - every response's CSP names 
 | Code | Meaning |
 |---|---|
 | `400` | Invalid input (bad IP, port, MD5, URL, path traversal), or an upload over the size limit |
-| `403` | Untrusted `Host` header, or a cross-site POST - see [Request Requirements](#request-requirements) |
+| `403` | Untrusted `Host` header, or a cross-site POST - see [Request Requirements](#request-requirements) - or saving custom rules on a server with `ALLOW_CUSTOM_RULES=false` |
 | `404` | Resource not found (no file, no analysis, no packets) |
 | `405` | `HEAD` request |
 | `409` | Conflict - analysis already in progress for this MD5, or a rule update already in progress |

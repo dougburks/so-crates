@@ -3,8 +3,8 @@
 Once you've connected to SO-CRATES in your browser, here are some of the things you can do. Start with the tour below, then dig into the details:
 
 - [The Sample Story](sample-story.md) - one phishing incident, followed through the four built-in samples
-- [Analyzing Files](analyzing-files.md) - uploading, loading from a URL, ZIPs, and reanalyzing
-- [Exploring Results](exploring-results.md) - what each tab shows for PCAP, log, email, and binary analyses, including Findings and DNS Heuristics
+- [Analyzing Files](analyzing-files.md) - uploading, loading from a URL, ZIPs, reanalyzing, adding your own Suricata rules, and Emerging Threats Pro
+- [Exploring Results](exploring-results.md) - what each tab shows for PCAP, log, email, and binary analyses, including the Traffic Map, Findings and DNS Heuristics
 - [Filtering & Drill-Down](filtering-and-drilldown.md) - the pivot menu, AI summaries, playbooks, notes, and stream analysis
 - [Keyboard & Menus](keyboard-and-menus.md) - keyboard navigation, the command palette, and the gear menu
 
@@ -25,6 +25,10 @@ After analysis, you can view network alerts, file alerts, network metadata, and 
 The cards come in three sections - Triage, Protocol records and Connections. tshark adds the protocols Suricata doesn't parse (the cards marked with a dot - here S7comm, Telnet and TLS failures from an ICS lab's capture), and Findings gathers what the protocol records show is worth a look, one row per finding on each server:
 
 ![Stat-card sections, tshark's protocols, and Findings](../images/so-crates-findings.png)
+
+The Traffic Map replays the capture on a world map - here a week of scans and probes hitting a web server, arriving from 136 countries - with alerts in their severity's color, the top source countries, and a timeline to drag through. Click a country to filter the whole analysis to its traffic:
+
+![Traffic Map](../images/so-crates-traffic-map.png)
 
 Clicking a value in the data table opens a pivot menu for Include/Exclude/Only filtering, Hunt, and Correlate - which searches for every other log across the capture sharing that row's community ID (the cross-tool flow-correlation hash, computed by Suricata - force-enabled in 4.1.0):
 

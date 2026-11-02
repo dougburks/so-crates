@@ -7,7 +7,7 @@ Browser ──▶ socrates.py (Python HTTP server, port 8000)
                 │
                 ├──▶ Suricata (subprocess, analyzes PCAPs → eve.json)
                 ├──▶ Zircolite (subprocess, analyzes log files → Sigma matches)
-                ├──▶ YARA (scans binary/other files → yara_matches.json)
+                ├──▶ YARA (scans binary/other files → events.db; a PCAP's extracted files → yara_matches.json)
                 ├──▶ email_analyzer.py (in-process: parses .eml → email/link/fileinfo events, YARA on attachments)
                 ├──▶ exiftool (subprocess, optional EXIF metadata on binary files)
                 ├──▶ SQLite (indexes eve.json/Sigma matches → events.db)
@@ -35,7 +35,7 @@ A stdlib-only Python HTTP server (`http.server.SimpleHTTPRequestHandler`). Handl
 | `models.py` | Suricata event field extraction helpers (IP, port, protocol) |
 | `url_fetch.py` | Downloads a "Load from URL" file through only the IPs `validators.py` validated, re-checking every redirect hop |
 | `storage.py` | Files on disk: the upload scratch directory, the startup sweep of what a server that died left in `/tmp` (`cleanup_stale_tmp`), ZIP extraction, hashing, and an analysis directory's `.meta`, pcap, display name and artifact lists |
-| `analysis_cache.py` | In-memory caches of unfiltered Sankey/aggregation results per analysis, and their eviction |
+| `analysis_cache.py` | In-memory caches of unfiltered Sankey/aggregation/Traffic Map results per analysis, and their eviction |
 | `validators.py` | Input validation: IP, port, filename, path safety, URL safety (SSRF/DNS-rebinding), zip-slip and zip-bomb limits, PCAP magic bytes |
 | `suricata_analyzer.py` | Suricata orchestration: executable checks, rules download/config, background spawn, and an analysis's progress and error files (`.phase`, `.error`) |
 | `suricata_sid_ranges.py` | Maps Suricata SIDs to their source ruleset, shared by `db.py` and the API |
@@ -45,6 +45,8 @@ A stdlib-only Python HTTP server (`http.server.SimpleHTTPRequestHandler`). Handl
 | `exif_analyzer.py` | EXIF/media metadata extraction via `exiftool` subprocess |
 | `playbook_lookup.py` | Looks up per-rule investigation playbooks from the pre-generated index |
 | `ai_summary_lookup.py` | Looks up pre-generated AI rule summaries |
+| `geo_lookup.py` | IP address to country, from the DB-IP country data baked into the image - for the Traffic Map and `country:` search terms |
+| `traffic_map.py` | The Traffic Map's data: an analysis's flows and alerts by country over time, for `GET /api/traffic-map` |
 | `ohmydebn_colors.py` | Derives a full SO-CRATES theme from an OhMyDebn/Aether color palette (`colors.toml` or `alacritty.toml`), for the theme-sync feature |
 | `cyberchef.py` | The bundled CyberChef: where it lives (`CYBERCHEF_DIR`) and the Content-Security-Policy its responses get |
 | `stream_payload.py` | Stream payloads: exact bytes for `/api/raw-stream` via `tshark`'s follow mode, the ASCII transcript, and the hexdump's parsing |

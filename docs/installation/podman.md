@@ -49,7 +49,7 @@ podman compose -f docker-compose.podman.yml restart
 
 ## Air-Gapped / Offline Deployment for Podman
 
-Our container image bakes in 13 Suricata rule sources (Emerging Threats Open enabled by default), YARA Forge rules, and SigmaHQ/Zircolite rules at build time, so PCAP, log, email and binary analysis - and the built-in sample files - all work without internet access. To copy to an isolated network, pull and save the container image using an internet-connected machine:
+Our container image bakes in 12 Suricata rule sources (Emerging Threats Open enabled by default), YARA Forge rules, and SigmaHQ/Zircolite rules at build time, so PCAP, log, email and binary analysis - and the built-in sample files - all work without internet access. To copy to an isolated network, pull and save the container image using an internet-connected machine:
 
 ```bash
 podman pull ghcr.io/dougburks/so-crates:main
@@ -80,11 +80,23 @@ podman run --userns=keep-id --user $(id -u):$(id -g) \
 ```
 
 
+
+## Shared instances
+
+Custom Suricata rules apply to every analysis on the server, so on an instance several people use, one person's rules change everyone's results. Set `ALLOW_CUSTOM_RULES=false` to stop anyone adding them (rules already saved stay as they are):
+
+```bash
+podman run --userns=keep-id --user $(id -u):$(id -g) \
+  -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+  -e ALLOW_CUSTOM_RULES=false ghcr.io/dougburks/so-crates:main
+```
+
 ## Cloud and proxied environments
 
 If you access SO-CRATES through a proxy hostname rather than localhost or an IP (e.g. Killercoda, GitHub Codespaces, or your own reverse proxy), add the hostname to the `ALLOWED_HOSTS` environment variable or requests are rejected with "Invalid Host header" (a DNS-rebinding defense). A wildcard covers per-session hostnames:
 
 ```bash
-podman run --rm -v $HOME/socrates-data:/data:Z -p 8000:8000 \
+podman run --rm --userns=keep-id --user $(id -u):$(id -g) \
+  -v $HOME/socrates-data:/data:Z -p 8000:8000 \
   -e ALLOWED_HOSTS='*.killercoda.com' ghcr.io/dougburks/so-crates:main
 ```

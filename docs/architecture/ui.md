@@ -9,7 +9,7 @@ Four files:
 | `static/socrates.css` | All styles |
 | `static/socrates.js` | All JavaScript |
 
-`socrates.html` loads them via `<script src>` and `<link>` tags - `theme-boot.js` parser-blocking in `<head>`, so the theme applies before anything draws. D3 and d3-sankey are vendored in `static/` for offline use; CyberChef is baked into the container image and served at `/cyberchef/` (see [Architecture](index.md)).
+`socrates.html` loads them via `<script src>` and `<link>` tags - `theme-boot.js` parser-blocking in `<head>`, so the theme applies before anything draws. D3, d3-sankey and topojson-client (with the Traffic Map's `world-110m.json`) are vendored in `static/` for offline use; CyberChef is baked into the container image and served at `/cyberchef/` (see [Architecture](index.md)).
 
 ## UI States
 
@@ -29,6 +29,7 @@ Analysis View (analysis loaded)
   │               a PCAP analysis's cards are in Triage, Protocol records and Connections panels
   │               that share rows, All Events last in Triage; every card one width and height)
   ├── Sankey Diagram (collapsible section - Source IP → Dest IP → Dest Port, reflects current filters)
+  ├── Traffic Map (collapsible section, collapsed until opened - flows and alerts replayed by country on a world map, reflects the current search)
   ├── Aggregation Tables (collapsible section - frequency counts per column)
   └── Data Table (the selected tab's rows; a row expands into its detail panel)
 ```
@@ -60,11 +61,12 @@ let tabDataCache = {};       // cached event data per type
 | Command Palette | `AUTOCOMPLETE_COMMANDS`, `openAutocompleteModal()`, `filterAutocomplete()`, `autocompleteMatchesQuery()`, `autocompleteMatchScore()`, `activateAutocompleteSelection()` | Type-anywhere command list (see [Usage](../usage/keyboard-and-menus.md#command-palette)) |
 | Data Loading | `loadTabData()`, `loadFromUrl()`, `uploadPcap()`, `checkStatus()` | Fetch data from API |
 | Rendering | `buildStats()`, `buildSections()`, `buildSection()`, `buildAllEvents()`, `buildRowForEvent()`, `updateSankeyDiagram()` | Build HTML |
+| Traffic Map | `updateTrafficMap()`, `toggleTrafficMap()`, `toggleCountryFilter()`, `trafficMapCountries()`, `loadTrafficMapWorld()`, `createTrafficMap()` | The world map replay (`/api/traffic-map`): two stacked canvases - the dot map (each country painted offscreen in its own color, then sampled on a grid, which also answers which country is under the pointer) under the arcs in flight, drawn a few dozen batched strokes per frame - and the timeline. Colors are read from the theme's variables and re-read when `data-theme` or the root `style` changes; alerts use `COLORS.SEVERITY`. The world is `static/world-110m.json` (`scripts/build_world_map.py`), decoded by the vendored `topojson-client` |
 | Aggregation | `buildAggregationTablesCore()`, `buildAggregationTables()`, `buildAggregationTablesAll()`, `buildAggregationsSection()`, `buildAggregationsSectionAll()` | Frequency grids |
 | Search | `performSearch()`, `clearSearchTerm()`, `refreshAnalysisData()` | Full-text search via server |
 | Filtering | `applyFilters()`, `clearFilter()`, `clearAllFilters()`, `getFilteredEvents()`, `getSankeyEvents()`, `refreshCurrentView()` | Column filter management |
 | Streams | `downloadPcap()`, `loadAsciiTranscript()`, `loadHexdumpData()`, `switchStreamView()`, `togglePacket()`, `toggleRow()` | Stream analysis |
-| Modals | `closeAllModals()`, `showNotesModal()`, `closeNotesModal()`, `saveAnalysisNotes()`, `openAnalysisNotesFromList()`, `showRulesModal()`, `closeRulesModal()`, `triggerRulesetUpdate()`, `isRulesetStale()` | Notes editing and Rules-modal management, shared modal cleanup |
+| Modals | `closeAllModals()`, `showNotesModal()`, `closeNotesModal()`, `saveAnalysisNotes()`, `openAnalysisNotesFromList()`, `showRulesModal()`, `closeRulesModal()`, `triggerRulesetUpdate()`, `isRulesetStale()`, `renderCustomRulesRow()`, `showCustomRulesModal()`, `saveCustomRules()`, `tokenizeSuricataRule()`, `renderCustomRulesHighlight()`, `renderEtproRow()`, `showEtproCodeModal()`, `saveEtproCode()` | Notes editing, Rules-modal management (the custom rules editor opens over it, and Escape backs out of the editor alone; its highlighting is a `<pre>` behind the textarea, whose own text is transparent, drawing only the lines in view), shared modal cleanup |
 | Utilities | `escapeHtml()`, `formatEvent()`, `extractValue()`, `extractAllValue()`, `getColumnsForType()`, `clearAnalysisContainers()` | Helpers |
 
 ## Column System

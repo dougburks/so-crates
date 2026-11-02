@@ -3598,6 +3598,8 @@ class TestThemeAndMenu(unittest.TestCase):
             '.detail-value-pivot.keyboard-selected',
             '.autocomplete-item.keyboard-selected',
             '.agg-page-btn.keyboard-selected',
+            '.tm-top button.on',
+            '.tm-play:focus-visible',
         )
         fallback = 'var(--interactive-highlight, var(--accent))'
         for selector in documented_consumers:
@@ -4637,6 +4639,11 @@ class TestThemeAndMenu(unittest.TestCase):
                       "'sankey' must call toggleDiagram(), same as clicking the Sankey Diagram section's own toggle bar")
         self.assertIn('analysisOnly: true', sankey_entry,
                       "'sankey' must stay analysis-only - there's no Sankey Diagram section on the welcome screen")
+
+        traffic_map_entry = entry_for('traffic map')
+        self.assertIn('toggleTrafficMap()', traffic_map_entry,
+                      "'traffic map' must call toggleTrafficMap(), same as clicking the Traffic Map section's own toggle bar")
+        self.assertIn('analysisOnly: true', traffic_map_entry)
 
         aggregation_entry = entry_for('aggregation')
         self.assertIn('toggleAggregations()', aggregation_entry,
@@ -21130,6 +21137,383 @@ class TestRulesModal(unittest.TestCase):
         self.assertEqual(result, {'closedOnBackdrop': True, 'stayedOpenOnContent': True})
 
 
+CUSTOM_RULES_SAVED = {'count': 2, 'updated': 5000.0, 'enabled': True, 'allowed': True}
+
+
+class TestCustomRulesEditor(unittest.TestCase):
+    """The Rules modal's Custom rules row and its editor (the
+    customRulesModal): states, the problem list, and the switch riding
+    the same Update as the curated sources."""
+
+    PRELUDE = '''
+        localStorage.setItem('socrates_hideHelp', 'true');
+        await new Promise(r => setTimeout(r, 50));
+        var posts = [];
+        var toasts = [];
+        window.showToast = function(message, opts) { toasts.push({ message: message, action: opts && opts.actionLabel }); };
+        function respond(body, status) {
+            return Promise.resolve({ ok: !status || status < 400, status: status || 200, json: () => Promise.resolve(body) });
+        }
+    '''
+
+    def _fetch(self, custom, post_response='{saved: true, count: 2}', post_status=200):
+        info = json.loads(json.dumps(RULES_INFO_RESPONSE))
+        info['suricata']['custom'] = custom
+        return '''
+            window.fetch = function(url, opts) {
+                if (opts && opts.method === 'POST') {
+                    posts.push({ url: url, body: JSON.parse(opts.body) });
+                    return respond(''' + post_response + ''', ''' + str(post_status) + ''');
+                }
+                if (url === '/api/rules-info') return respond(''' + json.dumps(info) + ''');
+                if (url === '/api/custom-rules') return respond({ rules: '# saved\\nalert tcp any any -> any any (msg:"a"; sid:1000001;)', count: 1, sidRange: { min: 1000000, max: 1999999 } });
+                return respond(''' + json.dumps(RULE_UPDATE_STATUS_IDLE) + ''');
+            };
+        '''
+
+    def test_row_states(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + '''
+            handleSuricataSourceToggle('custom', false);
+            var none = renderCustomRulesRow({ count: null, updated: null, enabled: false, allowed: true });
+            handleSuricataSourceToggle('custom', true);
+            var saved = renderCustomRulesRow({ count: 2, updated: 5000, enabled: true, allowed: true });
+            var off = renderCustomRulesRow({ count: 2, updated: 5000, enabled: true, allowed: false });
+            window.__jsdom_result = { none: none, saved: saved, off: off, missing: renderCustomRulesRow(undefined) };
+        ''')
+        self.assertIn('none yet', result['none'])
+        self.assertIn('Add Rules', result['none'])
+        self.assertIn('disabled', result['none'], "the switch can't turn on rules that don't exist")
+        self.assertIn('2 rules', result['saved'])
+        self.assertIn('Edit Rules', result['saved'])
+        self.assertIn('checked', result['saved'])
+        self.assertNotIn('disabled', result['saved'])
+        self.assertIn('turned off on this server', result['off'])
+        self.assertNotIn('open-custom-rules', result['off'])
+        self.assertEqual(result['missing'], '')
+
+    def test_switch_rides_the_suricata_update(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED) + '''
+            await showRulesModal(true);
+            var rowText = document.querySelector('.custom-rules-row').textContent;
+            await triggerRulesetUpdate('suricata');
+            var on = posts[0].body.sources;
+            handleSuricataSourceToggle('custom', false);
+            await triggerRulesetUpdate('suricata');
+            window.__jsdom_result = { rowText: rowText, on: on, off: posts[1].body.sources };
+        ''')
+        self.assertIn('Custom rules', result['rowText'])
+        self.assertIn('custom', result['on'])
+        self.assertIn('et/open', result['on'])
+        self.assertNotIn('custom', result['off'])
+
+    def test_problems_are_listed_by_line_and_nothing_closes(self):
+        from tests.jsdom_helper import js_statements
+        problems = json.dumps({'error': 'The rules were not saved', 'problems': [
+            {'line': 2, 'message': 'sid 2014726 is outside 1000000-1999999, the range custom rules use'},
+            {'line': None, 'message': '<b>whole text</b>'}]})
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED, problems, 400) + '''
+            await showRulesModal(true);
+            await showCustomRulesModal();
+            var loaded = document.getElementById('customRulesInput').value;
+            document.getElementById('customRulesInput').value = 'line one\\nline two here\\nline three';
+            await saveCustomRules();
+            var list = document.getElementById('customRulesProblems');
+            list.querySelector('[data-action="goto-custom-rule-line"]').click();
+            var t = document.getElementById('customRulesInput');
+            window.__jsdom_result = {
+                loaded: loaded,
+                sent: posts[0].body.rules,
+                open: document.getElementById('customRulesModal').classList.contains('active'),
+                listShown: list.style.display !== 'none',
+                listHtml: list.innerHTML,
+                selected: t.value.slice(t.selectionStart, t.selectionEnd),
+                toasts: toasts.length,
+            };
+        ''')
+        self.assertIn('sid:1000001', result['loaded'])
+        self.assertEqual(result['sent'], 'line one\nline two here\nline three')
+        self.assertTrue(result['open'], 'a refused save leaves the editor open with the text in it')
+        self.assertTrue(result['listShown'])
+        self.assertIn('Line 2</a>: sid 2014726 is outside', result['listHtml'])
+        self.assertIn('&lt;b&gt;whole text&lt;/b&gt;', result['listHtml'])
+        self.assertEqual(result['selected'], 'line two here')
+        self.assertEqual(result['toasts'], 0)
+
+    def test_save_closes_turns_on_and_offers_reanalyze_for_an_open_capture(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch({'count': None, 'updated': None, 'enabled': False, 'allowed': True}) + '''
+            await showRulesModal(true);
+            await triggerRulesetUpdate('suricata');
+            await showCustomRulesModal();
+            await saveCustomRules();
+            await triggerRulesetUpdate('suricata');
+            var updates = posts.filter(p => p.url === '/api/update-rules').map(p => p.body.sources.includes('custom'));
+            var welcomeToast = toasts[0];
+            currentMd5 = 'a'.repeat(32);
+            currentFileName = 'lab7.pcap';
+            window.isWelcomeScreen = function() { return false; };
+            await showCustomRulesModal();
+            await saveCustomRules();
+            window.__jsdom_result = {
+                before: updates[0], after: updates[1],
+                open: document.getElementById('customRulesModal').classList.contains('active'),
+                rulesOpen: document.getElementById('rulesModal').classList.contains('active'),
+                welcomeToast: welcomeToast, pcapToast: toasts[1],
+            };
+        ''')
+        self.assertFalse(result['before'])
+        self.assertTrue(result['after'], 'the server turned them on, so the switch must too')
+        self.assertFalse(result['open'])
+        self.assertTrue(result['rulesOpen'])
+        self.assertIn('Saved 2 custom rules', result['welcomeToast']['message'])
+        self.assertIsNone(result['welcomeToast'].get('action'))
+        self.assertEqual(result['pcapToast']['action'], 'Reanalyze this one')
+
+    def test_escape_backs_out_of_the_editor_only(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED) + '''
+            await showRulesModal(true);
+            await showCustomRulesModal();
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            var afterOne = [document.getElementById('customRulesModal').classList.contains('active'),
+                            document.getElementById('rulesModal').classList.contains('active')];
+            await showCustomRulesModal();
+            closeRulesModal();
+            window.__jsdom_result = { afterOne: afterOne,
+                                      editorAfterRulesClosed: document.getElementById('customRulesModal').classList.contains('active') };
+        ''')
+        self.assertEqual(result['afterOne'], [False, True])
+        self.assertFalse(result['editorAfterRulesClosed'])
+
+    def test_load_a_file_fills_the_editor_without_sending(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED) + '''
+            var input = { value: 'lab.rules', files: [{ name: 'lab.rules', text: () => Promise.resolve('alert tcp any any -> any any (sid:1000005;)') }] };
+            await loadCustomRulesFile(input);
+            window.__jsdom_result = { text: document.getElementById('customRulesInput').value, cleared: input.value, posts: posts.length };
+        ''')
+        self.assertEqual(result['text'], 'alert tcp any any -> any any (sid:1000005;)')
+        self.assertEqual(result['cleared'], '', 'cleared, so loading the same file again fires change')
+        self.assertEqual(result['posts'], 0)
+
+    def _tokens(self, rule):
+        from tests.jsdom_helper import js_statements
+        return js_statements(self.PRELUDE + 'window.__jsdom_result = tokenizeSuricataRule(' + json.dumps(rule) + ');')
+
+    def _classes(self, tokens):
+        found = {}
+        for cls, text in tokens:
+            found.setdefault(cls, []).append(text)
+        return found
+
+    def test_tokenizer_colors_header_and_options(self):
+        rule = ('alert http [$HOME_NET, 10.0.0.1] any -> any 80 (msg:"Beacon; to |2F|gate"; '
+                'content:"|2F 67|ate"; pcre:"/a|b/"; sid:1000001; rev:1;)')
+        tokens = self._tokens(rule)
+        self.assertEqual(''.join(t for _c, t in tokens), rule, 'nothing lost or added')
+        found = self._classes(tokens)
+        self.assertEqual(found['cr-action'], ['alert'])
+        self.assertEqual(found['cr-proto'], ['http'])
+        self.assertIn('[$HOME_NET, 10.0.0.1]', found['cr-addr'], 'a list is one part, spaces and all')
+        self.assertEqual(found['cr-dir'], ['->'])
+        self.assertEqual(found['cr-keyword'], ['msg', 'to |2F|gate"', 'content', 'pcre', 'sid', 'rev'],
+                         "a ';' inside quotes still ends the option, as Suricata reads it")
+        self.assertIn('|2F 67|', found['cr-hex'])
+        self.assertNotIn('|b/', ''.join(found['cr-hex']), "pcre's alternation isn't hex")
+        self.assertEqual(found['cr-number'], ['1000001', '1'])
+
+    def test_tokenizer_escapes_comments_forbidden_and_unclosed(self):
+        escaped = self._classes(self._tokens('alert tcp any any -> any any (msg:"a\\;b"; sid:1000002;)'))
+        self.assertEqual(escaped['cr-keyword'], ['msg', 'sid'], "an escaped ';' doesn't end the option")
+        comment = self._tokens('# alert tcp any any -> any any (sid:1;)')
+        self.assertEqual([c for c, _t in comment], ['cr-comment'])
+        forbidden = self._classes(self._tokens('alert dns any any -> any any (dns.query; Dataset:isset,x; sid:1000003;)'))
+        self.assertEqual(forbidden['cr-forbidden'], ['Dataset'])
+        unclosed = 'alert tcp any any -> any any (msg:"x"; sid:1000004'
+        self.assertEqual(''.join(t for _c, t in self._tokens(unclosed)), unclosed)
+
+    def test_forbidden_keywords_match_the_servers(self):
+        import validators
+        match = re.search(r"const CUSTOM_RULE_FORBIDDEN_KEYWORDS = \[([^\]]*)\]", JS_CONTENT)
+        self.assertEqual(set(re.findall(r"'([a-z0-9]+)'", match.group(1))), set(validators.CUSTOM_RULE_FORBIDDEN_KEYWORDS))
+
+    def test_highlight_layer_matches_the_text_and_marks_problems(self):
+        from tests.jsdom_helper import js_statements
+        problems = json.dumps({'error': 'The rules were not saved', 'problems': [{'line': 3, 'message': 'no sid'}]})
+        lines = ['# lab rules',
+                 'alert tcp any any -> any any (msg:"a"; \\',
+                 '  sid:1000001;)',
+                 'alert tcp any any -> any any (msg:"b";)',
+                 '',
+                 '<b>']
+        result = js_statements(self.PRELUDE + self._fetch(CUSTOM_RULES_SAVED, problems, 400) + '''
+            await showCustomRulesModal();
+            var t = document.getElementById('customRulesInput');
+            t.value = ''' + json.dumps('\n'.join(lines)) + ''';
+            await saveCustomRules();
+            var layer = document.querySelector('#customRulesHighlight .custom-rules-highlight-lines');
+            var drawn = Array.from(layer.querySelectorAll('.cr-line'));
+            var before = { text: drawn.map(l => l.textContent), problem: drawn.map(l => l.classList.contains('cr-problem')),
+                           continued: drawn[2].innerHTML };
+            t.value = t.value.replace('"b"', '"bb"');
+            t.setSelectionRange(t.value.indexOf('"bb"'), t.value.indexOf('"bb"'));
+            t.dispatchEvent(new Event('input'));
+            var afterOther = Array.from(layer.querySelectorAll('.cr-problem')).length;
+            t.value = t.value.replace('sid:1000001', 'sid:1000002');
+            t.setSelectionRange(t.value.indexOf('sid:'), t.value.indexOf('sid:'));
+            t.dispatchEvent(new Event('input'));
+            await new Promise(r => setTimeout(r, 50));
+            window.__jsdom_result = { before: before, afterOther: afterOther,
+                                      afterEdit: layer.querySelectorAll('.cr-problem').length, html: layer.innerHTML,
+                                      hidden: document.getElementById('customRulesHighlight').getAttribute('aria-hidden') };
+        ''')
+        self.assertEqual(result['before']['text'], lines[:4] + [' ', '<b>'])
+        self.assertEqual(result['before']['problem'], [False, False, True, False, False, False],
+                         'line 3 of the text is the third line drawn')
+        self.assertIn('cr-keyword', result['before']['continued'], 'a continued line is read as part of its rule')
+        self.assertEqual(result['afterOther'], 1, 'editing another line leaves the mark')
+        self.assertEqual(result['afterEdit'], 0, 'editing the marked line clears it')
+        self.assertIn('&lt;b&gt;', result['html'])
+        self.assertEqual(result['hidden'], 'true')
+
+    def test_editor_markup(self):
+        self.assertIn('id="customRulesModal"', HTML_CONTENT)
+        self.assertIn('data-change-action="custom-rules-file"', HTML_CONTENT)
+        self.assertIn('accept=".rules,.txt,text/plain"', HTML_CONTENT)
+
+
+class TestEtproCode(unittest.TestCase):
+    """ET Pro in the Rules modal: its switch waits for an access code, ET
+    Open shows as included while it's on, and the code dialog saves (then
+    starts the update) or removes the code."""
+
+    PRELUDE = TestCustomRulesEditor.PRELUDE
+
+    def _fetch(self, etpro, enabled=('et/open',), post_status=200, post_response='{codeSet: true, codeHint: "6789", warnings: []}'):
+        info = json.loads(json.dumps(RULES_INFO_RESPONSE))
+        info['suricata']['availableSources']['et/pro'] = {
+            'label': 'Emerging Threats Pro', 'url': 'https://www.proofpoint.com/', 'bakedIn': False,
+            'note': 'Commercial - needs an ET Pro access code'}
+        info['suricata']['enabledSources'] = list(enabled)
+        info['suricata']['etpro'] = etpro
+        return '''
+            window.fetch = function(url, opts) {
+                if (opts && opts.method === 'POST') {
+                    posts.push({ url: url, body: JSON.parse(opts.body) });
+                    if (url === '/api/etpro-code') return respond(''' + post_response + ''', ''' + str(post_status) + ''');
+                    return respond({ status: 'started' });
+                }
+                if (url === '/api/rules-info') return respond(''' + json.dumps(info) + ''');
+                return respond(''' + json.dumps(RULE_UPDATE_STATUS_IDLE) + ''');
+            };
+        '''
+
+    def _switch(self, name):
+        return f'document.querySelector(\'input[data-name="{name}"]\')'
+
+    def test_switch_waits_for_a_code_and_et_open_shows_as_included(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch({'codeSet': False, 'codeHint': None}) + '''
+            await showRulesModal(true);
+            var noCode = { pro: ''' + self._switch('et/pro') + '''.disabled,
+                           row: Array.from(document.querySelectorAll('.custom-rules-row')).map(r => r.textContent).join(' ') };
+            closeRulesModal();
+        ''' + self._fetch({'codeSet': True, 'codeHint': '6789'}, enabled=('et/open', 'et/pro')) + '''
+            await showRulesModal(true);
+            var open = ''' + self._switch('et/open') + ''';
+            var withCode = { pro: ''' + self._switch('et/pro') + '''.disabled, openChecked: open.checked, openDisabled: open.disabled,
+                             openLabel: open.closest('label').textContent,
+                             row: Array.from(document.querySelectorAll('.custom-rules-row')).map(r => r.textContent).join(' ') };
+            handleSuricataSourceToggle('et/pro', false);
+            open = ''' + self._switch('et/open') + ''';
+            window.__jsdom_result = { noCode: noCode, withCode: withCode,
+                                      afterOff: { checked: open.checked, disabled: open.disabled } };
+        ''')
+        self.assertTrue(result['noCode']['pro'], "ET Pro can't be switched on without a code")
+        self.assertIn('no access code', result['noCode']['row'])
+        self.assertIn('Add Access Code', result['noCode']['row'])
+        self.assertFalse(result['withCode']['pro'])
+        self.assertTrue(result['withCode']['openChecked'])
+        self.assertTrue(result['withCode']['openDisabled'])
+        self.assertIn('(in ET Pro)', result['withCode']['openLabel'])
+        self.assertIn('code ending 6789', result['withCode']['row'])
+        self.assertIn('Change Code', result['withCode']['row'])
+        self.assertEqual(result['afterOff'], {'checked': True, 'disabled': False}, 'ET Open is back once ET Pro is off')
+
+    def test_save_sends_the_code_then_starts_the_update(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch({'codeSet': False, 'codeHint': None}) + '''
+            await showRulesModal(true);
+            showEtproCodeModal();
+            var input = document.getElementById('etproCodeInput');
+            var type = input.type;
+            var removeShown = document.getElementById('etproCodeRemoveBtn').style.display !== 'none';
+            input.value = ' abcdef0123456789 ';
+            await saveEtproCode();
+            window.__jsdom_result = { type: type, removeShown: removeShown, posts: posts,
+                                      open: document.getElementById('etproCodeModal').classList.contains('active'),
+                                      cleared: input.value };
+        ''')
+        self.assertEqual(result['type'], 'password')
+        self.assertFalse(result['removeShown'], 'nothing to remove yet')
+        self.assertEqual(result['posts'][0], {'url': '/api/etpro-code', 'body': {'code': 'abcdef0123456789'}})
+        self.assertEqual(result['posts'][1]['url'], '/api/update-rules')
+        self.assertIn('et/pro', result['posts'][1]['body']['sources'])
+        self.assertIn('et/open', result['posts'][1]['body']['sources'])
+        self.assertFalse(result['open'])
+        self.assertEqual(result['cleared'], '', "the code doesn't linger in the page")
+
+    def test_a_refused_code_keeps_the_dialog_open(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(
+                {'codeSet': False, 'codeHint': None}, post_status=400,
+                post_response='{error: "An ET Pro access code is 8-64 letters and digits"}') + '''
+            await showRulesModal(true);
+            showEtproCodeModal();
+            document.getElementById('etproCodeInput').value = 'bad code';
+            await saveEtproCode();
+            var error = document.getElementById('etproCodeError');
+            window.__jsdom_result = { posts: posts.map(p => p.url), error: error.textContent, shown: error.style.display !== 'none',
+                                      open: document.getElementById('etproCodeModal').classList.contains('active') };
+        ''')
+        self.assertEqual(result['posts'], ['/api/etpro-code'])
+        self.assertIn('8-64 letters and digits', result['error'])
+        self.assertTrue(result['shown'])
+        self.assertTrue(result['open'])
+
+    def test_remove_turns_et_pro_off(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch(
+                {'codeSet': True, 'codeHint': '6789'}, enabled=('et/open', 'et/pro'),
+                post_response='{codeSet: false, codeHint: null, warnings: []}') + '''
+            await showRulesModal(true);
+            showEtproCodeModal();
+            var removeShown = document.getElementById('etproCodeRemoveBtn').style.display !== 'none';
+            var placeholder = document.getElementById('etproCodeInput').placeholder;
+            await removeEtproCode();
+            await triggerRulesetUpdate('suricata');
+            window.__jsdom_result = { removeShown: removeShown, placeholder: placeholder, posts: posts, toasts: toasts };
+        ''')
+        self.assertTrue(result['removeShown'])
+        self.assertIn('6789', result['placeholder'])
+        self.assertEqual(result['posts'][0]['body'], {'code': ''})
+        self.assertIn('ET Pro is off', result['toasts'][0]['message'])
+        self.assertNotIn('et/pro', result['posts'][1]['body']['sources'])
+
+    def test_escape_backs_out_of_the_dialog_only(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.PRELUDE + self._fetch({'codeSet': False, 'codeHint': None}) + '''
+            await showRulesModal(true);
+            showEtproCodeModal();
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            window.__jsdom_result = [document.getElementById('etproCodeModal').classList.contains('active'),
+                                     document.getElementById('rulesModal').classList.contains('active')];
+        ''')
+        self.assertEqual(result, [False, True])
+
+
 class TestAlertRulesetClassification(unittest.TestCase):
     """classifyRuleset() and its wiring into getColumnsForType/
     buildRowForEvent/extractValue/renderAlertDetails for the alert event
@@ -22850,6 +23234,238 @@ class TestTsharkUI(unittest.TestCase):
         self.assertIn("const sectionEl = activeType && activeType !== eventTypes[0]\n                    ? document.getElementById('section-' + activeType) : null;", body)
         self.assertIn('if (sectionEl) {', body)
         self.assertIn('} else if (eventTypes[0]) {\n                    await loadTabData(eventTypes[0], null);', body)
+
+
+
+WORLD_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'world-110m.json')
+
+
+class TestTrafficMap(unittest.TestCase):
+    """The Traffic Map panel: collapsed until opened, only for a capture,
+    its clicks toggling country: search terms, and the map's panels built
+    from its data (escaped). The canvases are stubbed - JSDOM can't draw."""
+
+    STUBS = r"""
+        localStorage.setItem('socrates_hideHelp', 'true');
+        await new Promise(r => setTimeout(r, 50));
+        var ctxStub = new Proxy({}, {
+            get(t, k) {
+                if (k === 'getImageData') return (x, y, w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) });
+                if (k === 'createRadialGradient' || k === 'createLinearGradient') return () => ({ addColorStop() {} });
+                if (k === 'measureText') return () => ({ width: 10 });
+                if (k in t) return t[k];
+                return function() {};
+            },
+            set(t, k, v) { t[k] = v; return true; },
+        });
+        HTMLCanvasElement.prototype.getContext = function() { return ctxStub; };
+        window.Path2D = class { moveTo() {} lineTo() {} arc() {} };
+        window.requestAnimationFrame = () => 1;
+        window.cancelAnimationFrame = () => {};
+        var square = (x, y) => ({ type: 'Polygon', coordinates: [[[x, y], [x + 5, y], [x + 5, y + 5], [x, y + 5], [x, y]]] });
+        var world = {
+            features: [{ type: 'Feature', id: 'US', cc: 'US', geometry: square(-100, 35) },
+                       { type: 'Feature', id: 'FR', cc: 'FR', geometry: square(0, 45) }],
+            places: { SG: [103.8, 1.35] },
+            names: { US: 'United States', FR: 'France', SG: 'Singapore' },
+        };
+        var mapData = {
+            start: 1767225600, span: 100, bins: 1200, flows: 4, alertCount: 1,
+            geo: { source: 'DB-IP IP to Country Lite', date: '2026-11' },
+            buckets: [[0, 'US', 'FR', 3, 300], [600, 'SG', 'FR', 1, 10]],
+            alerts: [[0.5, 'US', 'FR', 1, '<img src=x onerror=alert(1)>', '8.8.8.8', '203.0.113.9']],
+            totals: { US: [3, 300], FR: [4, 310], SG: [1, 10] },
+        };
+    """
+
+    def test_static_wiring(self):
+        sankey = HTML_CONTENT.index('id="sankeyPanel"')
+        panel = HTML_CONTENT.index('id="trafficMapPanel"')
+        self.assertLess(sankey, panel)
+        self.assertLess(panel, HTML_CONTENT.index('id="aggregations"'))
+        self.assertIn('<script src="static/topojson-client.min.js"></script>', HTML_CONTENT)
+        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(JS_PATH), 'topojson-client.min.js')))
+        self.assertIn("'toggle-traffic-map': () => toggleTrafficMap(),", JS_CONTENT)
+        self.assertIn("trafficMap: '#trafficMapPanel > .section-toggle-bar',", JS_CONTENT)
+        self.assertIn('body.file-analysis #trafficMapPanel { display: none !important; }', CSS_CONTENT)
+        # alerts keep the app's fixed severity colors
+        self.assertIn("colors['s' + s] = d3.rgb(COLORS.SEVERITY[s])", JS_CONTENT)
+
+    def test_world_map_file(self):
+        with open(WORLD_MAP_PATH) as f:
+            world = json.load(f)
+        ids = [g['id'] for g in world['objects']['countries']['geometries']]
+        self.assertTrue(all(re.fullmatch(r'[A-Z]{2}', i) for i in ids), 'shapes keyed by ISO alpha-2')
+        self.assertNotIn('AQ', ids, 'the map leaves Antarctica out')
+        for cc in ('US', 'FR', 'CN', 'BR', 'XK'):
+            self.assertIn(cc, ids)
+        for cc in ('SG', 'HK', 'MT'):
+            self.assertIn(cc, world['places'], f'{cc} is too small for a shape, so it gets a point')
+            self.assertNotIn(cc, ids)
+        lon, lat = world['places']['SG']
+        self.assertTrue(-180 <= lon <= 180 and -90 <= lat <= 90)
+        self.assertEqual(world['names']['DE'], 'Germany')
+
+    def test_collapsed_until_opened_and_only_for_a_capture(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var fetches = [];
+            window.fetch = function(url) { fetches.push(url); return new Promise(() => {}); };
+            currentMd5 = 'a'.repeat(32);
+            trafficMapMode = false;
+            await updateTrafficMap();
+            var panel = document.getElementById('trafficMapPanel');
+            var collapsed = { display: panel.style.display, html: panel.textContent };
+            isLogAnalysisMode = true;
+            await updateTrafficMap();
+            var log = panel.style.display;
+            isLogAnalysisMode = false;
+            isEmailAnalysisMode = true;
+            await updateTrafficMap();
+            var email = panel.style.display;
+            isEmailAnalysisMode = false;
+            window.__jsdom_result = { collapsed: collapsed, log: log, email: email, fetches: fetches };
+        """)
+        self.assertEqual(result['collapsed'], {'display': '', 'html': '▸ Traffic Map'})
+        self.assertEqual(result['log'], 'none')
+        self.assertEqual(result['email'], 'none')
+        self.assertEqual(result['fetches'], [], 'nothing is fetched until the map is opened')
+
+    def test_resize_on_the_welcome_screen_leaves_it_hidden(self):
+        """currentMd5 outlives a return to the welcome screen - a resize
+        there redrew the diagrams and brought the map back above it."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            window.fetch = function() { return new Promise(() => {}); };
+            currentMd5 = 'a'.repeat(32);
+            diagramMode = true;
+            trafficMapMode = true;
+            showAnalysisUI();
+            updateTrafficMap();
+            var panel = document.getElementById('trafficMapPanel');
+            var shown = panel.style.display;
+            clearAnalysisContainers();
+            showWelcomeUI();
+            window.dispatchEvent(new Event('resize'));
+            await new Promise(r => setTimeout(r, 500));
+            window.__jsdom_result = { shown: shown, after: panel.style.display, html: panel.innerHTML };
+        """)
+        self.assertEqual(result['shown'], '')
+        self.assertEqual(result['after'], 'none')
+        self.assertEqual(result['html'], '')
+
+    def test_country_click_toggles_its_search_term(self):
+        from tests.jsdom_helper import js_statements
+        # currentSearch is a `let` binding test code can't reach (see
+        # test_only_leaves_currentSearch_untouched): it's seeded through
+        # huntFilterValue() and read back through buildSearchQuery()
+        result = js_statements(self.STUBS + r"""
+            var refreshes = 0;
+            refreshAnalysisData = async function() { refreshes++; };
+            await huntFilterValue('country:de');
+            await toggleCountryFilter('FR');
+            var added = buildSearchQuery();
+            var countries = Array.from(trafficMapCountries()).sort();
+            await toggleCountryFilter('FR');
+            var removed = buildSearchQuery();
+            await toggleCountryFilter('DE');
+            window.__jsdom_result = { added: added, countries: countries, removed: removed,
+                                      lowerCaseRemoved: buildSearchQuery(), refreshes: refreshes };
+        """)
+        self.assertEqual(result['added'], '&q=country%3Ade&q=country%3AFR')
+        self.assertEqual(result['countries'], ['DE', 'FR'])
+        self.assertEqual(result['removed'], '&q=country%3Ade')
+        self.assertEqual(result['lowerCaseRemoved'], '', 'a term typed in lower case is the same country')
+        self.assertEqual(result['refreshes'], 4)
+
+    def test_panels_from_data(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var clicked = [];
+            toggleCountryFilter = function(cc) { clicked.push(cc); };
+            var root = document.createElement('div');
+            document.body.appendChild(root);
+            var map = createTrafficMap(root, world);
+            map.setData(mapData, new Set(['US']), false);
+            var q = s => root.querySelector(s);
+            var atStart = { flows: q('[data-tm="flows"]').textContent, play: q('[data-tm="play"]').getAttribute('aria-label'),
+                            feed: q('[data-tm="feed"]').textContent };
+            map.seek(1);
+            var buttons = Array.from(root.querySelectorAll('.tm-top button'));
+            buttons[0].click();
+            window.__jsdom_result = {
+                atStart: atStart,
+                flows: q('[data-tm="flows"]').textContent,
+                alerts: q('[data-tm="alerts"]').textContent,
+                places: q('[data-tm="places"]').textContent,
+                title: q('[data-tm="top-title"]').textContent,
+                top: buttons.map(b => [b.dataset.cc, b.className, b.querySelector('.n').textContent]),
+                feedText: q('[data-tm="feed"]').textContent,
+                feedImages: root.querySelectorAll('.tm-feed img').length,
+                clock: q('[data-tm="clock"]').textContent,
+                clicked: clicked,
+                credit: q('.tm-credit').hidden,
+            };
+            map.destroy();
+        """, with_d3=True)
+        self.assertEqual(result['atStart']['flows'], '0')
+        self.assertEqual(result['atStart']['play'], 'Pause', 'it plays once data arrives')
+        self.assertEqual(result['atStart']['feed'], 'No alerts yet')
+        self.assertEqual((result['flows'], result['alerts'], result['places']), ('4', '1', '3'))
+        self.assertEqual(result['title'], 'Top sources')
+        self.assertEqual(result['top'], [['US', 'on', '3'], ['SG', '', '1']])
+        self.assertIn('<img src=x onerror=alert(1)>', result['feedText'])
+        self.assertEqual(result['feedImages'], 0, 'a signature is text, never markup')
+        self.assertIn('8.8.8.8 (US)', result['feedText'])
+        self.assertEqual(result['clock'], '00:01:40')
+        self.assertEqual(result['clicked'], ['US'])
+        self.assertFalse(result['credit'])
+
+    def test_any_alert_severity_draws(self):
+        """Severity 4 (Suricata's tcp-connection class) and a custom rule's
+        priority:9 have colors too - a missing one threw on every frame."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var root = document.createElement('div');
+            document.body.appendChild(root);
+            var map = createTrafficMap(root, world);
+            var data = Object.assign({}, mapData, { alertCount: 2, alerts: [
+                [0.5, 'US', 'FR', 4, 'TCP connection', '8.8.8.8', '203.0.113.9'],
+                [0.6, 'SG', 'FR', 9, 'custom priority', '103.1.1.1', '203.0.113.9']] });
+            var error = null;
+            try {
+                map.setData(data, new Set(), false);
+                map.seek(1);
+                map.seek(0.5);
+            } catch (e) { error = String(e); }
+            window.__jsdom_result = { error: error, alerts: root.querySelector('[data-tm="alerts"]').textContent };
+            map.destroy();
+        """, with_d3=True)
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['alerts'], '2')
+
+    def test_notes_for_no_data_and_no_location_data(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var root = document.createElement('div');
+            document.body.appendChild(root);
+            var map = createTrafficMap(root, world);
+            map.setData(Object.assign({}, mapData, { geo: null }), new Set(), false);
+            var noGeo = { note: root.querySelector('[data-tm="note"]').textContent, credit: root.querySelector('.tm-credit').hidden };
+            map.setData({ start: null, span: 0, bins: 1200, flows: 0, alertCount: 0, geo: mapData.geo,
+                          buckets: [], alerts: [], totals: {} }, new Set(), false);
+            window.__jsdom_result = { noGeo: noGeo, empty: root.querySelector('[data-tm="note"]').textContent,
+                                      play: root.querySelector('[data-tm="play"]').getAttribute('aria-label') };
+            map.destroy();
+        """, with_d3=True)
+        self.assertIn("IP location data isn't installed", result['noGeo']['note'])
+        self.assertTrue(result['noGeo']['credit'])
+        self.assertEqual(result['empty'], 'No flows or alerts to map')
+        self.assertEqual(result['play'], 'Play')
+
+    def test_menus_keep_their_own_arrow_keys(self):
+        guard = JS_CONTENT.split('function isNavigableKeyContext(e) {')[1].split('\n        }')[0]
+        self.assertIn("e.target.tagName !== 'SELECT'", guard)
 
 
 if __name__ == '__main__':

@@ -54,7 +54,7 @@ Once you log out and back in, your `docker` group membership takes effect and yo
 
 ## Air-Gapped / Offline Deployment for Docker
 
-Our container image bakes in 13 Suricata rule sources (Emerging Threats Open enabled by default), YARA Forge rules, and SigmaHQ/Zircolite rules at build time, so PCAP, log, email and binary analysis - and the built-in sample files - all work without internet access. To copy to an isolated network, pull and save the container image using an internet-connected machine:
+Our container image bakes in 12 Suricata rule sources (Emerging Threats Open enabled by default), YARA Forge rules, and SigmaHQ/Zircolite rules at build time, so PCAP, log, email and binary analysis - and the built-in sample files - all work without internet access. To copy to an isolated network, pull and save the container image using an internet-connected machine:
 
 ```bash
 docker pull ghcr.io/dougburks/so-crates:main
@@ -80,6 +80,15 @@ mkdir -p ~/socrates-data
 docker run -v ~/socrates-data:/data -p 127.0.0.1:8000:8000 so-crates
 ```
 
+
+
+## Shared instances
+
+Custom Suricata rules apply to every analysis on the server, so on an instance several people use, one person's rules change everyone's results. Set `ALLOW_CUSTOM_RULES=false` to stop anyone adding them (rules already saved stay as they are):
+
+```bash
+docker run -v ~/socrates-data:/data -p 8000:8000 -e ALLOW_CUSTOM_RULES=false ghcr.io/dougburks/so-crates:main
+```
 
 ## Cloud and proxied environments
 

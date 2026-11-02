@@ -4963,6 +4963,9 @@
             }
             document.getElementById('sankeyPanel').style.display = 'none';
             document.getElementById('sankeyPanel').innerHTML = '';
+            destroyTrafficMap();
+            document.getElementById('trafficMapPanel').style.display = 'none';
+            document.getElementById('trafficMapPanel').innerHTML = '';
             document.getElementById('aggregations').innerHTML = '';
             document.getElementById('sections').innerHTML = '';
             document.getElementById('filterBarContainer').innerHTML = '';
@@ -5018,7 +5021,7 @@
         // again" checkbox state) that must only fire if Help was actually
         // open.
         function closeOtherMenuModals(exceptId) {
-            const closers = { helpModal: closeHelpModal, settingsModal: closeSettingsModal, themesModal: closeThemesModal, rulesModal: closeRulesModal, aboutModal: closeAboutModal, notesModal: closeNotesModal, securityOnionModal: closeSecurityOnionModal };
+            const closers = { helpModal: closeHelpModal, settingsModal: closeSettingsModal, themesModal: closeThemesModal, rulesModal: closeRulesModal, customRulesModal: closeCustomRulesModal, etproCodeModal: closeEtproCodeModal, aboutModal: closeAboutModal, notesModal: closeNotesModal, securityOnionModal: closeSecurityOnionModal };
             Object.keys(closers).forEach(function(id) {
                 if (id === exceptId) return;
                 const modal = document.getElementById(id);
@@ -5483,6 +5486,8 @@
             closeDeleteModal();
             closeDeleteAllModal();
             closeReanalyzeModal();
+            closeCustomRulesModal();
+            closeEtproCodeModal();
             closeRulesModal();
             closeAboutModal();
             closeNotesModal();
@@ -5677,6 +5682,7 @@
         // already fires it.
         const TOGGLE_BAR_SELECTORS = {
             sankey: '#sankeyPanel > .section-toggle-bar',
+            trafficMap: '#trafficMapPanel > .section-toggle-bar',
             agg: '#aggregations .section-toggle-bar',
             dnsHeuristicsInfo: '#section-dns_heuristics .dns-heuristics-info-toggle',
             findingsInfo: '#section-findings .findings-info-toggle',
@@ -5777,6 +5783,7 @@
             const filterBarItems = filterBarRowAnchor();
             const toggleBars = [
                 document.querySelector(TOGGLE_BAR_SELECTORS.sankey),
+                document.querySelector(TOGGLE_BAR_SELECTORS.trafficMap),
                 document.querySelector(TOGGLE_BAR_SELECTORS.agg),
                 document.querySelector(TOGGLE_BAR_SELECTORS.dnsHeuristicsInfo),
                 document.querySelector(TOGGLE_BAR_SELECTORS.findingsInfo),
@@ -5880,6 +5887,7 @@
         // bar's re-creation is always a direct-child mutation of one of
         // these two containers.
         new MutationObserver(reapplyToggleBarSelection).observe(document.getElementById('sankeyPanel'), { childList: true });
+        new MutationObserver(reapplyToggleBarSelection).observe(document.getElementById('trafficMapPanel'), { childList: true });
         new MutationObserver(reapplyToggleBarSelection).observe(document.getElementById('aggregations'), { childList: true });
         // #section-dns_heuristics (unlike #sankeyPanel/#aggregations,
         // static elements always present in socrates.html) doesn't exist
@@ -6203,6 +6211,7 @@
             }
             verticalNavToggleBarKind = isWelcome ? null
                 : verticalNavSelection.matches(TOGGLE_BAR_SELECTORS.sankey) ? 'sankey'
+                : verticalNavSelection.matches(TOGGLE_BAR_SELECTORS.trafficMap) ? 'trafficMap'
                 : verticalNavSelection.matches(TOGGLE_BAR_SELECTORS.agg) ? 'agg'
                 : verticalNavSelection.matches(TOGGLE_BAR_SELECTORS.dnsHeuristicsInfo) ? 'dnsHeuristicsInfo'
                 : verticalNavSelection.matches(TOGGLE_BAR_SELECTORS.findingsInfo) ? 'findingsInfo'
@@ -6442,6 +6451,9 @@
         function isNavigableKeyContext(e) {
             return !e.ctrlKey && !e.altKey && !e.metaKey &&
                 e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA' &&
+                // a menu's arrows and type-ahead are its own (the Traffic
+                // Map's options, the aggregation page size)
+                e.target.tagName !== 'SELECT' &&
                 !e.target.isContentEditable;
         }
 
@@ -6492,6 +6504,7 @@
             { code: 'search', label: 'Search', analysisOnly: true, action: () => { closeAutocompleteModal(); document.getElementById('searchInput').focus(); } },
             { code: 'clear', label: 'Clear all search filters', analysisOnly: true, action: () => { closeAutocompleteModal(); clearAllFilters(); } },
             { code: 'sankey', label: 'Toggle Sankey Diagram section', analysisOnly: true, action: () => { closeAutocompleteModal(); toggleDiagram(); } },
+            { code: 'traffic map', label: 'Toggle Traffic Map section', analysisOnly: true, action: () => { closeAutocompleteModal(); toggleTrafficMap(); } },
             { code: 'aggregation', label: 'Toggle Aggregation Tables section', analysisOnly: true, action: () => { closeAutocompleteModal(); toggleAggregations(); } },
             // All three go to the same place (showWelcome()) - they're
             // different mental models for "I want to start something new"
@@ -6676,6 +6689,15 @@
             return true;
         }
         document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && document.getElementById('customRulesModal')?.classList.contains('active')) {
+                // It opens over the Rules modal: back out to that, not past it
+                closeCustomRulesModal();
+                return;
+            }
+            if (e.key === 'Escape' && document.getElementById('etproCodeModal')?.classList.contains('active')) {
+                closeEtproCodeModal();
+                return;
+            }
             if (e.key === 'Escape') {
                 // Escape backs out one level at a time: close whatever's
                 // open (a modal, the gear dropdown, a pivot menu) if
@@ -7125,9 +7147,15 @@
             const available = (info.suricata && info.suricata.availableSources) || {};
             const names = Object.keys(available);
             if (!names.length) return '';
+            const etproCodeSet = !!(info.suricata.etpro && info.suricata.etpro.codeSet);
             const rows = names.map(function(name) {
                 const src = available[name];
-                const checked = suricataSourceSelection[name] ? 'checked' : '';
+                // ET Pro needs its code first; while it's on, ET Open's rules
+                // come with it - shown on, and kept on, so it's back if ET
+                // Pro goes off or its download fails
+                const includedInPro = name === 'et/open' && suricataSourceSelection['et/pro'];
+                const checked = suricataSourceSelection[name] || includedInPro ? 'checked' : '';
+                const disabled = (name === 'et/pro' && !etproCodeSet) || includedInPro ? 'disabled' : '';
                 // Surfaces per-source caveats worth knowing before enabling
                 // (e.g. ipfire/dbl's ~51 MiB / 30+ second first fetch) plus
                 // a generic "needs internet the first time" callout for any
@@ -7164,10 +7192,10 @@
                 return `
                     <label style="display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.85rem; color: var(--text-primary); cursor: pointer; break-inside: avoid;">
                         <span class="theme-switch">
-                            <input type="checkbox" ${checked} data-change-action="suricata-source-toggle" data-name="${escapeHtml(name)}">
+                            <input type="checkbox" ${checked} ${disabled} data-change-action="suricata-source-toggle" data-name="${escapeHtml(name)}">
                             <span class="theme-switch-slider"></span>
                         </span>
-                        <span>${escapeHtml(src.label)}</span>
+                        <span>${escapeHtml(src.label)}${includedInPro ? ' <span style="color: var(--text-muted); font-size: 0.75rem;">(in ET Pro)</span>' : ''}</span>
                         <a href="${escapeHtml(src.url)}" target="_blank" rel="noopener noreferrer" style="color: var(--text-muted); font-size: 0.75rem; text-decoration: none;" data-action="stop-propagation">(source)</a>
                         ${noteHtml}
                     </label>`;
@@ -7212,8 +7240,46 @@
             // (renderRuleSection()) is the only way to expand/collapse
             // this, so when collapsed there's nothing to render at all.
             return suricataSourcesExpanded
-                ? `<div style="margin-top: 8px;">${decodeAlertsRow}${bulkLinks}<div class="suricata-sources-list" style="columns: 2; column-gap: 16px; max-height: 260px; overflow-y: auto; border: 1px solid var(--bg-hover); border-radius: 6px; padding: 4px 12px;">${rows}</div></div>`
+                ? `<div style="margin-top: 8px;">${decodeAlertsRow}${bulkLinks}<div class="suricata-sources-list" style="columns: 2; column-gap: 16px; max-height: 260px; overflow-y: auto; border: 1px solid var(--bg-hover); border-radius: 6px; padding: 4px 12px;">${rows}</div>${renderEtproRow(info.suricata.etpro)}${renderCustomRulesRow(info.suricata.custom)}</div>`
                 : '';
+        }
+
+        // ET Pro's access code: ET Pro's switch (in the list above) stays off
+        // until one is saved.
+        function renderEtproRow(etpro) {
+            if (!etpro) return '';
+            const meta = etpro.codeSet ? `code ending ${escapeHtml(etpro.codeHint || '')}` : 'no access code';
+            return `
+                <div class="custom-rules-row">
+                    <span>Emerging Threats Pro</span>
+                    <span class="custom-rules-meta">— ${meta}</span>
+                    <button data-action="open-etpro-code">${etpro.codeSet ? 'Change Code' : 'Add Access Code'}</button>
+                </div>`;
+        }
+
+        // The analyst's own rules, one more source after the curated ones:
+        // its switch rides the same selection and Update as theirs (as
+        // 'custom'), but it has an editor (showCustomRulesModal) instead
+        // of a download. Can't be switched on until some are saved.
+        function renderCustomRulesRow(custom) {
+            if (!custom) return '';
+            const saved = custom.count !== null && custom.count !== undefined;
+            const meta = saved ? `${formatRuleCount(custom.count)} — saved ${formatRuleDate(custom.updated)}` : 'none yet';
+            const action = custom.allowed
+                ? `<button data-action="open-custom-rules">${saved ? 'Edit Rules' : 'Add Rules'}</button>`
+                : '<span class="custom-rules-meta" style="margin-left: auto;">Adding rules is turned off on this server</span>';
+            return `
+                <div class="custom-rules-row">
+                    <label>
+                        <span class="theme-switch">
+                            <input type="checkbox" ${suricataSourceSelection.custom ? 'checked' : ''} ${saved ? '' : 'disabled'} data-change-action="suricata-source-toggle" data-name="custom">
+                            <span class="theme-switch-slider"></span>
+                        </span>
+                        <span>Custom rules</span>
+                    </label>
+                    <span class="custom-rules-meta">— ${meta}</span>
+                    ${action}
+                </div>`;
         }
 
         // Only one of the three per-ruleset logs and the Suricata sources
@@ -7235,6 +7301,11 @@
 
         function handleSuricataSourceToggle(name, checked) {
             suricataSourceSelection[name] = checked;
+            if (name === 'et/pro') {
+                // ET Open stays on underneath (see renderSuricataSourcesSection)
+                if (checked) suricataSourceSelection['et/open'] = true;
+                reRenderRulesModalFromCache();
+            }
         }
 
         function handleShowProtocolDecodeAlertsToggle(checked) {
@@ -7403,6 +7474,7 @@
                         suricataSourceSelection[name] = true;
                     });
                     showProtocolDecodeAlerts = !!info.suricata.showProtocolDecodeAlerts;
+                    suricataSourceSelection.custom = !!(info.suricata.custom && info.suricata.custom.enabled);
                     suricataSelectionInitialized = true;
                 }
                 ['suricata', 'yara', 'sigma'].forEach(function(name) {
@@ -7464,6 +7536,8 @@
 
         function closeRulesModal() {
             document.getElementById('rulesModal').classList.remove('active');
+            closeCustomRulesModal();
+            closeEtproCodeModal();
             if (rulesPollInterval) {
                 clearInterval(rulesPollInterval);
                 rulesPollInterval = null;
@@ -7494,6 +7568,362 @@
             const rulesModal = document.getElementById('rulesModal');
             if (!rulesPollInterval && rulesModal && rulesModal.classList.contains('active')) {
                 rulesPollInterval = setInterval(refreshRulesModal, 2000);
+            }
+        }
+
+        async function showCustomRulesModal() {
+            let data;
+            try {
+                const resp = await fetch('/api/custom-rules');
+                data = await resp.json();
+            } catch (e) {
+                showToast("Custom rules couldn't be loaded: SO-CRATES couldn't be reached");
+                return;
+            }
+            const textarea = document.getElementById('customRulesInput');
+            textarea.value = data.rules || '';
+            if (data.sidRange) {
+                document.getElementById('customRulesSidRange').textContent = `${data.sidRange.min}-${data.sidRange.max}`;
+            }
+            showCustomRulesProblems([]);
+            document.getElementById('customRulesModal').classList.add('active');
+            textarea.scrollTop = 0;
+            textarea.scrollLeft = 0;
+            textarea.focus();
+            renderCustomRulesHighlight();
+        }
+
+        function closeCustomRulesModal() {
+            document.getElementById('customRulesModal').classList.remove('active');
+        }
+
+        // Each problem's line is a link selecting that line in the editor.
+        function showCustomRulesProblems(problems) {
+            const list = document.getElementById('customRulesProblems');
+            list.innerHTML = problems.map(function(p) {
+                const message = escapeHtml(p.message);
+                return p.line
+                    ? `<li><a href="#" data-action="goto-custom-rule-line" data-line="${Number(p.line)}" style="color: inherit;">Line ${Number(p.line)}</a>: ${message}</li>`
+                    : `<li>${message}</li>`;
+            }).join('');
+            list.style.display = problems.length ? '' : 'none';
+            customRuleProblemLines = new Set(problems.filter(p => p.line).map(p => Number(p.line)));
+            customRulesLineCount = document.getElementById('customRulesInput').value.split('\n').length;
+            renderCustomRulesHighlight();
+        }
+
+        function selectCustomRuleLine(line) {
+            const textarea = document.getElementById('customRulesInput');
+            const lines = textarea.value.split('\n');
+            let start = 0;
+            for (let i = 0; i < line - 1 && i < lines.length; i++) start += lines[i].length + 1;
+            textarea.focus();
+            textarea.setSelectionRange(start, start + (lines[line - 1] || '').length);
+        }
+
+        // The editor's highlighting: a <pre> behind the textarea, whose own
+        // text is transparent, draws the same text in color. Only the lines
+        // in view are drawn (the rules can be 1 MB), moved to where the
+        // textarea has them scrolled. Lines with a problem from the last
+        // refused Save get a background until edited.
+        const CUSTOM_RULE_FORBIDDEN_KEYWORDS = ['dataset', 'datarep', 'iprep', 'lua', 'luajit', 'luaxform', 'filemd5', 'filesha1', 'filesha256'];
+        const RULE_HEADER_CLASSES = ['cr-action', 'cr-proto', 'cr-addr', 'cr-addr', 'cr-dir', 'cr-addr', 'cr-addr'];
+        let customRuleProblemLines = new Set();
+        let customRulesLineCount = 0;
+        let customRulesHighlightQueued = false;
+
+        // One rule - its lines joined by '\n', backslashes kept - as
+        // [class, text] pieces. Options split on ';' the way Suricata (and
+        // validators.rule_options) splits them, only a backslash-escaped
+        // one not ending an option, quotes or not - so a missing ';' shows
+        // up as wrongly colored text.
+        function tokenizeSuricataRule(rule) {
+            const out = [];
+            const push = (cls, text) => {
+                if (!text) return;
+                const last = out[out.length - 1];
+                if (last && last[0] === cls) last[1] += text;
+                else out.push([cls, text]);
+            };
+            if (/^\s*#/.test(rule)) {
+                push('cr-comment', rule);
+                return out;
+            }
+            const open = rule.indexOf('(');
+            const close = rule.lastIndexOf(')');
+            // Action, protocol, source, port, direction, destination, port
+            // - a [list] is one part, even with spaces in it
+            const header = open < 0 ? rule : rule.slice(0, open);
+            let i = 0;
+            let part = 0;
+            while (i < header.length) {
+                const space = /^(?:\s|\\\n)+/.exec(header.slice(i));
+                if (space) {
+                    push('', space[0]);
+                    i += space[0].length;
+                    continue;
+                }
+                let j = i;
+                let depth = 0;
+                while (j < header.length && (depth > 0 || !/\s/.test(header[j]))) {
+                    if (header[j] === '[') depth++;
+                    else if (header[j] === ']') depth--;
+                    j++;
+                }
+                push(RULE_HEADER_CLASSES[part++] || '', header.slice(i, j));
+                i = j;
+            }
+            if (open < 0) return out;
+
+            function pushPlain(text) {
+                text.split(/(\b\d+\b)/).forEach((piece, n) => push(n % 2 ? 'cr-number' : '', piece));
+            }
+            function pushValue(value) {
+                let inString = false;
+                let hexEnd = -1;
+                let plain = '';
+                const flushPlain = () => { pushPlain(plain); plain = ''; };
+                for (let k = 0; k < value.length; k++) {
+                    const ch = value[k];
+                    const len = ch === '\\' && k + 1 < value.length ? 2 : 1;
+                    const text = value.slice(k, k + len);
+                    if (k <= hexEnd) {
+                        push('cr-hex', text);
+                    } else if (ch === '|' && /^[0-9a-fA-F\s]*\|/.test(value.slice(k + 1))) {
+                        // |hex bytes| - only when hex follows, so pcre's
+                        // a|b alternation stays as it is
+                        flushPlain();
+                        hexEnd = value.indexOf('|', k + 1);
+                        push('cr-hex', text);
+                    } else if (ch === '"') {
+                        flushPlain();
+                        inString = !inString;
+                        push('cr-string', text);
+                    } else if (inString) {
+                        push('cr-string', text);
+                    } else {
+                        plain += text;
+                    }
+                    k += len - 1;
+                }
+                flushPlain();
+            }
+            function pushOption(option) {
+                const colon = option.indexOf(':');
+                const name = colon < 0 ? option : option.slice(0, colon);
+                const lead = /^(?:\s|\\\n)*/.exec(name)[0];
+                push('', lead);
+                const keyword = name.slice(lead.length);
+                push(CUSTOM_RULE_FORBIDDEN_KEYWORDS.includes(keyword.trim().toLowerCase()) ? 'cr-forbidden' : 'cr-keyword', keyword);
+                if (colon >= 0) {
+                    push('', ':');
+                    pushValue(option.slice(colon + 1));
+                }
+            }
+
+            push('cr-paren', '(');
+            const end = close > open ? close : rule.length;
+            let option = '';
+            for (let k = open + 1; k < end; k++) {
+                if (rule[k] === '\\' && k + 1 < end) {
+                    option += rule.slice(k, k + 2);
+                    k++;
+                } else if (rule[k] === ';') {
+                    pushOption(option);
+                    option = '';
+                    push('', ';');
+                } else {
+                    option += rule[k];
+                }
+            }
+            pushOption(option);
+            if (close > open) {
+                push('cr-paren', ')');
+                push('', rule.slice(close + 1));
+            }
+            return out;
+        }
+
+        // A rule's pieces as one HTML string per line.
+        function ruleTokensToLines(tokens) {
+            const lines = [''];
+            tokens.forEach(function([cls, text]) {
+                text.split('\n').forEach(function(piece, n) {
+                    if (n) lines.push('');
+                    if (piece) lines[lines.length - 1] += cls ? `<span class="${cls}">${escapeHtml(piece)}</span>` : escapeHtml(piece);
+                });
+            });
+            return lines;
+        }
+
+        function customRulesLineHeight(textarea) {
+            const value = getComputedStyle(textarea).lineHeight;
+            return /px$/.test(value) && parseFloat(value) > 0 ? parseFloat(value) : 18;
+        }
+
+        function renderCustomRulesHighlight() {
+            customRulesHighlightQueued = false;
+            const textarea = document.getElementById('customRulesInput');
+            const target = document.querySelector('#customRulesHighlight .custom-rules-highlight-lines');
+            if (!textarea || !target) return;
+            const lines = textarea.value.split('\n');
+            const lineHeight = customRulesLineHeight(textarea);
+            const margin = 20;
+            const first = Math.max(0, Math.floor(textarea.scrollTop / lineHeight) - margin);
+            const last = Math.min(lines.length, first + Math.ceil((textarea.clientHeight || 600) / lineHeight) + 2 * margin);
+            const continues = line => !/^\s*(#|$)/.test(line) && /\\\s*$/.test(line);
+            // A rule continued from above the window starts above it
+            let n = first;
+            while (n > 0 && continues(lines[n - 1])) n--;
+            let html = '';
+            while (n < last) {
+                let m = n;
+                while (m < lines.length - 1 && continues(lines[m])) m++;
+                ruleTokensToLines(tokenizeSuricataRule(lines.slice(n, m + 1).join('\n'))).forEach(function(line, k) {
+                    const number = n + k;
+                    if (number < first || number >= last) return;
+                    const problem = customRuleProblemLines.has(number + 1) ? ' cr-problem' : '';
+                    html += `<span class="cr-line${problem}">${line || ' '}</span>`;
+                });
+                n = m + 1;
+            }
+            target.innerHTML = html;
+            target.style.transform = `translate(${-textarea.scrollLeft}px, ${first * lineHeight - textarea.scrollTop}px)`;
+        }
+
+        function queueCustomRulesHighlight() {
+            if (customRulesHighlightQueued) return;
+            customRulesHighlightQueued = true;
+            (window.requestAnimationFrame || (f => setTimeout(f, 16)))(renderCustomRulesHighlight);
+        }
+
+        // An edit clears its line's problem mark - or every mark, once lines
+        // were added or removed and the numbers no longer fit
+        function handleCustomRulesInput(textarea) {
+            const lineCount = textarea.value.split('\n').length;
+            if (lineCount !== customRulesLineCount) {
+                customRuleProblemLines = new Set();
+            } else {
+                customRuleProblemLines.delete(textarea.value.slice(0, textarea.selectionStart).split('\n').length);
+            }
+            customRulesLineCount = lineCount;
+            queueCustomRulesHighlight();
+        }
+
+        function showEtproCodeModal() {
+            const etpro = (lastRulesInfo && lastRulesInfo.suricata && lastRulesInfo.suricata.etpro) || {};
+            const input = document.getElementById('etproCodeInput');
+            input.value = '';
+            input.placeholder = etpro.codeSet ? `Saved code ends ${etpro.codeHint} - enter a new one to replace it` : 'Access code';
+            document.getElementById('etproCodeRemoveBtn').style.display = etpro.codeSet ? '' : 'none';
+            showEtproCodeError('');
+            document.getElementById('etproCodeModal').classList.add('active');
+            input.focus();
+        }
+
+        function closeEtproCodeModal() {
+            document.getElementById('etproCodeModal').classList.remove('active');
+            document.getElementById('etproCodeInput').value = '';
+        }
+
+        function showEtproCodeError(message) {
+            const el = document.getElementById('etproCodeError');
+            el.textContent = message;
+            el.style.display = message ? '' : 'none';
+        }
+
+        // Saving turns ET Pro on and starts the Suricata update that
+        // downloads it - Save is the click that consents to going online,
+        // as Update is. Its result shows in the Suricata log.
+        async function postEtproCode(code) {
+            let resp;
+            let data = {};
+            try {
+                resp = await fetch('/api/etpro-code', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: code }),
+                });
+                try { data = await resp.json(); } catch (e) { /* no JSON body */ }
+            } catch (e) {
+                showEtproCodeError("SO-CRATES couldn't be reached");
+                return false;
+            }
+            if (!resp.ok) {
+                showEtproCodeError(data.error || 'The code was not saved');
+                return false;
+            }
+            closeEtproCodeModal();
+            return true;
+        }
+
+        async function saveEtproCode() {
+            const code = document.getElementById('etproCodeInput').value.trim();
+            if (!code) {
+                showEtproCodeError('Enter the access code');
+                return;
+            }
+            if (!await postEtproCode(code)) return;
+            suricataSourceSelection['et/pro'] = true;
+            suricataSourceSelection['et/open'] = true;
+            await triggerRulesetUpdate('suricata');
+        }
+
+        async function removeEtproCode() {
+            if (!await postEtproCode('')) return;
+            suricataSourceSelection['et/pro'] = false;
+            showToast('ET Pro access code removed - ET Pro is off');
+            await refreshRulesModal();
+        }
+
+        // Read in the browser and put in the editor to look over - only
+        // Save sends anything.
+        async function loadCustomRulesFile(input) {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            try {
+                document.getElementById('customRulesInput').value = await file.text();
+                showCustomRulesProblems([]);
+            } catch (e) {
+                showCustomRulesProblems([{ line: null, message: `${file.name} couldn't be read` }]);
+            }
+        }
+
+        async function saveCustomRules() {
+            const saveBtn = document.getElementById('customRulesSaveBtn');
+            saveBtn.disabled = true;
+            try {
+                const resp = await fetch('/api/custom-rules', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rules: document.getElementById('customRulesInput').value }),
+                });
+                let data = {};
+                try { data = await resp.json(); } catch (e) { /* no JSON body */ }
+                if (!resp.ok) {
+                    showCustomRulesProblems(data.problems || [{ line: null, message: data.error || 'The rules were not saved' }]);
+                    return;
+                }
+                closeCustomRulesModal();
+                // The server turned them on (or removed them) - keep the
+                // switch in step, or the next Update would undo it
+                suricataSourceSelection.custom = data.count > 0;
+                const pcapOpen = currentMd5 && !isWelcomeScreen() && detectFileType(currentFileName) === 'pcap';
+                showToast(data.count > 0
+                    ? `Saved ${data.count} custom rule${data.count === 1 ? '' : 's'} - captures analyzed from now on use them`
+                    : 'Custom rules removed', data.count > 0 && pcapOpen ? {
+                    actionLabel: 'Reanalyze this one',
+                    onAction: function() {
+                        closeRulesModal();
+                        openReanalyzeModal(currentMd5, currentFileName);
+                    },
+                } : undefined);
+                await refreshRulesModal();
+            } catch (e) {
+                showCustomRulesProblems([{ line: null, message: "SO-CRATES couldn't be reached" }]);
+            } finally {
+                saveBtn.disabled = false;
             }
         }
 
@@ -7807,6 +8237,10 @@
         }
 
         async function updateSankeyDiagram() {
+            // Whatever redraws the Sankey Diagram (a search, a tab, a new
+            // analysis) may have changed what the Traffic Map shows too -
+            // it refetches only when the analysis or search changed.
+            updateTrafficMap();
             const sankeyPanel = document.getElementById('sankeyPanel');
             // An email's events have no IPs or ports to draw.
             if (!sankeyPanel || isEmailAnalysisMode) return;
@@ -7853,6 +8287,704 @@
             sankeyPanel.innerHTML = '<div class="section-toggle-bar" data-action="toggle-diagram">▾ Sankey Diagram</div><div class="sankey-content"></div>';
             const svgContainer = sankeyPanel.querySelector('.sankey-content');
             renderSankeySVG(data, svgContainer);
+        }
+
+        // ---------------------------------------------------------------
+        // Traffic Map: replays a capture's flows and alerts on a dot-matrix
+        // world map, by country (/api/traffic-map, traffic_map.py). Its
+        // own collapsible panel next to the Sankey Diagram, collapsed until
+        // opened, so nothing animates or fetches unasked. Clicking a
+        // country adds a country:XX search term (db.py's COUNTRY_TERM_RE),
+        // which filters every view like any search; clicking it again
+        // removes it. Colors come from the theme's variables, re-read on a
+        // theme change; alerts keep COLORS.SEVERITY's fixed colors.
+        // ---------------------------------------------------------------
+        var trafficMapMode = false;
+        let trafficMap = null;              // the live map controller, while expanded
+        let trafficMapDataKey = null;       // md5 + search the shown data is for
+        let trafficMapFetchGen = 0;
+        let trafficMapWorldPromise = null;
+
+        const TRAFFIC_MAP_BAR_COLLAPSED = '<div class="section-toggle-bar" data-action="toggle-traffic-map">▸ Traffic Map</div>';
+        const TRAFFIC_MAP_BAR_EXPANDED = '<div class="section-toggle-bar" data-action="toggle-traffic-map">▾ Traffic Map</div>';
+        const TRAFFIC_MAP_LAN_KEY = 'socrates_trafficMapLan';
+        const TRAFFIC_MAP_ANIMATE_KEY = 'socrates_trafficMapAnimate';
+        const TRAFFIC_MAP_SPEED_KEY = 'socrates_trafficMapSpeed';
+
+        function trafficMapPref(key, fallback) {
+            return safeStorageGet(localStorage, key) ?? fallback;
+        }
+
+        function trafficMapCountries() {
+            const set = new Set();
+            for (const t of currentSearch) {
+                const m = /^country:([A-Za-z]{2}|LAN|\?\?)$/i.exec(t.trim());
+                if (m) set.add(m[1].toUpperCase());
+            }
+            return set;
+        }
+
+        // Adds the country's search term, or removes it when it's already
+        // there - the map's click, and its Top list's.
+        async function toggleCountryFilter(cc) {
+            resetPagination();
+            const idx = currentSearch.findIndex(t => t.trim().toUpperCase() === 'COUNTRY:' + cc);
+            if (idx >= 0) currentSearch.splice(idx, 1);
+            else currentSearch.push('country:' + cc);
+            updateFilterBarVisibility();
+            await refreshAnalysisData();
+            if (idx >= 0) focusFilterBarOrFirstCard(); else focusNewestFilterChip();
+        }
+
+        async function toggleTrafficMap() {
+            trafficMapMode = !trafficMapMode;
+            await updateTrafficMap();
+        }
+
+        function trafficMapApplies() {
+            return !!currentMd5 && !isLogAnalysisMode && !isEmailAnalysisMode
+                && !document.body.classList.contains('file-analysis');
+        }
+
+        function destroyTrafficMap() {
+            if (trafficMap) trafficMap.destroy();
+            trafficMap = null;
+            trafficMapDataKey = null;
+            trafficMapFetchGen++;   // a fetch still in flight builds nothing
+        }
+
+        function loadTrafficMapWorld() {
+            if (!trafficMapWorldPromise) {
+                trafficMapWorldPromise = fetch('static/world-110m.json')
+                    .then(r => { if (!r.ok) throw new Error('world map ' + r.status); return r.json(); })
+                    .then(topo => ({
+                        features: topojson.feature(topo, topo.objects.countries).features.map(f => ({ ...f, cc: f.id })),
+                        places: topo.places || {},
+                        names: topo.names || {},
+                    }))
+                    .catch(e => { trafficMapWorldPromise = null; throw e; });
+            }
+            return trafficMapWorldPromise;
+        }
+
+        async function updateTrafficMap() {
+            const panel = document.getElementById('trafficMapPanel');
+            if (!panel) return;
+            if (!trafficMapApplies()) {
+                destroyTrafficMap();
+                panel.style.display = 'none';
+                panel.innerHTML = '';
+                return;
+            }
+            panel.style.display = '';
+            if (!trafficMapMode) {
+                destroyTrafficMap();
+                if (panel.innerHTML !== TRAFFIC_MAP_BAR_COLLAPSED) panel.innerHTML = TRAFFIC_MAP_BAR_COLLAPSED;
+                return;
+            }
+            const key = currentMd5 + '\n' + buildSearchQuery();
+            if (trafficMap && trafficMapDataKey === key) {
+                trafficMap.setHighlighted(trafficMapCountries());
+                return;
+            }
+            const gen = ++trafficMapFetchGen;
+            if (!trafficMap) {
+                panel.innerHTML = TRAFFIC_MAP_BAR_EXPANDED + '<div class="tm-loading"><span class="ascii-loading"></span>Loading Traffic Map...</div>';
+            }
+            let world, data;
+            try {
+                [world, data] = await Promise.all([
+                    loadTrafficMapWorld(),
+                    fetch(`/api/traffic-map?md5=${encodeURIComponent(currentMd5)}${buildSearchQuery()}&t=${Date.now()}`)
+                        .then(r => { if (!r.ok) throw new Error('traffic map ' + r.status); return r.json(); }),
+                ]);
+            } catch (e) {
+                if (gen !== trafficMapFetchGen) return;
+                console.error('Failed to load Traffic Map:', e);
+                destroyTrafficMap();
+                panel.innerHTML = TRAFFIC_MAP_BAR_EXPANDED + '<div class="tm-loading">Error loading Traffic Map</div>';
+                return;
+            }
+            if (gen !== trafficMapFetchGen || !trafficMapMode || !trafficMapApplies()) return;
+            if (!trafficMap) {
+                panel.innerHTML = TRAFFIC_MAP_BAR_EXPANDED + '<div class="traffic-map"></div>';
+                trafficMap = createTrafficMap(panel.querySelector('.traffic-map'), world);
+            }
+            // a new search of the same capture keeps the replay where it was
+            const sameCapture = !!trafficMapDataKey && trafficMapDataKey.split('\n')[0] === currentMd5;
+            trafficMapDataKey = key;
+            trafficMap.setData(data, trafficMapCountries(), sameCapture);
+        }
+
+        // The map itself: a background canvas (the dot map, heated by the
+        // traffic so far, and the faint routes taken) under an effects
+        // canvas (arcs in flight, landing ripples, alert labels), and a
+        // timeline to scrub. Returns {setData, setHighlighted, seek, destroy}.
+        function createTrafficMap(root, world) {
+            root.innerHTML = `
+                <div class="tm-stage">
+                    <canvas class="tm-bg"></canvas><canvas class="tm-fx"></canvas>
+                    <div class="tm-tooltip" hidden></div>
+                    <div class="tm-panel tm-panel-left">
+                        <div class="tm-stats">
+                            <div class="tm-stat"><span data-tm="flows">0</span><small>flows</small></div>
+                            <div class="tm-stat"><span data-tm="places">0</span><small>countries</small></div>
+                            <div class="tm-stat tm-stat-alert"><span data-tm="alerts">0</span><small>alerts</small></div>
+                        </div>
+                        <h4 data-tm="top-title">Top sources</h4>
+                        <ol class="tm-top" data-tm="top"></ol>
+                    </div>
+                    <div class="tm-panel tm-panel-right"><h4>Alerts</h4><ol class="tm-feed" data-tm="feed"></ol></div>
+                    <div class="tm-note" data-tm="note" hidden></div>
+                    <a class="tm-credit" href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP location data by DB-IP</a>
+                </div>
+                <div class="tm-timeline">
+                    <button type="button" class="tm-play" data-tm="play" aria-label="Pause"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path data-tm="play-icon" fill="currentColor" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
+                    <div class="tm-clock"><span data-tm="clock">--:--:--</span><small data-tm="date"></small></div>
+                    <div class="tm-track" data-tm="track" title="Drag to move through the capture"><canvas></canvas><div class="tm-head" data-tm="head"></div></div>
+                    <label class="tm-opt">Replay in <select data-tm="speed">
+                        <option value="20">20 s</option><option value="60">1 min</option><option value="180">3 min</option>
+                    </select></label>
+                    <label class="tm-opt"><input type="checkbox" data-tm="animate"> Animate</label>
+                    <label class="tm-opt">Local network <select data-tm="lan"><option value="">Off the map</option></select></label>
+                </div>`;
+            const $ = name => root.querySelector(`[data-tm="${name}"]`);
+            const stage = root.querySelector('.tm-stage');
+            const bg = root.querySelector('.tm-bg'), fx = root.querySelector('.tm-fx');
+            const hist = root.querySelector('.tm-track canvas');
+            const bgx = bg.getContext('2d'), fxx = fx.getContext('2d'), hx = hist.getContext('2d');
+            const tip = root.querySelector('.tm-tooltip');
+            const features = world.features, places = world.places, names = world.names;
+            const reduceMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+            let colors = {}, light = false;
+            let W = 0, H = 0, dpr = 1, idData = null;
+            let dots = [], dotR = 2, dotsByCC = {}, anchors = {}, hub = { x: 0, y: 0, onMap: false };
+            let data = null, binCounts = [], maxTotal = 1, highlighted = new Set();
+            let p = 0, playing = false, lastNow = 0, bi = 0, ai = 0;
+            let cum = {}, routes = new Map(), alertRoutes = new Map(), flowsSoFar = 0, alertsSoFar = 0;
+            let arcs = [], ripples = [], labels = [], feed = [];
+            let lastBg = 0, lastPanel = 0, rafId = 0, visible = true, destroyed = false, dragging = false, listStale = true;
+
+            const animateBox = $('animate'), speedSel = $('speed'), lanSel = $('lan');
+            animateBox.checked = trafficMapPref(TRAFFIC_MAP_ANIMATE_KEY, reduceMotion ? 'false' : 'true') === 'true';
+            speedSel.value = trafficMapPref(TRAFFIC_MAP_SPEED_KEY, '60');
+            if (!speedSel.value) speedSel.value = '60';
+            const ccName = cc => cc === 'LAN' ? 'Local network' : cc === '??' ? 'Unknown' : (names[cc] || cc);
+            [...new Set(features.map(f => f.cc))].sort((a, b) => ccName(a).localeCompare(ccName(b)))
+                .forEach(cc => lanSel.add(new Option(ccName(cc), cc)));
+            lanSel.value = trafficMapPref(TRAFFIC_MAP_LAN_KEY, '');
+            if (lanSel.selectedIndex < 0) lanSel.value = '';
+
+            const fmt = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? Math.round(n / 1e3) + 'k' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
+            const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b >= 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
+            const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+            const bez = (a, c, b, t) => (1 - t) * (1 - t) * a + 2 * (1 - t) * t * c + t * t * b;
+            const rgba = (c, a) => `rgba(${c.r | 0},${c.g | 0},${c.b | 0},${a})`;
+            const animating = () => animateBox.checked;
+            // an alert's color key - any severity, a custom rule's priority:9 included
+            const sevKind = sev => COLORS.SEVERITY[sev] ? 's' + sev : 'sdefault';
+
+            function readColors() {
+                const cs = getComputedStyle(document.documentElement);
+                const c = (name, fallback) => d3.rgb(cs.getPropertyValue(name).trim() || fallback);
+                colors = { bg: c('--bg-secondary', '#161b22'), bg2: c('--bg-tertiary', '#21262d'), muted: c('--text-muted', '#8b949e'),
+                    bright: c('--text-bright', '#f0f6fc'), flow: c('--accent', '#58a6ff') };
+                colors.accent = colors.flow;
+                for (const s in COLORS.SEVERITY) colors['s' + s] = d3.rgb(COLORS.SEVERITY[s]);
+                light = d3.hsl(colors.bg).l > 0.55;
+                colors.dot = d3.rgb(d3.interpolateRgb(colors.bg, colors.muted)(light ? 0.3 : 0.34));
+            }
+
+            function featureAt(x, y) {
+                x |= 0; y |= 0;
+                if (!idData || x < 0 || y < 0 || x >= idData.width || y >= idData.height) return -1;
+                const k = (y * idData.width + x) * 4, d = idData.data;
+                if (d[k + 3] !== 255 || d[k + 2] !== 0) return -1;
+                const id = d[k] + d[k + 1] * 256 - 1;
+                return id >= 0 && id < features.length ? id : -1;
+            }
+
+            function placeHub() {
+                const lan = lanSel.value;
+                if (lan && anchors[lan]) hub = { x: anchors[lan][0], y: anchors[lan][1], onMap: true };
+                else hub = { x: W / 2, y: H - 26, onMap: false };
+                anchors.LAN = [hub.x, hub.y];
+            }
+
+            function layout() {
+                const r = stage.getBoundingClientRect();
+                W = Math.max(320, r.width); H = Math.max(240, r.height); dpr = window.devicePixelRatio || 1;
+                for (const cv of [bg, fx]) { cv.width = W * dpr; cv.height = H * dpr; }
+                bgx.setTransform(dpr, 0, 0, dpr, 0, 0); fxx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                const wide = W >= 1100;
+                const padL = wide ? 230 : 12, padR = wide ? 290 : 12, padB = lanSel.value ? 14 : 54;
+                const proj = d3.geoEqualEarth().fitExtent([[padL, 14], [W - padR, H - padB]], { type: 'FeatureCollection', features });
+                // Each country painted in its own color offscreen, then
+                // sampled on a grid: a dot per land cell, and the same image
+                // answers "which country is under the pointer".
+                const off = document.createElement('canvas'); off.width = W | 0; off.height = H | 0;
+                const ox = off.getContext('2d', { willReadFrequently: true });
+                const path = d3.geoPath(proj, ox);
+                features.forEach((f, i) => { ox.beginPath(); path(f); ox.fillStyle = `rgb(${(i + 1) & 255},${(i + 1) >> 8},0)`; ox.fill(); });
+                idData = ox.getImageData(0, 0, off.width, off.height);
+                const step = Math.max(4.2, Math.min(8, W / 210));
+                dots = []; dotsByCC = {}; dotR = step * 0.34;
+                for (let y = step / 2, row = 0; y < H; y += step, row++) {
+                    for (let x = (row % 2 ? step / 2 : 0) + step / 4; x < W; x += step) {
+                        const f = featureAt(x, y);
+                        if (f < 0) continue;
+                        const cc = features[f].cc;
+                        (dotsByCC[cc] = dotsByCC[cc] || []).push(dots.length);
+                        dots.push({ x, y, cc });
+                    }
+                }
+                anchors = {};
+                for (const f of features) {
+                    let g = f.geometry;
+                    if (g.type === 'MultiPolygon') {   // its largest part, so France isn't anchored in South America
+                        g = g.coordinates.map(c => ({ type: 'Polygon', coordinates: c }))
+                            .reduce((a, b) => d3.geoArea(b) > d3.geoArea(a) ? b : a);
+                    }
+                    if (!anchors[f.cc]) anchors[f.cc] = proj(d3.geoCentroid(g));
+                }
+                for (const cc in places) anchors[cc] = proj(places[cc]);
+                placeHub();
+                const hr = hist.getBoundingClientRect();
+                hist.width = Math.max(1, hr.width * dpr); hist.height = Math.max(1, hr.height * dpr);
+                hx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                redrawAll();
+            }
+
+            // ---- background: dot map heated by traffic so far, and its routes
+            function drawBg() {
+                bgx.globalCompositeOperation = 'source-over';
+                bgx.fillStyle = rgba(colors.bg, 1); bgx.fillRect(0, 0, W, H);
+                const g = bgx.createRadialGradient(W / 2, H * 0.45, 0, W / 2, H * 0.45, Math.max(W, H) * 0.7);
+                g.addColorStop(0, rgba(colors.accent, light ? 0.05 : 0.07)); g.addColorStop(1, rgba(colors.accent, 0));
+                bgx.fillStyle = g; bgx.fillRect(0, 0, W, H);
+                const LEVELS = 14, heat = {}, lmax = Math.log1p(maxTotal);
+                for (const cc in cum) heat[cc] = Math.log1p(cum[cc].src + cum[cc].dst) / lmax;
+                const paths = Array.from({ length: LEVELS + 2 }, () => new Path2D());
+                for (const d of dots) {
+                    const h = heat[d.cc] || 0;
+                    const lv = highlighted.has(d.cc) ? LEVELS + 1 : Math.min(LEVELS, Math.round(h * LEVELS));
+                    const rr = dotR * (lv > LEVELS ? 1.4 : 1 + 0.35 * lv / LEVELS);
+                    paths[lv].moveTo(d.x + rr, d.y); paths[lv].arc(d.x, d.y, rr, 0, Math.PI * 2);
+                }
+                const mix = d3.interpolateRgb(colors.dot, colors.accent);
+                paths.forEach((path, lv) => {
+                    bgx.fillStyle = lv > LEVELS ? rgba(colors.bright, 0.95) : lv === 0 ? rgba(colors.dot, 1)
+                        : rgba(d3.rgb(mix(0.25 + 0.75 * lv / LEVELS)), 0.55 + 0.45 * lv / LEVELS);
+                    bgx.fill(path);
+                });
+                for (const cc in places) {
+                    if (!anchors[cc] || !(cum[cc] || highlighted.has(cc))) continue;
+                    const [x, y] = anchors[cc], h = heat[cc] || 0;
+                    bgx.beginPath(); bgx.arc(x, y, 2.2 + 2 * h, 0, Math.PI * 2);
+                    bgx.fillStyle = highlighted.has(cc) ? rgba(colors.bright, 1) : rgba(d3.rgb(mix(0.4 + 0.6 * h)), 0.95);
+                    bgx.fill();
+                }
+                if (animating()) drawRoutes(bgx, 0.05, 0.32, 0.5, 1.4);
+                if (!hub.onMap && data && data.totals.LAN) drawHub();
+            }
+
+            function drawHub() {
+                const { x, y } = hub;
+                bgx.strokeStyle = rgba(colors.accent, 0.7); bgx.lineWidth = 1.2;
+                bgx.beginPath();
+                for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; bgx.lineTo(x + 9 * Math.cos(a), y + 9 * Math.sin(a)); }
+                bgx.closePath(); bgx.stroke();
+                bgx.fillStyle = rgba(highlighted.has('LAN') ? colors.bright : colors.accent, 0.9);
+                bgx.beginPath(); bgx.arc(x, y, 2.5, 0, Math.PI * 2); bgx.fill();
+                bgx.font = '600 10px system-ui, sans-serif'; bgx.textAlign = 'left'; bgx.textBaseline = 'middle';
+                bgx.fillStyle = rgba(colors.muted, 1); bgx.fillText('LOCAL NETWORK', x + 15, y);
+            }
+
+            // Every route so far, weighted by its flow count; alerts' routes in their severity's color.
+            function drawRoutes(ctx, aMin, aMax, wMin, wMax) {
+                const max = Math.log1p(Math.max(1, ...routes.values()));
+                for (const [k, n] of routes) {
+                    const f = Math.log1p(n) / max;
+                    routeArc(ctx, k, 'flow', aMin + (aMax - aMin) * f, wMin + (wMax - wMin) * f);
+                }
+                for (const [k, sev] of alertRoutes) routeArc(ctx, k, sevKind(sev), Math.min(1, aMax + 0.3), wMax);
+            }
+
+            function control(a, b) {
+                const dx = b[0] - a[0], dy = b[1] - a[1], dist = Math.hypot(dx, dy) || 1;
+                let nx = -dy / dist, ny = dx / dist;
+                if (ny > 0) { nx = -nx; ny = -ny; }   // arcs bow upward
+                const lift = Math.min(dist * 0.3, 170) + 6;
+                return { cx: (a[0] + b[0]) / 2 + nx * lift, cy: (a[1] + b[1]) / 2 + ny * lift, dist };
+            }
+
+            function routeArc(ctx, key, kind, alpha, width) {
+                const [s, d] = key.split('>'), a = anchors[s], b = anchors[d];
+                if (!a || !b) return;
+                const { cx, cy } = control(a, b);
+                ctx.strokeStyle = rgba(colors[kind], alpha); ctx.lineWidth = width;
+                ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.quadraticCurveTo(cx, cy, b[0], b[1]); ctx.stroke();
+                ctx.fillStyle = rgba(colors[kind], Math.min(1, alpha + 0.2));
+                ctx.beginPath(); ctx.arc(b[0], b[1], 1.5 + width * 0.6, 0, Math.PI * 2); ctx.fill();
+            }
+
+            // ---- replay
+            const binPos = () => p * data.bins;
+            const capTime = () => p * data.span;
+
+            function tally(b) {
+                const [, s, d, n, bytes] = b;
+                (cum[s] = cum[s] || { src: 0, dst: 0, bytes: 0 }).src += n; cum[s].bytes += bytes;
+                (cum[d] = cum[d] || { src: 0, dst: 0, bytes: 0 }).dst += n; if (d !== s) cum[d].bytes += bytes;
+                flowsSoFar += n;
+                if (s !== '??' && d !== '??' && s !== d) routes.set(s + '>' + d, (routes.get(s + '>' + d) || 0) + n);
+            }
+            function tallyAlert(al) {
+                alertsSoFar++;
+                if (al[1] !== al[2] && al[1] !== '??' && al[2] !== '??') {
+                    const k = al[1] + '>' + al[2];
+                    alertRoutes.set(k, Math.min(alertRoutes.get(k) || 9, al[3]));
+                }
+            }
+
+            function seek(newP) {
+                p = Math.max(0, Math.min(1, newP));
+                arcs = []; ripples = []; labels = []; feed = [];
+                cum = {}; routes = new Map(); alertRoutes = new Map(); flowsSoFar = 0; alertsSoFar = 0;
+                const bp = binPos(), ct = capTime();
+                for (bi = 0; bi < data.buckets.length && data.buckets[bi][0] < bp; bi++) tally(data.buckets[bi]);
+                for (ai = 0; ai < data.alerts.length && data.alerts[ai][0] < ct; ai++) { tallyAlert(data.alerts[ai]); feed.unshift(data.alerts[ai]); }
+                feed = feed.slice(0, 6);
+                renderFeed(false); redrawAll();
+            }
+
+            function pointIn(cc, spread) {
+                const list = spread && dotsByCC[cc];
+                if (list && list.length) { const d = dots[list[(Math.random() * list.length) | 0]]; return [d.x, d.y]; }
+                const a = anchors[cc];
+                return a && [a[0] + (Math.random() - 0.5) * 3, a[1] + (Math.random() - 0.5) * 3];
+            }
+
+            function addLabel(at, al, born) {
+                // one label per landing place - a server many alerts land on
+                // shows the latest, rather than a stack of them
+                labels = labels.filter(l => Math.hypot(l.x - at[0], l.y - at[1]) > 40);
+                labels.push({ x: at[0], y: at[1], born, text: al[4], kind: sevKind(al[3]) });
+                if (labels.length > 4) labels.shift();
+            }
+
+            // A flow's arc leaves from anywhere in its source country (one
+            // country's many senders) and lands on its destination's anchor.
+            function spawnArc(s, d, now, kind, weight, delay, alert) {
+                const a = pointIn(s, s !== 'LAN'), b = pointIn(d, false);
+                if (!a || !b) return;
+                const { cx, cy, dist } = control(a, b);
+                if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 3) {
+                    ripples.push({ x: b[0], y: b[1], born: now + delay, kind, max: alert ? 26 : 10, life: alert ? 1600 : 900 });
+                    if (alert) addLabel(b, alert, now + delay);
+                    return;
+                }
+                arcs.push({ x0: a[0], y0: a[1], x1: b[0], y1: b[1], cx, cy, born: now + delay,
+                    life: (alert ? 1700 : 1050) + dist * 2.2, kind, w: alert ? 2 : weight, alert });
+            }
+
+            const MAX_ARCS = 1400;
+            function advance(now, dt) {
+                if (!playing || !data) return;
+                const before = binPos();
+                p = Math.min(1, p + dt / (Number(speedSel.value) * 1000));
+                const bp = binPos(), ct = capTime(), frameBins = Math.max(bp - before, 1e-9);
+                const show = animating();
+                for (; bi < data.buckets.length && data.buckets[bi][0] < bp; bi++) {
+                    const b = data.buckets[bi], [bin, s, d, n] = b;
+                    tally(b);
+                    if (!show || s === '??' || d === '??' || (s === 'LAN' && d === 'LAN')) continue;
+                    const k = Math.min(1 + Math.floor(Math.log2(n)), 5);
+                    for (let i = 0; i < k && arcs.length < MAX_ARCS; i++) {
+                        const delay = Math.max(0, (bin - before) / frameBins) * dt + Math.random() * 350;
+                        spawnArc(s, d, now, 'flow', n >= 20 ? 1 : 0, delay);
+                    }
+                }
+                let newAlert = false;
+                for (; ai < data.alerts.length && data.alerts[ai][0] < ct; ai++) {
+                    const al = data.alerts[ai];
+                    tallyAlert(al); feed.unshift(al); newAlert = true;
+                    if (show && al[1] !== '??' && al[2] !== '??') spawnArc(al[1], al[2], now, sevKind(al[3]), 2, Math.random() * 120, al);
+                }
+                if (newAlert) { feed.length = Math.min(feed.length, 6); renderFeed(true); }
+                if (p >= 1) { playing = false; setPlayIcon(); }
+            }
+
+            // One stroke per (color, tail segment, width) across every arc in
+            // flight, so a thousand comets cost a few dozen draw calls.
+            const LV = 6, WIDTHS = [1.1, 1.8, 2.6];
+            function drawFx(now) {
+                fxx.globalCompositeOperation = 'source-over';
+                fxx.clearRect(0, 0, W, H);
+                fxx.globalCompositeOperation = light ? 'source-over' : 'lighter';
+                const strokes = new Map(), heads = new Map();
+                const pathFor = (m, key) => { let pth = m.get(key); if (!pth) m.set(key, pth = new Path2D()); return pth; };
+                const keep = [];
+                for (const a of arcs) {
+                    const u = (now - a.born) / a.life;
+                    if (u < 0) { keep.push(a); continue; }
+                    if (u > 1.25) {
+                        ripples.push({ x: a.x1, y: a.y1, born: now, kind: a.kind, max: a.alert ? 30 : 7 + a.w * 3, life: a.alert ? 1700 : 800 });
+                        if (a.alert) addLabel([a.x1, a.y1], a.alert, now);
+                        continue;
+                    }
+                    keep.push(a);
+                    const th = ease(Math.min(u, 1)), tt = ease(Math.max(0, Math.min(1, u - 0.25)));
+                    let px = bez(a.x0, a.cx, a.x1, tt), py = bez(a.y0, a.cy, a.y1, tt);
+                    for (let l = 0; l < LV; l++) {
+                        const t = tt + (th - tt) * (l + 1) / LV;
+                        const x = bez(a.x0, a.cx, a.x1, t), y = bez(a.y0, a.cy, a.y1, t);
+                        const pth = pathFor(strokes, a.kind + '|' + l + '|' + a.w);
+                        pth.moveTo(px, py); pth.lineTo(x, y); px = x; py = y;
+                    }
+                    if (u <= 1) { const hp = pathFor(heads, a.kind); hp.moveTo(px + 2, py); hp.arc(px, py, a.alert ? 2.4 : 1.5, 0, Math.PI * 2); }
+                }
+                arcs = keep;
+                fxx.lineCap = 'round';
+                for (const [key, pth] of strokes) {
+                    const [kind, l, w] = key.split('|'), f = (+l + 1) / LV;
+                    fxx.strokeStyle = rgba(colors[kind], (light ? 0.75 : 0.85) * f * f);
+                    fxx.lineWidth = WIDTHS[w] * (0.45 + 0.55 * f);
+                    fxx.stroke(pth);
+                }
+                for (const [kind, pth] of heads) {
+                    fxx.fillStyle = rgba(light ? colors[kind] : d3.rgb(d3.interpolateRgb(colors[kind], colors.bright)(0.5)), 1);
+                    fxx.fill(pth);
+                }
+                const live = [];
+                for (const r of ripples) {
+                    const u = (now - r.born) / r.life;
+                    if (u < 0) { live.push(r); continue; }
+                    if (u >= 1) continue;
+                    live.push(r);
+                    fxx.strokeStyle = rgba(colors[r.kind], (1 - u) * (r.max > 20 ? 0.9 : 0.55));
+                    fxx.lineWidth = r.max > 20 ? 1.8 : 1;
+                    fxx.beginPath(); fxx.arc(r.x, r.y, 2 + r.max * ease(u), 0, Math.PI * 2); fxx.stroke();
+                }
+                ripples = live.length > 500 ? live.slice(-500) : live;
+                fxx.globalCompositeOperation = 'source-over';
+                drawLabels(now);
+                if (!hub.onMap && data && data.totals.LAN) {
+                    const ph = (now % 2400) / 2400;
+                    fxx.strokeStyle = rgba(colors.accent, 0.35 * (1 - ph)); fxx.lineWidth = 1;
+                    fxx.beginPath(); fxx.arc(hub.x, hub.y, 9 + 14 * ph, 0, Math.PI * 2); fxx.stroke();
+                }
+            }
+
+            function drawLabels(now) {
+                labels = labels.filter(l => now - l.born < 3200);
+                fxx.font = '600 11px system-ui, sans-serif'; fxx.textBaseline = 'middle'; fxx.textAlign = 'left';
+                labels.forEach((l, i) => {
+                    const u = (now - l.born) / 3200;
+                    if (u < 0) return;
+                    const alpha = u < 0.1 ? u / 0.1 : u > 0.75 ? (1 - u) / 0.25 : 1;
+                    const text = l.text.length > 46 ? l.text.slice(0, 45) + '…' : l.text;
+                    const tw = fxx.measureText(text).width;
+                    let x = l.x + 14;
+                    const y = l.y - 16 - i * 4 - u * 10;
+                    if (x + tw + 12 > W) x = l.x - 14 - tw - 12;
+                    fxx.globalAlpha = alpha;
+                    fxx.fillStyle = rgba(colors.bg2, 0.9);
+                    fxx.beginPath(); fxx.roundRect(x - 6, y - 10, tw + 12, 20, 5); fxx.fill();
+                    fxx.strokeStyle = rgba(colors[l.kind], 0.9); fxx.lineWidth = 1; fxx.stroke();
+                    fxx.fillStyle = rgba(colors.bright, 1); fxx.fillText(text, x, y);
+                    fxx.globalAlpha = 1;
+                });
+            }
+
+            // Without animation: every route so far at once, drawn when it changes.
+            function drawStatic() {
+                fxx.globalCompositeOperation = 'source-over'; fxx.clearRect(0, 0, W, H);
+                drawRoutes(fxx, 0.15, 0.75, 0.6, 2.8);
+            }
+
+            // ---- panels and timeline
+            function renderPanels() {
+                $('flows').textContent = fmt(flowsSoFar);
+                $('alerts').textContent = fmt(alertsSoFar);
+                $('places').textContent = Object.keys(cum).filter(c => c !== 'LAN' && c !== '??').length;
+                let role = 'src', rows = Object.entries(cum).filter(([c, v]) => c !== 'LAN' && c !== '??' && v.src);
+                if (!rows.length) { role = 'dst'; rows = Object.entries(cum).filter(([c, v]) => c !== 'LAN' && c !== '??' && v.dst); }
+                rows.sort((a, b) => b[1][role] - a[1][role] || a[0].localeCompare(b[0]));
+                rows = rows.slice(0, 8);
+                $('top-title').textContent = role === 'src' ? 'Top sources' : 'Top destinations';
+                const topList = $('top');
+                // Not rebuilt while the pointer is on it - the ranking moves
+                // during a replay, and a click must land on what was aimed at.
+                if (listStale || (!topList.matches(':hover') && !topList.contains(document.activeElement))) {
+                    listStale = false;
+                    const top = rows.length ? rows[0][1][role] : 1;
+                    topList.innerHTML = rows.map(([cc, v]) =>
+                        `<li><button type="button" data-cc="${escapeHtml(cc)}" class="${highlighted.has(cc) ? 'on' : ''}" title="Filter to traffic to or from ${escapeHtml(ccName(cc))}">` +
+                        `<span class="cc">${escapeHtml(cc)}</span><span class="nm">${escapeHtml(ccName(cc))}` +
+                        `<span class="bar" style="width:${(100 * v[role] / top).toFixed(1)}%"></span></span>` +
+                        `<span class="n">${fmt(v[role])}</span></button></li>`).join('');
+                }
+                if (data.start != null) {
+                    const t = new Date((data.start + capTime()) * 1000);
+                    $('clock').textContent = t.toISOString().slice(11, 19);
+                    $('date').textContent = t.toISOString().slice(0, 10) + ' UTC';
+                }
+                $('head').style.left = (p * 100) + '%';
+                drawHist();
+            }
+
+            function renderFeed(animate) {
+                const el = $('feed');
+                if (!feed.length) { el.innerHTML = '<li class="empty">No alerts yet</li>'; return; }
+                el.innerHTML = feed.map((al, i) => {
+                    const t = new Date((data.start + al[0]) * 1000).toISOString().slice(11, 19);
+                    return `<li style="--sev:${COLORS.SEVERITY[al[3]] || COLORS.SEVERITY.default}${animate && i === 0 ? '' : ';animation:none'}">` +
+                        `<div class="sig">${escapeHtml(al[4])}</div>` +
+                        `<div class="meta">${t} · ${escapeHtml(al[5])} (${escapeHtml(al[1])}) → ${escapeHtml(al[6])} (${escapeHtml(al[2])})</div></li>`;
+                }).join('');
+            }
+
+            function drawHist() {
+                const w = hist.width / dpr, h = hist.height / dpr;
+                hx.clearRect(0, 0, w, h);
+                const n = binCounts.length;
+                if (!n) return;
+                const max = Math.log1p(Math.max(1, ...binCounts));
+                const area = () => {
+                    hx.beginPath(); hx.moveTo(0, h);
+                    for (let i = 0; i < n; i++) hx.lineTo((i + 0.5) / n * w, h - 3 - (h - 12) * Math.log1p(binCounts[i]) / max);
+                    hx.lineTo(w, h); hx.closePath();
+                };
+                area(); hx.fillStyle = rgba(colors.muted, 0.18); hx.fill();
+                hx.save(); hx.beginPath(); hx.rect(0, 0, p * w, h); hx.clip();
+                area();
+                const g = hx.createLinearGradient(0, 0, 0, h);
+                g.addColorStop(0, rgba(colors.accent, 0.85)); g.addColorStop(1, rgba(colors.accent, 0.15));
+                hx.fillStyle = g; hx.fill(); hx.restore();
+                for (const al of data.alerts) {
+                    hx.fillStyle = rgba(colors[sevKind(al[3])], al[0] <= capTime() ? 1 : 0.45);
+                    hx.fillRect(al[0] / data.span * w - 0.75, 0, 1.5, 6);
+                }
+            }
+
+            function redrawAll() {
+                if (!data || !W) return;
+                drawBg(); lastBg = performance.now();
+                if (!animating()) drawStatic();
+                renderPanels();
+            }
+
+            function setPlayIcon() {
+                $('play-icon').setAttribute('d', playing ? 'M7 5h4v14H7zM13 5h4v14h-4z' : 'M8 5l11 7-11 7z');
+                $('play').setAttribute('aria-label', playing ? 'Pause' : 'Play');
+            }
+
+            function frame(now) {
+                if (destroyed) return;
+                rafId = requestAnimationFrame(frame);
+                const dt = lastNow ? Math.min(now - lastNow, 100) : 16;
+                lastNow = now;
+                if (!data || !visible) return;
+                advance(now, dt);
+                if (animating()) drawFx(now);
+                if (now - lastPanel > 200) { renderPanels(); lastPanel = now; }
+                if (playing && now - lastBg > 300) { drawBg(); if (!animating()) drawStatic(); lastBg = now; }
+            }
+
+            function hitTest(x, y) {
+                if (data && data.totals.LAN && Math.hypot(x - hub.x, y - hub.y) < 16) return 'LAN';
+                for (const cc in places) {
+                    const a = anchors[cc];
+                    if (a && cum[cc] && Math.hypot(x - a[0], y - a[1]) < 7) return cc;
+                }
+                const f = featureAt(x, y);
+                return f >= 0 ? features[f].cc : null;
+            }
+
+            // ---- wiring
+            fx.addEventListener('mousemove', e => {
+                const r = fx.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+                const cc = hitTest(x, y);
+                if (!cc) { tip.hidden = true; fx.style.cursor = ''; return; }
+                const v = cum[cc] || { src: 0, dst: 0, bytes: 0 };
+                tip.innerHTML = `<b>${escapeHtml(ccName(cc))}</b><br>${fmt(v.src)} flows from · ${fmt(v.dst)} to · ${fmtBytes(v.bytes)}` +
+                    `<br><span class="tm-tip-hint">${highlighted.has(cc) ? 'Click to remove its filter' : 'Click to filter to its traffic'}</span>`;
+                tip.hidden = false; fx.style.cursor = 'pointer';
+                tip.style.left = Math.max(4, Math.min(x + 14, W - tip.offsetWidth - 8)) + 'px';
+                tip.style.top = Math.min(y + 14, H - tip.offsetHeight - 4) + 'px';
+            });
+            fx.addEventListener('mouseleave', () => { tip.hidden = true; });
+            fx.addEventListener('click', e => {
+                const r = fx.getBoundingClientRect(), cc = hitTest(e.clientX - r.left, e.clientY - r.top);
+                if (cc) { tip.hidden = true; toggleCountryFilter(cc); }
+            });
+            $('top').addEventListener('click', e => {
+                const btn = e.target.closest('button[data-cc]');
+                if (btn) toggleCountryFilter(btn.dataset.cc);
+            });
+            $('play').addEventListener('click', () => {
+                if (!data) return;
+                if (!playing && p >= 1) seek(0);
+                playing = !playing; setPlayIcon();
+            });
+            const track = $('track');
+            const seekFrom = e => { const r = track.getBoundingClientRect(); if (data && r.width > 0) seek((e.clientX - r.left) / r.width); };
+            track.addEventListener('pointerdown', e => { dragging = true; track.setPointerCapture(e.pointerId); seekFrom(e); });
+            track.addEventListener('pointermove', e => { if (dragging) seekFrom(e); });
+            track.addEventListener('pointerup', () => { dragging = false; });
+            speedSel.addEventListener('change', () => safeStorageSet(localStorage, TRAFFIC_MAP_SPEED_KEY, speedSel.value));
+            animateBox.addEventListener('change', () => {
+                safeStorageSet(localStorage, TRAFFIC_MAP_ANIMATE_KEY, String(animateBox.checked));
+                arcs = []; ripples = []; labels = []; fxx.clearRect(0, 0, W, H); redrawAll();
+            });
+            lanSel.addEventListener('change', () => { safeStorageSet(localStorage, TRAFFIC_MAP_LAN_KEY, lanSel.value); layout(); });
+
+            const themeObserver = new MutationObserver(() => { readColors(); renderFeed(false); redrawAll(); });
+            themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'style'] });
+            const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => layout()) : null;
+            if (resizeObserver) resizeObserver.observe(stage);
+            // nothing drawn while scrolled out of view
+            const io = typeof IntersectionObserver !== 'undefined'
+                ? new IntersectionObserver(entries => { visible = entries.some(en => en.isIntersecting); }) : null;
+            if (io) io.observe(stage);
+
+            readColors();
+            rafId = requestAnimationFrame(frame);
+
+            return {
+                setData(newData, hl, keepPosition) {
+                    const wasPlaying = playing, at = p;
+                    data = newData;
+                    highlighted = hl || new Set();
+                    binCounts = new Array(data.bins).fill(0);
+                    for (const b of data.buckets) binCounts[b[0]] += b[3];
+                    maxTotal = Math.max(1, ...Object.entries(data.totals).filter(([c]) => c !== 'LAN' && c !== '??').map(([, v]) => v[0]));
+                    const note = $('note');
+                    if (!data.flows && !data.alertCount) {
+                        note.textContent = currentSearch.length ? 'No flows or alerts match the current search' : 'No flows or alerts to map';
+                    } else if (!data.geo) {
+                        note.textContent = "IP location data isn't installed, so only local network traffic can be placed - the container image includes it";
+                    } else note.textContent = '';
+                    note.hidden = !note.textContent;
+                    root.querySelector('.tm-credit').hidden = !data.geo;
+                    listStale = true;
+                    if (!W) layout();
+                    seek(keepPosition ? at : 0);
+                    playing = !!(data.flows || data.alertCount) && (keepPosition ? wasPlaying : true);
+                    setPlayIcon();
+                },
+                setHighlighted(hl) { highlighted = hl; listStale = true; redrawAll(); },
+                seek(at) { if (data) seek(at); },
+                destroy() {
+                    destroyed = true;
+                    cancelAnimationFrame(rafId);
+                    themeObserver.disconnect();
+                    if (resizeObserver) resizeObserver.disconnect();
+                    if (io) io.disconnect();
+                },
+            };
         }
 
         // Columns for an email analysis's tabs - see isEmailAnalysisMode.
@@ -14364,7 +15496,10 @@
         window.addEventListener('resize', () => {
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
-                if (diagramMode && currentMd5) {
+                // currentMd5 outlives a return to the welcome screen, so
+                // check the analysis is still on screen - redrawing then
+                // brought the Traffic Map back above the welcome screen.
+                if (diagramMode && currentMd5 && document.getElementById('dataPanel').style.display !== 'none') {
                     updateSankeyDiagram();
                 }
             }, CONFIG.SEARCH_DEBOUNCE_MS);
@@ -14398,6 +15533,15 @@
             'close-themes-modal': () => closeThemesModal(),
             'close-notes-modal': () => closeNotesModal(),
             'close-rules-modal': () => closeRulesModal(),
+            'close-custom-rules-modal': () => closeCustomRulesModal(),
+            'open-etpro-code': () => showEtproCodeModal(),
+            'close-etpro-code-modal': () => closeEtproCodeModal(),
+            'save-etpro-code': () => saveEtproCode(),
+            'remove-etpro-code': () => removeEtproCode(),
+            'open-custom-rules': () => showCustomRulesModal(),
+            'save-custom-rules': () => saveCustomRules(),
+            'load-custom-rules-file': () => document.getElementById('customRulesFileInput').click(),
+            'goto-custom-rule-line': (el) => selectCustomRuleLine(Number(el.dataset.line)),
             'close-autocomplete-modal': () => closeAutocompleteModal(),
             'confirm-delete': () => confirmDelete(),
             'confirm-delete-all': () => confirmDeleteAll(),
@@ -14519,6 +15663,7 @@
 
             // Sankey / Aggregation panels.
             'toggle-diagram': () => toggleDiagram(),
+            'toggle-traffic-map': () => toggleTrafficMap(),
             'toggle-aggregations': () => toggleAggregations(),
             'hide-agg-table': (el) => hideAggregationTable(el.dataset.sectionId, el.dataset.col),
             'change-agg-page': (el) => changeAggPage(el.dataset.sectionId, el.dataset.col, Number(el.dataset.delta)),
@@ -14551,6 +15696,7 @@
             'change-agg-page-size': (el) => changeAggPageSize(el.value),
             'suricata-source-toggle': (el) => handleSuricataSourceToggle(el.dataset.name, el.checked),
             'protocol-decode-toggle': (el) => handleShowProtocolDecodeAlertsToggle(el.checked),
+            'custom-rules-file': (el) => loadCustomRulesFile(el),
         });
 
         document.addEventListener('click', e => {
@@ -14673,6 +15819,14 @@
             if (e.key === 'Enter') performSearch();
         });
         document.getElementById('autocompleteInput').addEventListener('input', () => filterAutocomplete());
+        document.getElementById('customRulesInput').addEventListener('input', e => handleCustomRulesInput(e.target));
+        document.getElementById('etproCodeInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') saveEtproCode();
+        });
+        document.getElementById('customRulesInput').addEventListener('scroll', () => queueCustomRulesHighlight());
+        if (typeof ResizeObserver !== 'undefined') {
+            new ResizeObserver(() => queueCustomRulesHighlight()).observe(document.getElementById('customRulesInput'));
+        }
         document.getElementById('checkForUpdates').addEventListener('change', e => handleCheckForUpdatesChange(e.target));
         document.getElementById('syncThemeWithOS').addEventListener('change', e => handleSyncThemeWithOSChange(e.target));
         document.getElementById('checkForStaleRules').addEventListener('change', e => handleCheckForStaleRulesChange(e.target));

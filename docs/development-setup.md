@@ -10,7 +10,7 @@ setup starts out with noticeably less working out of the box.
 
 You'll need these prerequisites:
 
-- **Python 3** (stdlib only - no pip packages required)
+- **Python 3.11 or newer** (stdlib only - no pip packages required)
 - **Suricata** - for PCAP analysis and rule-based alerting
 - **suricata-update** - for downloading/updating Suricata rules (internet access required; the app will warn and continue without rules if offline)
 - **tcpdump** - for stream carving (`/api/download-stream`) and hexdump extraction (`/api/hexdump-stream`)
@@ -36,11 +36,13 @@ Then open http://localhost:8000/socrates.html in your browser.
 | `BIND_ADDRESS` | `127.0.0.1` | Address to bind the HTTP server to |
 | `ALLOWED_HOSTS` | unset | Comma-separated hostnames accepted in the `Host`/`Origin` headers, beyond the always-accepted localhost and IP literals (other DNS names are rejected as a DNS-rebinding defense). Entries may be exact names, `*.suffix` wildcards (any subdomain - what proxied environments like Killercoda need, where the per-session hostname isn't known in advance), or a bare `*` to accept any host |
 | `PORT` | `8000` | HTTP server port |
+| `ALLOW_CUSTOM_RULES` | `true` | Set to `false` to stop anyone saving [custom Suricata rules](usage/analyzing-files.md#custom-suricata-rules) - for a shared instance or a public demo, where one person's rules would change everyone's results. Rules already saved stay as they are, and can still be turned on and off |
 | `ENABLE_ARP_LOGGING` | unset (disabled) | Set to any non-empty value to enable Suricata's `arp` eve-log output. Off by default since ARP volume can be significant on a live network (Suricata's own default is disabled too, for the same reason) - only enable if you actually want ARP events. |
 | `OHMYDEBN_THEME_DIR` | unset (feature off) | Base OhMyDebn config directory (e.g. `~/.config/ohmydebn`), for the opt-in "Sync theme to OhMyDebn theme" feature - see [Themes](themes.md). No-op for any deployment not launched via OhMyDebn. |
 | `DEMO` | unset | Set to any non-empty value to show a shortened startup message pointing at a hosted demo link, instead of the usual `http://<host>:<port>/socrates.html` URL - used for the public demo deployment, not a typical local install. |
 | `PLAYBOOKS_DIR` | `/usr/share/playbooks` | Directory holding the Security Onion Playbooks gzip-compressed indexes (`nids.json.gz`/`sigma.json.gz`). The default path is only populated inside the Docker/Podman image (baked in by the Dockerfile's `resources-builder` stage) - a from-source setup has nothing there by default, so Playbook sections simply don't appear on alerts. Point this at a directory containing your own indexes (in the same format) to enable the feature locally. |
 | `AI_SUMMARIES_DIR` | `/usr/share/ai-summaries` | Directory holding the AI-generated rule summary gzip-compressed indexes (`nids.json.gz`/`sigma.json.gz`/`yara.json.gz`). Same story as `PLAYBOOKS_DIR` above - only populated inside the Docker/Podman image, baked by the same `resources-builder` stage. Point this at a directory containing your own indexes (in the same format) to enable the feature locally. |
+| `GEOIP_DIR` | `/usr/share/geoip` | Directory holding the IP-to-country index (`country.bin.gz`) for the Traffic Map and `country:` search terms. Only populated inside the Docker/Podman image (built from DB-IP's IP to Country Lite by the Dockerfile's `resources-builder` stage) - from source, every public address is unknown (the map places only local network traffic) until you download `dbip-country-lite-YYYY-MM.csv.gz` from [db-ip.com](https://db-ip.com/db/download/ip-to-country-lite), run `mkdir -p geoip && scripts/build_geoip.py <that file> ./geoip/country.bin.gz YYYY-MM` and point this at `./geoip`. |
 | `CYBERCHEF_DIR` | `/usr/share/cyberchef` | Directory holding the bundled CyberChef that SO-CRATES serves at `/cyberchef/`. Like `PLAYBOOKS_DIR`, only populated inside the Docker/Podman image (baked in by the Dockerfile's `resources-builder` stage) - from source, the pivot menu's CyberChef lookup gets a 404 until you run `scripts/fetch-cyberchef.sh ./cyberchef` and point this at `./cyberchef`. |
 
 Environment variables override the hardcoded defaults at startup.

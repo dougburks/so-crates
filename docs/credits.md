@@ -17,16 +17,21 @@ SO-CRATES is built on many excellent open-source projects and freely available r
 | [Abuse.ch JA3 Fingerprints](https://sslbl.abuse.ch/ja3-fingerprints/) | CC0-1.0 | Suricata network rules (optional) |
 | [Abuse.ch Feodo Tracker](https://feodotracker.abuse.ch/) | CC0-1.0 | Suricata network rules (optional) |
 | [Etnetera Aggressive IP Blacklist](https://security.etnetera.cz/) | MIT | Suricata network rules (optional) |
-| [Positive Technologies PT Rules (Open)](https://rules.ptsecurity.com) | Custom | Suricata network rules (optional) |
 | [PAW Patrules](https://pawpatrules.fr/) | CC-BY-SA-4.0 | Suricata network rules (optional) |
 | [IPFire DBL](https://www.ipfire.org/dbl/) | CC-BY-SA-4.0 | Suricata network rules (optional) |
+| [Emerging Threats Pro](https://www.proofpoint.com/us/threat-insight/et-pro-ruleset) | Commercial | Suricata network rules (optional - needs your own subscription; never included in the app image) |
 | [Stamus Lateral Movement](https://www.stamus-networks.com/) | GPL-3.0-only | Suricata network rules (optional) |
 | [Threat Hunting Rules (tgreen)](https://github.com/travisbgreen/hunting-rules) | GPL-3.0-only | Suricata network rules (optional) |
 | [NMAP Scan Detection](https://github.com/aleksibovellan/opnsense-suricata-nmaps) | MIT | Suricata network rules (optional) |
 | [Antiphishing](https://github.com/julioliraup/Antiphishing) | GPL-3.0-only | Suricata network rules (optional) |
 | [The Hunter's Ledger](https://the-hunters-ledger.com/) | CC-BY-4.0 | Suricata network rules (optional) |
-| [D3](https://d3js.org/) | ISC | Sankey diagram visualization |
+| [D3](https://d3js.org/) | ISC | Sankey diagram and Traffic Map rendering |
 | [d3-sankey](https://github.com/d3/d3-sankey) | BSD-3-Clause | Sankey diagram layout |
+| [DB-IP IP to Country Lite](https://db-ip.com/db/download/ip-to-country-lite) | CC-BY-4.0 | IP address to country for the Traffic Map ([IP Geolocation by DB-IP](https://db-ip.com)) |
+| [Natural Earth](https://www.naturalearthdata.com/) | Public domain | Traffic Map's world (1:110m countries) |
+| [world-atlas](https://github.com/topojson/world-atlas) | ISC | Natural Earth's countries as TopoJSON |
+| [topojson-client](https://github.com/topojson/topojson-client) | ISC | Decoding the Traffic Map's world |
+| [i18n-iso-countries](https://github.com/michaelwittig/node-i18n-iso-countries) | MIT | Country names for the Traffic Map |
 | [CyberChef](https://github.com/gchq/CyberChef) | Apache-2.0 | Built-in data decoding and analysis (pivot-menu lookup, Send to CyberChef) |
 | [tcpdump](https://www.tcpdump.org/) | BSD-3-Clause | Stream/hexdump carving |
 | [Wireshark/tshark](https://www.wireshark.org/) | GPL-2.0-only | ASCII transcript extraction, and decoding the protocols Suricata doesn't parse |

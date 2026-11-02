@@ -43,6 +43,10 @@ that re-deriving this table (same method) may be due.
 SURICATA_SID_RANGES = [
     (2000005, 2527021, 'et/open', 'Emerging Threats Open'),
     (2610178, 2610881, 'tgreen/hunting', 'Threat Hunting Rules (tgreen)'),
+    # Not derived like the rest (that takes an access code): ET Pro's own
+    # documented block. Its copies of ET Open's rules keep their SIDs, so
+    # they're labeled ET Open.
+    (2800000, 2899999, 'et/pro', 'Emerging Threats Pro'),
     (3115102, 3115668, 'stamus/lateral', 'Stamus Lateral Movement'),
     (3300003, 3321492, 'pawpatrules', 'PAW Patrules'),
     (3400001, 3400021, 'aleksibovellan/nmap', 'NMAP Scan Detection'),
@@ -61,8 +65,10 @@ SURICATA_SID_RANGES = [
 # Sources no longer offered (no longer in suricata_analyzer's
 # SURICATA_RULE_SOURCES) whose ranges stay above, so the alerts in an
 # analysis run with their rules still name them: abuse.ch retired
-# URLhaus's Suricata feed (dropped in 5.0.1).
-RETIRED_SOURCES = {'abuse.ch/urlhaus'}
+# URLhaus's Suricata feed (dropped in 5.0.1), and Positive Technologies'
+# server stopped presenting a publicly trusted certificate (dropped in
+# 5.2.0 - see suricata_analyzer.py).
+RETIRED_SOURCES = {'abuse.ch/urlhaus', 'ptrules/open'}
 
 # Suricata's own bundled decoder/stream/app-layer/file rules - always
 # loaded from /etc/suricata/rules/* regardless of which curated online
@@ -71,19 +77,30 @@ RETIRED_SOURCES = {'abuse.ch/urlhaus'}
 # inside et/open's span, and et/open even ships copies of these same rules,
 # so checking et/open first labelled essentially every protocol-decode
 # alert "Emerging Threats Open". Two exact ranges, not one span from 1:
-# the low one ends below et/open's floor (2000005), so no et/open rule
-# outside the event-rule block is ever claimed as built-in.
-SURICATA_BUILTIN_SID_RANGES = [(1, 1999999), (2200000, 2299999)]
+# the low one ends below the local range (and so below et/open's floor,
+# 2000005), so neither local rules nor et/open rules outside the
+# event-rule block are ever claimed as built-in. Suricata 8's own bundled
+# rules that are enabled by default all sit below 300000 or in
+# 2200000-2299999.
+SURICATA_BUILTIN_SID_RANGES = [(1, 999999), (2200000, 2299999)]
 SURICATA_BUILTIN_LABEL = 'Suricata (built-in)'
+
+# The SID range conventionally kept for local rules - the only one custom
+# rules (suricata_analyzer.save_custom_rules) may use, so labeling them is
+# a range check like any source's. No curated source uses it
+# (tests/test_suricata_sid_ranges.py checks). Split out of the built-in
+# range following the reference patch in issue #75 (popeye1919).
+SURICATA_LOCAL_SID_RANGE = (1000000, 1999999)
+SURICATA_LOCAL_LABEL = 'Local / Custom Rules'
 
 OTHER_RULESET_LABEL = 'Other / Unrecognized'
 
 
 def classify_alert_ruleset(sid):
     """Return the display label of the curated ruleset (or
-    SURICATA_BUILTIN_LABEL, or OTHER_RULESET_LABEL) a signature_id most
-    likely came from. Never raises - None or a non-numeric sid maps to
-    OTHER_RULESET_LABEL."""
+    SURICATA_BUILTIN_LABEL, SURICATA_LOCAL_LABEL or OTHER_RULESET_LABEL) a
+    signature_id most likely came from. Never raises - None or a
+    non-numeric sid maps to OTHER_RULESET_LABEL."""
     try:
         sid = int(sid)
     except (TypeError, ValueError):
@@ -91,6 +108,9 @@ def classify_alert_ruleset(sid):
     for builtin_min, builtin_max in SURICATA_BUILTIN_SID_RANGES:
         if builtin_min <= sid <= builtin_max:
             return SURICATA_BUILTIN_LABEL
+    local_min, local_max = SURICATA_LOCAL_SID_RANGE
+    if local_min <= sid <= local_max:
+        return SURICATA_LOCAL_LABEL
     for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES:
         if sid >= min_sid and (max_sid is None or sid <= max_sid):
             return label
@@ -106,6 +126,9 @@ def sid_ranges_sql_case(expr):
     builtin_escaped = SURICATA_BUILTIN_LABEL.replace("'", "''")
     parts = [f"WHEN {expr} BETWEEN {builtin_min} AND {builtin_max} THEN '{builtin_escaped}'"
              for builtin_min, builtin_max in SURICATA_BUILTIN_SID_RANGES]
+    local_min, local_max = SURICATA_LOCAL_SID_RANGE
+    local_escaped = SURICATA_LOCAL_LABEL.replace("'", "''")
+    parts.append(f"WHEN {expr} BETWEEN {local_min} AND {local_max} THEN '{local_escaped}'")
     for min_sid, max_sid, _slug, label in SURICATA_SID_RANGES:
         escaped = label.replace("'", "''")
         if max_sid is None:

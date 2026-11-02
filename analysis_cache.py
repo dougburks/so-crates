@@ -1,7 +1,7 @@
 """In-memory caches of per-analysis query results.
 
 Cache of the unfiltered (no search query) Sankey/aggregation result per
-(md5, event_type) - what those queries read changes only when tshark's
+(md5, event_type), and the unfiltered Traffic Map per md5 - what those queries read changes only when tshark's
 rows are merged in, an alert is acknowledged or un-acknowledged, or the
 analysis is deleted or reanalyzed, and each of those evicts it - so
 caching it is safe and turns every repeat tab-view after the first into a
@@ -15,10 +15,11 @@ from db import AGGREGATION_JSON_PATHS, REAL_AGGREGATION_COLUMNS
 SANKEY_CACHE = {}
 AGGREGATION_CACHE = {}
 AGGREGATION_TOTALS_CACHE = {}
+TRAFFIC_MAP_CACHE = {}   # (md5,) -> the unfiltered Traffic Map data
 # Single source of truth for "every analysis-result cache": evict_analysis_cache
 # and the delete-all handler must always cover the same set, so a new cache
 # added here is automatically evicted/cleared in both places.
-ALL_CACHES = (SANKEY_CACHE, AGGREGATION_CACHE, AGGREGATION_TOTALS_CACHE)
+ALL_CACHES = (SANKEY_CACHE, AGGREGATION_CACHE, AGGREGATION_TOTALS_CACHE, TRAFFIC_MAP_CACHE)
 CACHE_LOCK = threading.Lock()
 # Backstop against cache-fill abuse: cache keys include client-supplied
 # strings, so even with per-key validation the total entry count is bounded.

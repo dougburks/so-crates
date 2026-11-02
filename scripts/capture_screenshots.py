@@ -7,12 +7,13 @@ Loads the URL box's default (DEFAULT_SAMPLE_URL in static/socrates.js - a
 real infection's traffic on malware-traffic-analysis.net, richer than the
 built-in Sample PCAP file) with its Go button, so it
 needs no pre-existing local analysis or hardcoded MD5 - it works on a
-clean checkout with an empty DATA_DIR. Its last capture loads a second
-capture the same way, TSHARK_SAMPLE_URL, for what that one lacks: tshark's
-protocols and Findings.
+clean checkout with an empty DATA_DIR. Its last two captures load other
+captures the same way, for what that one lacks: GEO_SAMPLE_URL, internet
+traffic from many countries for the Traffic Map, and TSHARK_SAMPLE_URL,
+tshark's protocols and Findings.
 
 Usage:
-    python3 scripts/capture_screenshots.py [--base-url http://127.0.0.1:8000/socrates.html] [--only findings]
+    python3 scripts/capture_screenshots.py [--base-url http://127.0.0.1:8000/socrates.html] [--only traffic-map|findings]
 """
 
 import argparse
@@ -47,6 +48,17 @@ TSHARK_SAMPLE_URL = 'https://share.netresec.com/s/camL59aoxbCRyyZ/download/4SICS
 # Suricata, the import and tshark together, on that capture
 TSHARK_SAMPLE_TIMEOUT_MS = 15 * 60 * 1000
 
+# The default sample's 10 flows reach four countries - too few to show the
+# Traffic Map. A week of scans and probes hitting a web server, also from
+# malware-traffic-analysis.net: 207,000 flows from 136 countries and 157
+# alerts. A 16 MB zip (48 MB capture).
+GEO_SAMPLE_URL = ('https://www.malware-traffic-analysis.net/2026/07/31/'
+                  '2026-07-31-seven-days-of-scans-and-probes-and-web-traffic-hitting-my-web-server.pcap.zip')
+GEO_SAMPLE_TIMEOUT_MS = 10 * 60 * 1000
+# How long the map replays before the shot (of its default 1 minute) - far
+# enough for routes from most countries, a full alerts list and arcs in flight
+TRAFFIC_MAP_REPLAY_MS = 24000
+
 
 def find_chromium():
     for name in ('chromium', 'chromium-browser', 'google-chrome'):
@@ -54,6 +66,43 @@ def find_chromium():
         if path:
             return path
     return None
+
+
+async def capture_traffic_map(page, base_url):
+    """The Traffic Map, part way through replaying GEO_SAMPLE_URL."""
+    await page.set_viewport_size(DEFAULT_VIEWPORT)
+    await page.goto(base_url, wait_until='networkidle')
+    if await page.locator('#helpModal.active').count():
+        await page.evaluate('closeHelpModal()')
+    # the animated map, at its default speed, with the local network off the map
+    await page.evaluate("""() => {
+        for (const key of ['socrates_trafficMapAnimate', 'socrates_trafficMapSpeed', 'socrates_trafficMapLan']) {
+            localStorage.removeItem(key);
+        }
+    }""")
+    await page.fill('#pcapUrl', GEO_SAMPLE_URL)
+    await page.click("button[data-action='load-from-url']")
+    try:
+        await page.wait_for_selector('#statsGrid .stat-card', timeout=GEO_SAMPLE_TIMEOUT_MS)
+    except Exception:
+        print('WARNING: the web server capture never finished - so-crates-traffic-map.png not updated',
+              file=sys.stderr)
+        return
+    await page.wait_for_timeout(1000)
+    await page.locator('#trafficMapPanel > .section-toggle-bar').click()
+    try:
+        await page.wait_for_selector('#trafficMapPanel .tm-stage', timeout=60000)
+    except Exception:
+        print('WARNING: the Traffic Map never loaded - so-crates-traffic-map.png not updated', file=sys.stderr)
+        return
+    panel = page.locator('#trafficMapPanel')
+    # centered, clear of the fixed header and footer, which would cover its edges
+    await panel.evaluate("el => el.scrollIntoView({ block: 'center' })")
+    # off the map and its lists: no tooltip, and Top sources keeps updating
+    await page.mouse.move(2, DEFAULT_VIEWPORT['height'] - 2)
+    await page.wait_for_timeout(TRAFFIC_MAP_REPLAY_MS)
+    await panel.screenshot(path=os.path.join(IMAGES_DIR, 'so-crates-traffic-map.png'))
+    print('captured traffic-map')
 
 
 async def capture_findings(page, base_url):
@@ -110,6 +159,10 @@ async def main(base_url, only=None):
         page = await browser.new_page(viewport=DEFAULT_VIEWPORT)
         if only == 'findings':
             await capture_findings(page, base_url)
+            await browser.close()
+            return
+        if only == 'traffic-map':
+            await capture_traffic_map(page, base_url)
             await browser.close()
             return
 
@@ -333,6 +386,7 @@ async def main(base_url, only=None):
             print('WARNING: no aggregation toggle found - '
                   'so-crates-aggregation-filtering.png not updated', file=sys.stderr)
 
+        await capture_traffic_map(page, base_url)
         await capture_findings(page, base_url)
 
         await browser.close()
@@ -341,7 +395,8 @@ async def main(base_url, only=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-url', default='http://127.0.0.1:8000/socrates.html')
-    parser.add_argument('--only', choices=['findings'],
-                        help='capture just this one (findings: the 4SICS capture\'s sections and Findings tab)')
+    parser.add_argument('--only', choices=['traffic-map', 'findings'],
+                        help='capture just this one (traffic-map: the web server capture\'s Traffic Map; '
+                             'findings: the 4SICS capture\'s sections and Findings tab)')
     args = parser.parse_args()
     asyncio.run(main(args.base_url, args.only))
