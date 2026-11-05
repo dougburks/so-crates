@@ -199,6 +199,8 @@
             'solarized-dark': { label: 'Solarized Dark', group: 'dark' },
             'monokai': { label: 'Monokai', group: 'dark' },
             'mp3-player': { label: 'MP3 Player', group: 'fun' },
+            'thermal': { label: 'Thermal', group: 'fun' },
+            'blueprint': { label: 'Blueprint', group: 'fun' },
         };
 
         const THEME_GROUP_LABELS = { dark: 'Dark Themes', fun: 'Fun Themes', light: 'Light Themes' };
@@ -1843,6 +1845,303 @@
             }
         }
 
+        // Drifting heat signatures for Thermal - a few soft blobs that
+        // wander the viewport, swelling and shrinking, each shaded from a
+        // white-hot core out through the "ironbow" palette thermal cameras
+        // use (yellow, orange, magenta, purple, then nothing). Drawn
+        // additively, so where two cross they read hotter, as heat would.
+        let thermalHeatCtx = null;
+        let thermalHeatAnimationId = null;
+        let thermalHeatLastDraw = 0;
+        let thermalBlobs = [];
+        const THERMAL_BLOB_COUNT = 6;
+        const THERMAL_IRONBOW = [
+            [0, 'rgba(255, 251, 230, 0.9)'],
+            [0.2, 'rgba(255, 225, 77, 0.75)'],
+            [0.45, 'rgba(255, 140, 26, 0.55)'],
+            [0.7, 'rgba(214, 51, 108, 0.35)'],
+            [0.88, 'rgba(122, 26, 140, 0.18)'],
+            [1, 'rgba(42, 10, 74, 0)']
+        ];
+
+        function makeThermalBlobs(width, height) {
+            const base = Math.min(width, height);
+            const blobs = [];
+            for (let i = 0; i < THERMAL_BLOB_COUNT; i++) {
+                blobs.push({
+                    x: Math.random() * width,
+                    y: Math.random() * height,
+                    // pixels per second
+                    vx: (Math.random() - 0.5) * 40,
+                    vy: (Math.random() - 0.5) * 40,
+                    radius: base * (0.12 + Math.random() * 0.12),
+                    phase: Math.random() * Math.PI * 2
+                });
+            }
+            return blobs;
+        }
+
+        function drawThermalHeat(timestamp) {
+            const canvas = document.getElementById('thermalHeat');
+            if (!canvas || getCurrentTheme() !== 'thermal') return;
+            if (!thermalHeatCtx) resizeThermalHeat();
+            if (!thermalHeatCtx) return;
+
+            const dt = timestamp - thermalHeatLastDraw;
+            if (dt < 50) {
+                thermalHeatAnimationId = requestAnimationFrame(drawThermalHeat);
+                return;
+            }
+            thermalHeatLastDraw = timestamp;
+
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const ctx = thermalHeatCtx;
+            ctx.clearRect(0, 0, width, height);
+            ctx.globalCompositeOperation = 'lighter';
+            // a long gap (a backgrounded tab's first frame back) mustn't
+            // fling the blobs across the screen
+            const seconds = Math.min(dt, 200) / 1000;
+            thermalBlobs.forEach(blob => {
+                blob.x += blob.vx * seconds;
+                blob.y += blob.vy * seconds;
+                if (blob.x < 0 || blob.x > width) blob.vx = -blob.vx;
+                if (blob.y < 0 || blob.y > height) blob.vy = -blob.vy;
+                const r = blob.radius * (1 + 0.15 * Math.sin(timestamp / 1500 + blob.phase));
+                const grad = ctx.createRadialGradient(blob.x, blob.y, 0, blob.x, blob.y, r);
+                THERMAL_IRONBOW.forEach(([stop, color]) => grad.addColorStop(stop, color));
+                ctx.fillStyle = grad;
+                ctx.fillRect(blob.x - r, blob.y - r, r * 2, r * 2);
+            });
+            ctx.globalCompositeOperation = 'source-over';
+
+            thermalHeatAnimationId = requestAnimationFrame(drawThermalHeat);
+        }
+
+        function resizeThermalHeat() {
+            const canvas = document.getElementById('thermalHeat');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            thermalHeatCtx = ctx;
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            thermalHeatCtx.scale(dpr, dpr);
+            thermalBlobs = makeThermalBlobs(window.innerWidth, window.innerHeight);
+        }
+
+        function startThermalHeat() {
+            if (thermalHeatAnimationId) return;
+            resizeThermalHeat();
+            if (!thermalHeatCtx) return;
+            thermalHeatLastDraw = performance.now();
+            thermalHeatAnimationId = requestAnimationFrame(drawThermalHeat);
+        }
+
+        function stopThermalHeat() {
+            if (thermalHeatAnimationId) {
+                cancelAnimationFrame(thermalHeatAnimationId);
+                thermalHeatAnimationId = null;
+            }
+            const canvas = document.getElementById('thermalHeat');
+            if (canvas && thermalHeatCtx) {
+                thermalHeatCtx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        }
+
+        function updateThermalHeat() {
+            if (getCurrentTheme() === 'thermal') {
+                startThermalHeat();
+            } else {
+                stopThermalHeat();
+            }
+        }
+
+        // Drafting-table ambient background for Blueprint - blueprint
+        // paper's faint grid, and a technical figure (a dimensioned
+        // rectangle, or a circle with its centerlines and a diameter
+        // callout) drafted a stroke at a time somewhere on the sheet, held,
+        // then faded out while the next ones are drawn.
+        let blueprintDraftingCtx = null;
+        let blueprintDraftingAnimationId = null;
+        let blueprintDraftingLastDraw = 0;
+        let blueprintFigures = [];
+        let blueprintNextFigure = 0;
+        const BLUEPRINT_GRID_MINOR = 20;
+        const BLUEPRINT_GRID_MAJOR = 100;
+        const BLUEPRINT_MAX_FIGURES = 3;
+        const BLUEPRINT_DRAW_MS = 2500;
+        const BLUEPRINT_HOLD_MS = 4000;
+        const BLUEPRINT_FADE_MS = 1500;
+
+        function blueprintArrow(segments, x, y, dx, dy) {
+            // an open arrowhead at (x, y) pointing along (dx, dy)
+            const len = 8;
+            const angle = Math.atan2(dy, dx);
+            [-0.4, 0.4].forEach(spread => {
+                segments.push([x, y, x - len * Math.cos(angle + spread), y - len * Math.sin(angle + spread)]);
+            });
+        }
+
+        function makeBlueprintFigure(width, height, now) {
+            const segments = [];
+            let label;
+            let labelX;
+            let labelY;
+            if (Math.random() < 0.5) {
+                const w = 120 + Math.random() * 140;
+                const h = 80 + Math.random() * 100;
+                const x = 40 + Math.random() * Math.max(1, width - w - 80);
+                const y = 100 + Math.random() * Math.max(1, height - h - 180);
+                segments.push([x, y, x + w, y], [x + w, y, x + w, y + h], [x + w, y + h, x, y + h], [x, y + h, x, y]);
+                const dimY = y - 22;
+                segments.push([x, y - 6, x, y - 30], [x + w, y - 6, x + w, y - 30], [x, dimY, x + w, dimY]);
+                blueprintArrow(segments, x, dimY, -1, 0);
+                blueprintArrow(segments, x + w, dimY, 1, 0);
+                label = (w / 4).toFixed(1);
+                labelX = x + w / 2;
+                labelY = dimY - 6;
+            } else {
+                const r = 40 + Math.random() * 50;
+                const cx = r + 50 + Math.random() * Math.max(1, width - 2 * r - 180);
+                const cy = r + 120 + Math.random() * Math.max(1, height - 2 * r - 200);
+                const steps = 48;
+                for (let i = 0; i < steps; i++) {
+                    const a1 = (i / steps) * Math.PI * 2;
+                    const a2 = ((i + 1) / steps) * Math.PI * 2;
+                    segments.push([cx + r * Math.cos(a1), cy + r * Math.sin(a1), cx + r * Math.cos(a2), cy + r * Math.sin(a2)]);
+                }
+                segments.push([cx - r - 12, cy, cx + r + 12, cy], [cx, cy - r - 12, cx, cy + r + 12]);
+                const edgeX = cx + r * Math.SQRT1_2;
+                const edgeY = cy - r * Math.SQRT1_2;
+                segments.push([edgeX + 24, edgeY - 24, edgeX, edgeY]);
+                blueprintArrow(segments, edgeX, edgeY, -1, 1);
+                segments.push([edgeX + 24, edgeY - 24, edgeX + 70, edgeY - 24]);
+                label = 'Ø ' + (r / 2).toFixed(1);
+                labelX = edgeX + 47;
+                labelY = edgeY - 30;
+            }
+            const total = segments.reduce((sum, [x1, y1, x2, y2]) => sum + Math.hypot(x2 - x1, y2 - y1), 0);
+            return { segments, total, label, labelX, labelY, start: now };
+        }
+
+        function drawBlueprintGrid(ctx, width, height) {
+            ctx.lineWidth = 1;
+            [[BLUEPRINT_GRID_MINOR, 'rgba(255, 255, 255, 0.07)'], [BLUEPRINT_GRID_MAJOR, 'rgba(255, 255, 255, 0.16)']].forEach(([step, color]) => {
+                ctx.strokeStyle = color;
+                ctx.beginPath();
+                for (let x = 0.5; x < width; x += step) {
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, height);
+                }
+                for (let y = 0.5; y < height; y += step) {
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(width, y);
+                }
+                ctx.stroke();
+            });
+        }
+
+        function drawBlueprintFigure(ctx, figure, timestamp) {
+            const age = timestamp - figure.start;
+            const progress = Math.min(1, age / BLUEPRINT_DRAW_MS);
+            const fadeStart = BLUEPRINT_DRAW_MS + BLUEPRINT_HOLD_MS;
+            const alpha = age < fadeStart ? 1 : Math.max(0, 1 - (age - fadeStart) / BLUEPRINT_FADE_MS);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${0.85 * alpha})`;
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            let remaining = figure.total * progress;
+            for (const [x1, y1, x2, y2] of figure.segments) {
+                if (remaining <= 0) break;
+                const len = Math.hypot(x2 - x1, y2 - y1);
+                const t = Math.min(1, remaining / len);
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
+                remaining -= len;
+            }
+            ctx.stroke();
+            if (progress === 1) {
+                ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * alpha})`;
+                ctx.font = '12px "Courier New", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(figure.label, figure.labelX, figure.labelY);
+                ctx.textAlign = 'left';
+            }
+        }
+
+        function drawBlueprintDrafting(timestamp) {
+            const canvas = document.getElementById('blueprintDrafting');
+            if (!canvas || getCurrentTheme() !== 'blueprint') return;
+            if (!blueprintDraftingCtx) resizeBlueprintDrafting();
+            if (!blueprintDraftingCtx) return;
+
+            const dt = timestamp - blueprintDraftingLastDraw;
+            if (dt < 50) {
+                blueprintDraftingAnimationId = requestAnimationFrame(drawBlueprintDrafting);
+                return;
+            }
+            blueprintDraftingLastDraw = timestamp;
+
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const lifetime = BLUEPRINT_DRAW_MS + BLUEPRINT_HOLD_MS + BLUEPRINT_FADE_MS;
+            blueprintFigures = blueprintFigures.filter(f => timestamp - f.start < lifetime);
+            if (timestamp >= blueprintNextFigure && blueprintFigures.length < BLUEPRINT_MAX_FIGURES) {
+                blueprintFigures.push(makeBlueprintFigure(width, height, timestamp));
+                blueprintNextFigure = timestamp + 2500 + Math.random() * 1500;
+            }
+
+            const ctx = blueprintDraftingCtx;
+            ctx.clearRect(0, 0, width, height);
+            drawBlueprintGrid(ctx, width, height);
+            blueprintFigures.forEach(f => drawBlueprintFigure(ctx, f, timestamp));
+
+            blueprintDraftingAnimationId = requestAnimationFrame(drawBlueprintDrafting);
+        }
+
+        function resizeBlueprintDrafting() {
+            const canvas = document.getElementById('blueprintDrafting');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            blueprintDraftingCtx = ctx;
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            blueprintDraftingCtx.scale(dpr, dpr);
+            // figures placed for the old size could now sit off the sheet
+            blueprintFigures = [];
+        }
+
+        function startBlueprintDrafting() {
+            if (blueprintDraftingAnimationId) return;
+            resizeBlueprintDrafting();
+            if (!blueprintDraftingCtx) return;
+            blueprintDraftingLastDraw = performance.now();
+            blueprintNextFigure = blueprintDraftingLastDraw;
+            blueprintDraftingAnimationId = requestAnimationFrame(drawBlueprintDrafting);
+        }
+
+        function stopBlueprintDrafting() {
+            if (blueprintDraftingAnimationId) {
+                cancelAnimationFrame(blueprintDraftingAnimationId);
+                blueprintDraftingAnimationId = null;
+            }
+            const canvas = document.getElementById('blueprintDrafting');
+            if (canvas && blueprintDraftingCtx) {
+                blueprintDraftingCtx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        }
+
+        function updateBlueprintDrafting() {
+            if (getCurrentTheme() === 'blueprint') {
+                startBlueprintDrafting();
+            } else {
+                stopBlueprintDrafting();
+            }
+        }
+
         function updateFavicon() {
             const link = document.getElementById('faviconLink');
             if (!link) return;
@@ -1869,9 +2168,9 @@
         // below need to reach every effect too. Adding a new ambient
         // theme now only means adding one entry to each of these three
         // arrays, rather than a new call in 4+ separate places.
-        const AMBIENT_THEME_RESIZERS = [resizeCodeRain, resizeBlockRain, resizeVaporwaveGrid, resizeDosDefrag, resizeCgaStarfield, resizeBreadbinSprites, resizeDigitalFrontier, resizeLunaBliss, resizeAmberBootLog, resizeMp3Visualizer];
-        const AMBIENT_THEME_UPDATERS = [updateCodeRain, updateBlockRain, updateVaporwaveGrid, updateDosDefrag, updateCgaStarfield, updateBreadbinSprites, updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, updateMp3Visualizer];
-        const AMBIENT_THEME_STOPPERS = [stopCodeRain, stopBlockRain, stopVaporwaveGrid, stopDosDefrag, stopCgaStarfield, stopBreadbinSprites, stopDigitalFrontier, stopLunaBliss, stopAmberBootLog, stopMp3Visualizer];
+        const AMBIENT_THEME_RESIZERS = [resizeCodeRain, resizeBlockRain, resizeVaporwaveGrid, resizeDosDefrag, resizeCgaStarfield, resizeBreadbinSprites, resizeDigitalFrontier, resizeLunaBliss, resizeAmberBootLog, resizeMp3Visualizer, resizeThermalHeat, resizeBlueprintDrafting];
+        const AMBIENT_THEME_UPDATERS = [updateCodeRain, updateBlockRain, updateVaporwaveGrid, updateDosDefrag, updateCgaStarfield, updateBreadbinSprites, updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, updateMp3Visualizer, updateThermalHeat, updateBlueprintDrafting];
+        const AMBIENT_THEME_STOPPERS = [stopCodeRain, stopBlockRain, stopVaporwaveGrid, stopDosDefrag, stopCgaStarfield, stopBreadbinSprites, stopDigitalFrontier, stopLunaBliss, stopAmberBootLog, stopMp3Visualizer, stopThermalHeat, stopBlueprintDrafting];
 
         function updateAllAmbientThemes() {
             AMBIENT_THEME_UPDATERS.forEach(fn => fn());
@@ -15190,6 +15489,18 @@
                 'Encoding to MP3...', 'Skinning the interface...', 'Scanning ID3 tags...',
                 'Equalizing...', 'Crossfading...', 'Building the playlist...',
                 'Visualizing...', 'Normalizing volume levels...', 'Updating the Now Playing display...'
+            ],
+            thermal: [
+                'Calibrating the sensor...', 'Detecting heat signatures...', 'Sweeping the perimeter...',
+                'Adjusting the emissivity...', 'Cooling the detector...', 'Tracking the hot spots...',
+                'Measuring the delta-T...', 'Switching to white-hot...', 'Scanning for warm bodies...',
+                'Focusing the germanium lens...', 'Reading the temperature scale...', 'Finding the overheating server...'
+            ],
+            blueprint: [
+                'Sharpening the pencils...', 'Measuring twice...', 'Squaring the T-square...',
+                'Drafting the elevation...', 'Dimensioning the drawing...', 'Checking the tolerances...',
+                'Unrolling the plans...', 'Stamping the revision...', 'Inking the linework...',
+                'Filling in the title block...', 'Erasing the construction lines...', 'Scaling to 1:100...'
             ]
         };
 

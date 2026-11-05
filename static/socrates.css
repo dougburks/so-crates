@@ -1131,6 +1131,62 @@
            highlight for the "pressed button" bezel look. Badge colors lean
            into a green-yellow-orange-red EQ ladder, which doubles neatly as
            semantic success/warning/danger coloring. */
+        [data-theme="thermal"] {
+            --bg-primary: #0b0614;
+            --bg-secondary: #170c24;
+            --bg-tertiary: #22113a;
+            --bg-hover: #2e1747;
+            --bg-hover-light: #4a2470;
+            --border-color: #3b1d52;
+            --text-primary: #f2e6ff;
+            --text-bright: #fffbe6;
+            --text-muted: #a58cc0;
+            --accent: #ff8c1a;
+            --accent-hover: #ffb347;
+            --interactive-highlight: #ffe14d;
+            --bg-drop-active: #22113a;
+            --modal-backdrop: rgba(0,0,0,0.85);
+            --badge-danger-text: #ff5470;
+            --danger-bg: #2a0f2e;
+            --badge-bg-neutral: #120a1e;
+            --badge-warning-text: #ffb347;
+            --badge-success-text: #8ab4ff;
+            --tag-red-text: #ff5470;
+            --tag-purple-text: #c46bff;
+            --tag-orange-text: #ff8c1a;
+            --tag-blue-text: #8ab4ff;
+            --tag-gray-text: #a58cc0;
+            --tag-green-text: #ffe14d;
+            --help-icon-color: #ffe14d;
+        }
+        [data-theme="blueprint"] {
+            --bg-primary: #0e3a66;
+            --bg-secondary: #124677;
+            --bg-tertiary: #165289;
+            --bg-hover: #1d5f9c;
+            --bg-hover-light: #2a6aa8;
+            --border-color: #7fa9d6;
+            --text-primary: #e8f1fb;
+            --text-bright: #ffffff;
+            --text-muted: #a9c6e6;
+            --accent: #ffffff;
+            --accent-hover: #d6e6f7;
+            --interactive-highlight: #ffd166;
+            --bg-drop-active: #165289;
+            --modal-backdrop: rgba(0,0,0,0.75);
+            --badge-danger-text: #ff9e8a;
+            --danger-bg: #0b2f54;
+            --badge-bg-neutral: #0b2f54;
+            --badge-warning-text: #ffd166;
+            --badge-success-text: #9be7a8;
+            --tag-red-text: #ff9e8a;
+            --tag-purple-text: #d0b3ff;
+            --tag-orange-text: #ffb880;
+            --tag-blue-text: #9fd4ff;
+            --tag-gray-text: #a9c6e6;
+            --tag-green-text: #9be7a8;
+            --help-icon-color: #ffffff;
+        }
         [data-theme="mp3-player"] {
             --bg-primary: #1c1e22;
             --bg-secondary: #26282d;
@@ -1314,7 +1370,7 @@
             display: inline-block;
             vertical-align: middle;
         }
-        .code-rain-canvas, .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas {
+        .code-rain-canvas, .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .blueprint-drafting-canvas {
             position: fixed;
             top: 0;
             left: 0;
@@ -1411,6 +1467,16 @@
         [data-theme="mp3-player"] .mp3-visualizer-canvas {
             opacity: 0.28;
         }
+        /* Heat blobs for Thermal - soft, large and additive, so like the
+           plasma fields they'd swamp the page at a sprite's opacity */
+        [data-theme="thermal"] .thermal-heat-canvas {
+            opacity: 0.5;
+        }
+        /* Grid and drafted figures for Blueprint - thin white lines, which
+           need more opacity than a filled effect to read at all */
+        [data-theme="blueprint"] .blueprint-drafting-canvas {
+            opacity: 0.6;
+        }
         .code-rain-canvas ~ * {
             position: relative;
             z-index: 1;
@@ -1429,7 +1495,7 @@
            viewport - a real regression, caught after the header/footer
            visibly broke (see git history on .block-rain-canvas's
            introduction). */
-        .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas {
+        .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .blueprint-drafting-canvas {
             position: fixed;
             z-index: 0;
         }

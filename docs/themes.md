@@ -1,6 +1,6 @@
 # Themes
 
-SO-CRATES includes forty UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them: hovering a theme shows a live preview without changing the rest of the app, and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
+SO-CRATES includes forty-two UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them: hovering a theme shows a live preview without changing the rest of the app, and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
 
 Click any screenshot below to zoom in.
 
@@ -84,6 +84,8 @@ Every theme on this page (Fun or otherwise) can also be switched to by typing it
 
 - **Amber CRT** - monochrome amber phosphor on black, like a VT100/DEC-style business terminal, with a faint scanline overlay for the CRT effect
   <br><img loading="lazy" src="../images/themes/amber.png" width="360" height="225" alt="Amber CRT theme">
+- **Blueprint** - white linework on blueprint blue, like a technical drawing, with a faint drafting grid behind the page where dimensioned rectangles and circles are drafted a stroke at a time
+  <br><img loading="lazy" src="../images/themes/blueprint.png" width="360" height="225" alt="Blueprint theme">
 - **Breadbin Blue** - Commodore 64 blue-on-blue aesthetic (named for the C64's "breadbin" case), using the real Pepto/VICE C64 16-color palette (blue background, light-blue border/text/accent, cyan interactive highlight)
   <br><img loading="lazy" src="../images/themes/breadbin-blue.png" width="360" height="225" alt="Breadbin Blue theme">
 - **CGA** - black background with the classic 4-color CGA Palette 1 High-Intensity hues (cyan, magenta, white)
@@ -100,5 +102,7 @@ Every theme on this page (Fun or otherwise) can also be switched to by typing it
   <br><img loading="lazy" src="../images/themes/mp3-player.png" width="360" height="225" alt="MP3 Player theme">
 - **Retro Handheld** - pale yellow-green background with dark-green text, recreating the four-shade monochrome LCD screen of a classic late-'80s handheld game console
   <br><img loading="lazy" src="../images/themes/retro-handheld.png" width="360" height="225" alt="Retro Handheld theme">
+- **Thermal** - a thermal camera view: near-black purple with white-hot, yellow and orange highlights, plus drifting heat signatures in the background shaded through the "ironbow" palette thermal cameras use
+  <br><img loading="lazy" src="../images/themes/thermal.png" width="360" height="225" alt="Thermal theme">
 - **Vaporwave** - dark purple/navy theme with hot-pink accents and cyan/mint/pastel-yellow highlights, evoking the modern (2010s+) vaporwave internet aesthetic
   <br><img loading="lazy" src="../images/themes/vaporwave.png" width="360" height="225" alt="Vaporwave theme">

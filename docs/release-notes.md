@@ -10,6 +10,12 @@
   four now match by name instead of being generated from their colors
 - **One Dark** - the Atom editor's dark theme, blue-gray with soft blue
   accents
+- **Two new Fun themes** - Thermal, a thermal camera view with heat
+  signatures drifting behind the page, and Blueprint, white linework on
+  blueprint blue with figures drafted a stroke at a time on a faint grid.
+  Each has its own loading messages
+- **The Themes modal is wider** - six themes a row, so it still fits a
+  1080p window without scrolling
 
 ## 5.2.0
 

@@ -32,6 +32,8 @@ FAVICON_HACKERMAN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__))
 FAVICON_KANAGAWA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-kanagawa.svg')
 FAVICON_MIASMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-miasma.svg')
 FAVICON_NORD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-nord.svg')
+FAVICON_THERMAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-thermal.svg')
+FAVICON_BLUEPRINT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-blueprint.svg')
 FAVICON_ONE_DARK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-one-dark.svg')
 FAVICON_OSAKA_JADE_PATH =FAVICON_OSAKA_JADE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-osaka-jade.svg')
 FAVICON_JADE_HORSE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-jade-horse.svg')
@@ -267,6 +269,14 @@ class TestHTMLStructure(unittest.TestCase):
         """static/favicon-nord.svg must exist on disk."""
         self.assertTrue(os.path.exists(FAVICON_NORD_PATH), 'static/favicon-nord.svg must exist')
 
+    def test_favicon_thermal_file_exists(self):
+        """static/favicon-thermal.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_THERMAL_PATH), 'static/favicon-thermal.svg must exist')
+
+    def test_favicon_blueprint_file_exists(self):
+        """static/favicon-blueprint.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_BLUEPRINT_PATH), 'static/favicon-blueprint.svg must exist')
+
     def test_favicon_one_dark_file_exists(self):
         """static/favicon-one-dark.svg must exist on disk."""
         self.assertTrue(os.path.exists(FAVICON_ONE_DARK_PATH), 'static/favicon-one-dark.svg must exist')
@@ -333,7 +343,7 @@ class TestHTMLStructure(unittest.TestCase):
         """updateFavicon() must point faviconLink at the per-theme SVG that
         exists in static/ (plain favicon.svg for the default dark theme)."""
         from tests.jsdom_helper import js_statements
-        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark']
+        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark', 'thermal', 'blueprint']
         result = js_statements(f'''
             var link = document.getElementById('faviconLink');
             var out = {{}};
@@ -2321,7 +2331,7 @@ class TestThemeAndMenu(unittest.TestCase):
         handlers no longer exist to assert on - the preview behavior
         itself is covered by the hover tests in this class."""
         from tests.jsdom_helper import js_statements
-        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark']
+        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark', 'thermal', 'blueprint']
         result = js_statements(f'''
             var div = document.createElement('div');
             div.innerHTML = renderThemesModalGrid();
@@ -2920,6 +2930,8 @@ class TestThemeAndMenu(unittest.TestCase):
         nord_block = CSS_CONTENT.split('[data-theme="nord"] {')[1].split('}')[0]
         osaka_jade_block = CSS_CONTENT.split('[data-theme="osaka-jade"] {')[1].split('}')[0]
         one_dark_block = CSS_CONTENT.split('[data-theme="one-dark"] {')[1].split('}')[0]
+        thermal_block = CSS_CONTENT.split('[data-theme="thermal"] {')[1].split('}')[0]
+        blueprint_block = CSS_CONTENT.split('[data-theme="blueprint"] {')[1].split('}')[0]
         jade_horse_block = CSS_CONTENT.split('[data-theme="jade-horse"] {')[1].split('}')[0]
         last_horizon_block = CSS_CONTENT.split('[data-theme="last-horizon"] {')[1].split('}')[0]
         lupine_block = CSS_CONTENT.split('[data-theme="lupine"] {')[1].split('}')[0]
@@ -2968,6 +2980,10 @@ class TestThemeAndMenu(unittest.TestCase):
                       'Osaka Jade theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', one_dark_block,
                       'One Dark theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', thermal_block,
+                      'Thermal theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', blueprint_block,
+                      'Blueprint theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', jade_horse_block,
                       'Jade Horse theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', last_horizon_block,
@@ -3233,6 +3249,14 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn('[data-theme="nord"]', CSS_CONTENT,
                       'CSS must have a Nord theme override block')
 
+    def test_thermal_theme_override_exists(self):
+        self.assertIn('[data-theme="thermal"]', CSS_CONTENT,
+                      'CSS must have a Thermal theme override block')
+
+    def test_blueprint_theme_override_exists(self):
+        self.assertIn('[data-theme="blueprint"]', CSS_CONTENT,
+                      'CSS must have a Blueprint theme override block')
+
     def test_one_dark_theme_override_exists(self):
         self.assertIn('[data-theme="one-dark"]', CSS_CONTENT,
                       'CSS must have a One Dark theme override block')
@@ -3349,11 +3373,20 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn('id="mp3Visualizer"', HTML_CONTENT,
                       'HTML must include a spectrum-analyzer canvas for MP3 Player')
 
+    def test_thermal_canvas_exists(self):
+        self.assertIn('id="thermalHeat"', HTML_CONTENT,
+                      'HTML must include a heat-blob canvas for Thermal')
+
+    def test_blueprint_canvas_exists(self):
+        self.assertIn('id="blueprintDrafting"', HTML_CONTENT,
+                      'HTML must include a drafting-grid canvas for Blueprint')
+
     def test_block_rain_wired_everywhere_code_rain_is(self):
         """updateCodeRain, updateBlockRain, updateVaporwaveGrid,
         updateDosDefrag, updateCgaStarfield, updateBreadbinSprites,
-        updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, and
-        updateMp3Visualizer (the ten ambient per-theme canvas backgrounds)
+        updateDigitalFrontier, updateLunaBliss, updateAmberBootLog,
+        updateMp3Visualizer, updateThermalHeat, and updateBlueprintDrafting
+        (the twelve ambient per-theme canvas backgrounds)
         must be started/stopped/resized together everywhere - setTheme,
         applyCustomTheme, init, the resize listener, and the
         visibilitychange handler - so a future edit to one path can't
@@ -3361,25 +3394,25 @@ class TestThemeAndMenu(unittest.TestCase):
         on/off after a theme switch, tab backgrounding, or window resize.
 
         REGRESSION test shape: these all used to be called individually at
-        each of those 5 call sites (10 x 5 = 50 near-identical lines); now
+        each of those 5 call sites (once 10 x 5 = 50 near-identical lines); now
         each effect is listed once in one of three shared arrays
         (AMBIENT_THEME_UPDATERS/STOPPERS/RESIZERS) and every call site goes
         through updateAllAmbientThemes()/stopAllAmbientThemes()/a shared
         forEach - so "wired everywhere" is now verified as "present in the
         shared array" plus "the shared helper is actually called from
         every site", rather than counting individual per-effect calls."""
-        all_ten = ('CodeRain', 'BlockRain', 'VaporwaveGrid', 'DosDefrag', 'CgaStarfield', 'BreadbinSprites', 'DigitalFrontier', 'LunaBliss', 'AmberBootLog', 'Mp3Visualizer')
+        all_twelve = ('CodeRain', 'BlockRain', 'VaporwaveGrid', 'DosDefrag', 'CgaStarfield', 'BreadbinSprites', 'DigitalFrontier', 'LunaBliss', 'AmberBootLog', 'Mp3Visualizer', 'ThermalHeat', 'BlueprintDrafting')
 
         updaters_array = JS_CONTENT.split('const AMBIENT_THEME_UPDATERS = [')[1].split(']')[0]
-        for name in all_ten:
+        for name in all_twelve:
             self.assertIn(f'update{name}', updaters_array, f'update{name} must be in AMBIENT_THEME_UPDATERS')
 
         stoppers_array = JS_CONTENT.split('const AMBIENT_THEME_STOPPERS = [')[1].split(']')[0]
-        for name in all_ten:
+        for name in all_twelve:
             self.assertIn(f'stop{name}', stoppers_array, f'stop{name} must be in AMBIENT_THEME_STOPPERS')
 
         resizers_array = JS_CONTENT.split('const AMBIENT_THEME_RESIZERS = [')[1].split(']')[0]
-        for name in all_ten:
+        for name in all_twelve:
             self.assertIn(f'resize{name}', resizers_array, f'resize{name} must be in AMBIENT_THEME_RESIZERS')
 
         self.assertIn("AMBIENT_THEME_RESIZERS.forEach(fn => window.addEventListener('resize', fn));", JS_CONTENT,
@@ -3402,7 +3435,7 @@ class TestThemeAndMenu(unittest.TestCase):
         large empty gap). Must stay pinned regardless of which ambient
         background canvas (if any) is active."""
         from tests.jsdom_helper import js_statements
-        for theme in (None, 'hacker', 'retro-handheld', 'vaporwave', 'dos-blue', 'cga', 'breadbin-blue', 'digital-frontier', 'luna-blue', 'amber', 'mp3-player'):
+        for theme in (None, 'hacker', 'retro-handheld', 'vaporwave', 'dos-blue', 'cga', 'breadbin-blue', 'digital-frontier', 'luna-blue', 'amber', 'mp3-player', 'thermal', 'blueprint'):
             setup = f"document.documentElement.setAttribute('data-theme', '{theme}');" if theme else ''
             result = js_statements(f'''
                 {setup}
@@ -3549,6 +3582,14 @@ class TestThemeAndMenu(unittest.TestCase):
     def test_nord_theme_in_registry(self):
         self.assertIn("'nord':", JS_CONTENT,
                       'THEMES registry must include the nord theme')
+
+    def test_thermal_theme_in_registry(self):
+        self.assertIn("'thermal':", JS_CONTENT,
+                      'THEMES registry must include the thermal theme')
+
+    def test_blueprint_theme_in_registry(self):
+        self.assertIn("'blueprint':", JS_CONTENT,
+                      'THEMES registry must include the blueprint theme')
 
     def test_one_dark_theme_in_registry(self):
         self.assertIn("'one-dark':", JS_CONTENT,
@@ -4155,13 +4196,13 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             var order = [];
             setTheme('dark');
-            for (var i = 0; i < 40; i++) {
+            for (var i = 0; i < 42; i++) {
                 toggleTheme();
                 order.push(document.documentElement.getAttribute('data-theme') || 'dark');
             }
             window.__jsdom_result = { order: order };
         ''')
-        self.assertEqual(result['order'], ['monokai', 'nord', 'ohmydebn', 'one-dark', 'osaka-jade', 'retro-82', 'ristretto', 'solarized-dark', 'solitude', 'tokyo-night', 'vantablack', 'catppuccin-latte', 'flexoki-light', 'lupine', 'rose-pine', 'sguil', 'white', 'amber', 'breadbin-blue', 'cga', 'digital-frontier', 'dos-blue', 'hacker', 'luna-blue', 'mp3-player', 'retro-handheld', 'vaporwave', 'catppuccin', 'dracula', 'ethereal', 'everforest', 'gruvbox', 'hackerman', 'jade-horse', 'kanagawa', 'last-horizon', 'lumon', 'matte-black', 'miasma', 'dark'],
+        self.assertEqual(result['order'], ['monokai', 'nord', 'ohmydebn', 'one-dark', 'osaka-jade', 'retro-82', 'ristretto', 'solarized-dark', 'solitude', 'tokyo-night', 'vantablack', 'catppuccin-latte', 'flexoki-light', 'lupine', 'rose-pine', 'sguil', 'white', 'amber', 'blueprint', 'breadbin-blue', 'cga', 'digital-frontier', 'dos-blue', 'hacker', 'luna-blue', 'mp3-player', 'retro-handheld', 'thermal', 'vaporwave', 'catppuccin', 'dracula', 'ethereal', 'everforest', 'gruvbox', 'hackerman', 'jade-horse', 'kanagawa', 'last-horizon', 'lumon', 'matte-black', 'miasma', 'dark'],
                          "'>' hotkey cycle order must match menu order")
 
     def test_theme_hotkey_reverse_matches_menu_order_backwards(self):
@@ -4171,13 +4212,13 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             var order = [];
             setTheme('dark');
-            for (var i = 0; i < 40; i++) {
+            for (var i = 0; i < 42; i++) {
                 toggleThemeReverse();
                 order.push(document.documentElement.getAttribute('data-theme') || 'dark');
             }
             window.__jsdom_result = { order: order };
         ''')
-        expected_reverse = ['miasma', 'matte-black', 'lumon', 'last-horizon', 'kanagawa', 'jade-horse', 'hackerman', 'gruvbox', 'everforest', 'ethereal', 'dracula', 'catppuccin', 'vaporwave', 'retro-handheld', 'mp3-player', 'luna-blue', 'hacker', 'dos-blue', 'digital-frontier', 'cga', 'breadbin-blue', 'amber', 'white', 'sguil', 'rose-pine', 'lupine', 'flexoki-light', 'catppuccin-latte', 'vantablack', 'tokyo-night', 'solitude', 'solarized-dark', 'ristretto', 'retro-82', 'osaka-jade', 'one-dark', 'ohmydebn', 'nord', 'monokai', 'dark']
+        expected_reverse = ['miasma', 'matte-black', 'lumon', 'last-horizon', 'kanagawa', 'jade-horse', 'hackerman', 'gruvbox', 'everforest', 'ethereal', 'dracula', 'catppuccin', 'vaporwave', 'thermal', 'retro-handheld', 'mp3-player', 'luna-blue', 'hacker', 'dos-blue', 'digital-frontier', 'cga', 'breadbin-blue', 'blueprint', 'amber', 'white', 'sguil', 'rose-pine', 'lupine', 'flexoki-light', 'catppuccin-latte', 'vantablack', 'tokyo-night', 'solitude', 'solarized-dark', 'ristretto', 'retro-82', 'osaka-jade', 'one-dark', 'ohmydebn', 'nord', 'monokai', 'dark']
         self.assertEqual(result['order'], expected_reverse,
                          "'<' hotkey cycle order must be the exact reverse of '>'")
 
@@ -5541,6 +5582,18 @@ class TestThemedLoadingMessages(unittest.TestCase):
             'Equalizing...', 'Crossfading...', 'Building the playlist...',
             'Visualizing...', 'Normalizing volume levels...', 'Updating the Now Playing display...',
         ],
+        'thermal': [
+            'Calibrating the sensor...', 'Detecting heat signatures...', 'Sweeping the perimeter...',
+            'Adjusting the emissivity...', 'Cooling the detector...', 'Tracking the hot spots...',
+            'Measuring the delta-T...', 'Switching to white-hot...', 'Scanning for warm bodies...',
+            'Focusing the germanium lens...', 'Reading the temperature scale...', 'Finding the overheating server...',
+        ],
+        'blueprint': [
+            'Sharpening the pencils...', 'Measuring twice...', 'Squaring the T-square...',
+            'Drafting the elevation...', 'Dimensioning the drawing...', 'Checking the tolerances...',
+            'Unrolling the plans...', 'Stamping the revision...', 'Inking the linework...',
+            'Filling in the title block...', 'Erasing the construction lines...', 'Scaling to 1:100...',
+        ],
     }
 
     def _assert_themed_pool_drawn_from(self, theme):
@@ -5589,6 +5642,12 @@ class TestThemedLoadingMessages(unittest.TestCase):
 
     def test_mp3_player_gets_themed_messages(self):
         self._assert_themed_pool_drawn_from('mp3-player')
+
+    def test_thermal_gets_themed_messages(self):
+        self._assert_themed_pool_drawn_from('thermal')
+
+    def test_blueprint_gets_themed_messages(self):
+        self._assert_themed_pool_drawn_from('blueprint')
 
     def test_every_fun_theme_has_a_joke_set(self):
         """Every theme in THEMES's 'fun' group must have an entry in
