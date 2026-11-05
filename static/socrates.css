@@ -1461,6 +1461,10 @@
            maximized 1080p browser. 92vh (same as #rulesModal) lets it fit
            without scrolling on most desktop windows. */
         #securityOnionModal .modal-content { max-height: 92vh; }
+        /* Wide enough for six 140px tiles a row - at the default 900px the
+           grid wraps at five, and 39 themes then run two rows taller than
+           the 80vh cap allows on a maximized 1080p browser */
+        #themesModal .modal-content { max-width: 1000px; }
         .rule-update-log { font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 12px; color: var(--text-primary); }
         #fileInfoContainer { margin-bottom: 20px; }
         .container { width: 100%; padding: 20px; box-sizing: border-box; padding-bottom: 80px; padding-top: 56px; }
