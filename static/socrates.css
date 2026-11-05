@@ -755,6 +755,34 @@
             --help-icon-color: #81a1c1;
         }
 
+        [data-theme="one-dark"] {
+            --bg-primary: #21252b;
+            --bg-secondary: #282c34;
+            --bg-tertiary: #2c313c;
+            --bg-hover: #3e4451;
+            --bg-hover-light: #4b5263;
+            --border-color: #3e4451;
+            --text-primary: #abb2bf;
+            --text-bright: #d7dae0;
+            --text-muted: #8b929e;
+            --accent: #61afef;
+            --accent-hover: #82c0f4;
+            --bg-drop-active: #2c313c;
+            --modal-backdrop: rgba(0, 0, 0, 0.85);
+            --badge-danger-text: #e06c75;
+            --danger-bg: #2c313c;
+            --badge-bg-neutral: #1b1f24;
+            --badge-warning-text: #e5c07b;
+            --badge-success-text: #98c379;
+            --tag-red-text: #e06c75;
+            --tag-purple-text: #c678dd;
+            --tag-orange-text: #d19a66;
+            --tag-blue-text: #61afef;
+            --tag-gray-text: #8b929e;
+            --tag-green-text: #98c379;
+            --help-icon-color: #61afef;
+        }
+
         [data-theme="osaka-jade"] {
             --bg-primary: #111c18;
             --bg-secondary: #18251f;
@@ -1462,7 +1490,7 @@
            without scrolling on most desktop windows. */
         #securityOnionModal .modal-content { max-height: 92vh; }
         /* Wide enough for six 140px tiles a row - at the default 900px the
-           grid wraps at five, and 39 themes then run two rows taller than
+           grid wraps at five, and the themes then run two rows taller than
            the 80vh cap allows on a maximized 1080p browser */
         #themesModal .modal-content { max-width: 1000px; }
         .rule-update-log { font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 12px; color: var(--text-primary); }

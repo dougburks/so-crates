@@ -1,6 +1,6 @@
 # Themes
 
-SO-CRATES includes thirty-nine UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them: hovering a theme shows a live preview without changing the rest of the app, and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
+SO-CRATES includes forty UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them: hovering a theme shows a live preview without changing the rest of the app, and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
 
 Click any screenshot below to zoom in.
 
@@ -46,6 +46,8 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/nord.png" width="360" height="225" alt="Nord theme">
 - **OhMyDebn** - dark theme matching OhMyDebn's own default desktop look, with periwinkle-blue accents
   <br><img loading="lazy" src="../images/themes/ohmydebn.png" width="360" height="225" alt="OhMyDebn theme">
+- **One Dark** - dark blue-gray theme with soft blue accents, from the Atom editor
+  <br><img loading="lazy" src="../images/themes/one-dark.png" width="360" height="225" alt="One Dark theme">
 - **Osaka Jade** - dark forest theme with jade-green accents and sage/cream text
   <br><img loading="lazy" src="../images/themes/osaka-jade.png" width="360" height="225" alt="Osaka Jade theme">
 - **Retro 82** - dark navy theme with warm orange accents and teal highlights

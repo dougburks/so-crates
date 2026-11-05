@@ -185,6 +185,7 @@
             'lupine': { label: 'Lupine', group: 'light' },
             'miasma': { label: 'Miasma', group: 'dark' },
             'nord': { label: 'Nord', group: 'dark' },
+            'one-dark': { label: 'One Dark', group: 'dark' },
             'osaka-jade': { label: 'Osaka Jade', group: 'dark' },
             'ristretto': { label: 'Ristretto', group: 'dark' },
             'rose-pine': { label: 'Rose Pine', group: 'light' },

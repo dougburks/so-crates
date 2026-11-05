@@ -109,7 +109,7 @@ When updating styles or frontend logic, edit the appropriate file. Keep `socrate
 
 ### Theming Conventions
 
-SO-CRATES supports themes via CSS custom properties. The full, current list (name, group, and a short description of each) is the `THEMES` registry in `static/socrates.js` and [Themes](docs/themes.md) - don't duplicate that list here, it goes stale the same way any full list does (see `docs/filtering.md`'s "Column Overlap" note for the same reasoning). As of this writing there are 39: 23 Dark, 6 Light, 10 Fun.
+SO-CRATES supports themes via CSS custom properties. The full, current list (name, group, and a short description of each) is the `THEMES` registry in `static/socrates.js` and [Themes](docs/themes.md) - don't duplicate that list here, it goes stale the same way any full list does (see `docs/filtering.md`'s "Column Overlap" note for the same reasoning). As of this writing there are 40: 24 Dark, 6 Light, 10 Fun.
 
 - **Use CSS variables** (`var(--bg-primary)`, `var(--text-primary)`, `var(--accent)`, etc.) instead of hardcoded hex values for all structural/theme colors.
 - **Add theme overrides** in the appropriate `[data-theme="<key>"]` block (the theme's registry key in `static/socrates.js`'s `THEMES` object) when a default dark color lacks contrast or does not match the theme's aesthetic.
@@ -275,7 +275,7 @@ Before cutting a release:
    http://127.0.0.1:<port>/socrates.html` against the same container, now
    that step 3's video is done with it. This refreshes all 10
    `docs/images/so-crates-*.png` (the Usage page's Screenshot Tour; the
-   Home page uses 3 of them) and all 39
+   Home page uses 3 of them) and all 40
    `docs/images/themes/*.png` (Themes page) against the URL box's default
    pcap (`DEFAULT_SAMPLE_URL` in `static/socrates.js` - a real infection's
    traffic on malware-traffic-analysis.net, loaded with the Go button; the

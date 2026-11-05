@@ -8,6 +8,8 @@
   Solitude (dark) and Lupine (light). Osaka Jade, which Omarchy has since
   replaced with Jade Horse, stays. With OhMyDebn theme sync on, these
   four now match by name instead of being generated from their colors
+- **One Dark** - the Atom editor's dark theme, blue-gray with soft blue
+  accents
 
 ## 5.2.0
 
