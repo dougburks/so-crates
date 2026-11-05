@@ -783,6 +783,126 @@
             --help-icon-color: #509475;
         }
 
+        [data-theme="jade-horse"] {
+            --bg-primary: #142620;
+            --bg-secondary: #1a3029;
+            --bg-tertiary: #203b31;
+            --bg-hover: #2b5147;
+            --bg-hover-light: #3f6b5e;
+            --border-color: #2b5147;
+            --text-primary: #dfede5;
+            --text-bright: #f0faf4;
+            --text-muted: #91ad9f;
+            --accent: #8bcbb1;
+            --accent-hover: #a7dfc5;
+            --bg-drop-active: #203b31;
+            --modal-backdrop: rgba(0, 0, 0, 0.85);
+            --badge-danger-text: #d88d91;
+            --danger-bg: #0f1e19;
+            --badge-bg-neutral: #0a1713;
+            --badge-warning-text: #c5cc91;
+            --badge-success-text: #8bcbb1;
+            --tag-red-text: #d88d91;
+            --tag-purple-text: #b7a1c8;
+            --tag-orange-text: #d2ab8d;
+            --tag-blue-text: #96b7d0;
+            --tag-gray-text: #91ad9f;
+            --tag-green-text: #8bcbb1;
+            --help-icon-color: #8bcbb1;
+        }
+
+        /* Last Horizon's palette has no yellow or orange that reads (its
+           "yellow" is a dark violet) and its red sits close to the rose
+           accent, so the warning sand and a clearer red are our own */
+        [data-theme="last-horizon"] {
+            --bg-primary: #0c0b0c;
+            --bg-secondary: #141213;
+            --bg-tertiary: #1d1a1c;
+            --bg-hover: #2c2729;
+            --bg-hover-light: #584e51;
+            --border-color: #3a3336;
+            --text-primary: #cfd3cd;
+            --text-bright: #fafcfb;
+            --text-muted: #8a8588;
+            --accent: #b59790;
+            --accent-hover: #cbb1aa;
+            --bg-drop-active: #1d1a1c;
+            --modal-backdrop: rgba(0, 0, 0, 0.85);
+            --badge-danger-text: #d77a68;
+            --danger-bg: #1d1a1c;
+            --badge-bg-neutral: #060606;
+            --badge-warning-text: #d4b483;
+            --badge-success-text: #87a9b0;
+            --tag-red-text: #d77a68;
+            --tag-purple-text: #a5a0b6;
+            --tag-orange-text: #d4b483;
+            --tag-blue-text: #c4d8e2;
+            --tag-gray-text: #8a8588;
+            --tag-green-text: #87a9b0;
+            --help-icon-color: #b59790;
+        }
+
+        /* Solitude is grays and one rust red, so - like Vantablack - the
+           warning, success and tag hues are muted ones of our own */
+        [data-theme="solitude"] {
+            --bg-primary: #101315;
+            --bg-secondary: #161a1d;
+            --bg-tertiary: #1d2225;
+            --bg-hover: #343d41;
+            --bg-hover-light: #4b4e55;
+            --border-color: #343d41;
+            --text-primary: #cacccc;
+            --text-bright: #d9dbdc;
+            --text-muted: #8b9195;
+            --accent: #798186;
+            --accent-hover: #a8adb0;
+            --bg-drop-active: #1d2225;
+            --modal-backdrop: rgba(0, 0, 0, 0.85);
+            --badge-danger-text: #de6145;
+            --danger-bg: #1d2225;
+            --badge-bg-neutral: #080a0b;
+            --badge-warning-text: #c9a26b;
+            --badge-success-text: #8fa98a;
+            --tag-red-text: #de6145;
+            --tag-purple-text: #a99bb5;
+            --tag-orange-text: #c9a26b;
+            --tag-blue-text: #8fa6b8;
+            --tag-gray-text: #8b9195;
+            --tag-green-text: #8fa98a;
+            --help-icon-color: #798186;
+        }
+
+        /* Lupine's palette is blues and purples only (its "red" is magenta,
+           its "yellow" and "green" are blues), so - like White - danger,
+           warning and success are conventional colors */
+        [data-theme="lupine"] {
+            --bg-primary: #fafafa;
+            --bg-secondary: #ececec;
+            --bg-tertiary: #dedede;
+            --bg-hover: #d0d0d0;
+            --bg-hover-light: #bdbdbd;
+            --border-color: #d0d0d0;
+            --text-primary: #212121;
+            --text-bright: #000000;
+            --text-muted: #616161;
+            --accent: #3264eb;
+            --accent-hover: #1f4fd1;
+            --bg-drop-active: #dfe7fc;
+            --modal-backdrop: rgba(0, 0, 0, 0.5);
+            --badge-danger-text: #c4183c;
+            --danger-bg: #dedede;
+            --badge-bg-neutral: #f5f5f5;
+            --badge-warning-text: #b45309;
+            --badge-success-text: #2e7d32;
+            --tag-red-text: #c4183c;
+            --tag-purple-text: #8a4ad7;
+            --tag-orange-text: #b45309;
+            --tag-blue-text: #3264eb;
+            --tag-gray-text: #616161;
+            --tag-green-text: #2e7d32;
+            --help-icon-color: #3264eb;
+        }
+
         [data-theme="ristretto"] {
             --bg-primary: #2c2525;
             --bg-secondary: #3d3536;
@@ -1974,6 +2094,8 @@
         [data-theme="ethereal"] .previous-analysis-notes,
         [data-theme="miasma"] .previous-analysis-notes,
         [data-theme="catppuccin-latte"] .previous-analysis-notes,
+        [data-theme="solitude"] .previous-analysis-notes,
+        [data-theme="lupine"] .previous-analysis-notes,
         [data-theme="white"] .previous-analysis-notes { color: var(--text-bright); }
         /* No Hacker-theme override (dropped along with .app-header-delete
            -icon's - see its comment above) - Delete All just uses the

@@ -34,7 +34,8 @@ THEMES = [
     'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light',
     'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord',
     'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue',
-    'dracula', 'solarized-dark', 'monokai', 'mp3-player',
+    'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine',
+    'solitude',
 ]
 
 DEFAULT_VIEWPORT = {'width': 1600, 'height': 1000}

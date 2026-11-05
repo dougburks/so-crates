@@ -33,6 +33,10 @@ FAVICON_KANAGAWA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 FAVICON_MIASMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-miasma.svg')
 FAVICON_NORD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-nord.svg')
 FAVICON_OSAKA_JADE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-osaka-jade.svg')
+FAVICON_JADE_HORSE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-jade-horse.svg')
+FAVICON_LAST_HORIZON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-last-horizon.svg')
+FAVICON_LUPINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-lupine.svg')
+FAVICON_SOLITUDE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-solitude.svg')
 FAVICON_RISTRETTO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-ristretto.svg')
 FAVICON_ROSE_PINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-rose-pine.svg')
 FAVICON_VANTABLACK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-vantablack.svg')
@@ -266,6 +270,22 @@ class TestHTMLStructure(unittest.TestCase):
         """static/favicon-osaka-jade.svg must exist on disk."""
         self.assertTrue(os.path.exists(FAVICON_OSAKA_JADE_PATH), 'static/favicon-osaka-jade.svg must exist')
 
+    def test_favicon_jade_horse_file_exists(self):
+        """static/favicon-jade-horse.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_JADE_HORSE_PATH), 'static/favicon-jade-horse.svg must exist')
+
+    def test_favicon_last_horizon_file_exists(self):
+        """static/favicon-last-horizon.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_LAST_HORIZON_PATH), 'static/favicon-last-horizon.svg must exist')
+
+    def test_favicon_lupine_file_exists(self):
+        """static/favicon-lupine.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_LUPINE_PATH), 'static/favicon-lupine.svg must exist')
+
+    def test_favicon_solitude_file_exists(self):
+        """static/favicon-solitude.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_SOLITUDE_PATH), 'static/favicon-solitude.svg must exist')
+
     def test_favicon_ristretto_file_exists(self):
         """static/favicon-ristretto.svg must exist on disk."""
         self.assertTrue(os.path.exists(FAVICON_RISTRETTO_PATH), 'static/favicon-ristretto.svg must exist')
@@ -308,7 +328,7 @@ class TestHTMLStructure(unittest.TestCase):
         """updateFavicon() must point faviconLink at the per-theme SVG that
         exists in static/ (plain favicon.svg for the default dark theme)."""
         from tests.jsdom_helper import js_statements
-        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player']
+        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude']
         result = js_statements(f'''
             var link = document.getElementById('faviconLink');
             var out = {{}};
@@ -2296,7 +2316,7 @@ class TestThemeAndMenu(unittest.TestCase):
         handlers no longer exist to assert on - the preview behavior
         itself is covered by the hover tests in this class."""
         from tests.jsdom_helper import js_statements
-        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player']
+        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude']
         result = js_statements(f'''
             var div = document.createElement('div');
             div.innerHTML = renderThemesModalGrid();
@@ -2894,6 +2914,10 @@ class TestThemeAndMenu(unittest.TestCase):
         miasma_block = CSS_CONTENT.split('[data-theme="miasma"] {')[1].split('}')[0]
         nord_block = CSS_CONTENT.split('[data-theme="nord"] {')[1].split('}')[0]
         osaka_jade_block = CSS_CONTENT.split('[data-theme="osaka-jade"] {')[1].split('}')[0]
+        jade_horse_block = CSS_CONTENT.split('[data-theme="jade-horse"] {')[1].split('}')[0]
+        last_horizon_block = CSS_CONTENT.split('[data-theme="last-horizon"] {')[1].split('}')[0]
+        lupine_block = CSS_CONTENT.split('[data-theme="lupine"] {')[1].split('}')[0]
+        solitude_block = CSS_CONTENT.split('[data-theme="solitude"] {')[1].split('}')[0]
         ristretto_block = CSS_CONTENT.split('[data-theme="ristretto"] {')[1].split('}')[0]
         rose_pine_block = CSS_CONTENT.split('[data-theme="rose-pine"] {')[1].split('}')[0]
         vantablack_block = CSS_CONTENT.split('[data-theme="vantablack"] {')[1].split('}')[0]
@@ -2936,6 +2960,14 @@ class TestThemeAndMenu(unittest.TestCase):
                       'Nord theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', osaka_jade_block,
                       'Osaka Jade theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', jade_horse_block,
+                      'Jade Horse theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', last_horizon_block,
+                      'Last Horizon theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', lupine_block,
+                      'Lupine theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', solitude_block,
+                      'Solitude theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', ristretto_block,
                       'Ristretto theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', rose_pine_block,
@@ -3196,6 +3228,22 @@ class TestThemeAndMenu(unittest.TestCase):
     def test_osaka_jade_theme_override_exists(self):
         self.assertIn('[data-theme="osaka-jade"]', CSS_CONTENT,
                       'CSS must have an Osaka Jade theme override block')
+
+    def test_jade_horse_theme_override_exists(self):
+        self.assertIn('[data-theme="jade-horse"]', CSS_CONTENT,
+                      'CSS must have a Jade Horse theme override block')
+
+    def test_last_horizon_theme_override_exists(self):
+        self.assertIn('[data-theme="last-horizon"]', CSS_CONTENT,
+                      'CSS must have a Last Horizon theme override block')
+
+    def test_lupine_theme_override_exists(self):
+        self.assertIn('[data-theme="lupine"]', CSS_CONTENT,
+                      'CSS must have a Lupine theme override block')
+
+    def test_solitude_theme_override_exists(self):
+        self.assertIn('[data-theme="solitude"]', CSS_CONTENT,
+                      'CSS must have a Solitude theme override block')
 
     def test_ristretto_theme_override_exists(self):
         self.assertIn('[data-theme="ristretto"]', CSS_CONTENT,
@@ -3493,6 +3541,22 @@ class TestThemeAndMenu(unittest.TestCase):
     def test_osaka_jade_theme_in_registry(self):
         self.assertIn("'osaka-jade':", JS_CONTENT,
                       'THEMES registry must include the osaka-jade theme')
+
+    def test_jade_horse_theme_in_registry(self):
+        self.assertIn("'jade-horse':", JS_CONTENT,
+                      'THEMES registry must include the jade-horse theme')
+
+    def test_last_horizon_theme_in_registry(self):
+        self.assertIn("'last-horizon':", JS_CONTENT,
+                      'THEMES registry must include the last-horizon theme')
+
+    def test_lupine_theme_in_registry(self):
+        self.assertIn("'lupine':", JS_CONTENT,
+                      'THEMES registry must include the lupine theme')
+
+    def test_solitude_theme_in_registry(self):
+        self.assertIn("'solitude':", JS_CONTENT,
+                      'THEMES registry must include the solitude theme')
 
     def test_ristretto_theme_in_registry(self):
         self.assertIn("'ristretto':", JS_CONTENT,
@@ -4075,13 +4139,13 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             var order = [];
             setTheme('dark');
-            for (var i = 0; i < 35; i++) {
+            for (var i = 0; i < 39; i++) {
                 toggleTheme();
                 order.push(document.documentElement.getAttribute('data-theme') || 'dark');
             }
             window.__jsdom_result = { order: order };
         ''')
-        self.assertEqual(result['order'], ['monokai', 'nord', 'ohmydebn', 'osaka-jade', 'retro-82', 'ristretto', 'solarized-dark', 'tokyo-night', 'vantablack', 'catppuccin-latte', 'flexoki-light', 'rose-pine', 'sguil', 'white', 'amber', 'breadbin-blue', 'cga', 'digital-frontier', 'dos-blue', 'hacker', 'luna-blue', 'mp3-player', 'retro-handheld', 'vaporwave', 'catppuccin', 'dracula', 'ethereal', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'lumon', 'matte-black', 'miasma', 'dark'],
+        self.assertEqual(result['order'], ['monokai', 'nord', 'ohmydebn', 'osaka-jade', 'retro-82', 'ristretto', 'solarized-dark', 'solitude', 'tokyo-night', 'vantablack', 'catppuccin-latte', 'flexoki-light', 'lupine', 'rose-pine', 'sguil', 'white', 'amber', 'breadbin-blue', 'cga', 'digital-frontier', 'dos-blue', 'hacker', 'luna-blue', 'mp3-player', 'retro-handheld', 'vaporwave', 'catppuccin', 'dracula', 'ethereal', 'everforest', 'gruvbox', 'hackerman', 'jade-horse', 'kanagawa', 'last-horizon', 'lumon', 'matte-black', 'miasma', 'dark'],
                          "'>' hotkey cycle order must match menu order")
 
     def test_theme_hotkey_reverse_matches_menu_order_backwards(self):
@@ -4091,13 +4155,13 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             var order = [];
             setTheme('dark');
-            for (var i = 0; i < 35; i++) {
+            for (var i = 0; i < 39; i++) {
                 toggleThemeReverse();
                 order.push(document.documentElement.getAttribute('data-theme') || 'dark');
             }
             window.__jsdom_result = { order: order };
         ''')
-        expected_reverse = ['miasma', 'matte-black', 'lumon', 'kanagawa', 'hackerman', 'gruvbox', 'everforest', 'ethereal', 'dracula', 'catppuccin', 'vaporwave', 'retro-handheld', 'mp3-player', 'luna-blue', 'hacker', 'dos-blue', 'digital-frontier', 'cga', 'breadbin-blue', 'amber', 'white', 'sguil', 'rose-pine', 'flexoki-light', 'catppuccin-latte', 'vantablack', 'tokyo-night', 'solarized-dark', 'ristretto', 'retro-82', 'osaka-jade', 'ohmydebn', 'nord', 'monokai', 'dark']
+        expected_reverse = ['miasma', 'matte-black', 'lumon', 'last-horizon', 'kanagawa', 'jade-horse', 'hackerman', 'gruvbox', 'everforest', 'ethereal', 'dracula', 'catppuccin', 'vaporwave', 'retro-handheld', 'mp3-player', 'luna-blue', 'hacker', 'dos-blue', 'digital-frontier', 'cga', 'breadbin-blue', 'amber', 'white', 'sguil', 'rose-pine', 'lupine', 'flexoki-light', 'catppuccin-latte', 'vantablack', 'tokyo-night', 'solitude', 'solarized-dark', 'ristretto', 'retro-82', 'osaka-jade', 'ohmydebn', 'nord', 'monokai', 'dark']
         self.assertEqual(result['order'], expected_reverse,
                          "'<' hotkey cycle order must be the exact reverse of '>'")
 

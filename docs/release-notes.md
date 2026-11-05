@@ -1,5 +1,14 @@
 # Release Notes
 
+## 5.3.0
+
+### Themes
+
+- **Four new themes from Omarchy** - Jade Horse, Last Horizon and
+  Solitude (dark) and Lupine (light). Osaka Jade, which Omarchy has since
+  replaced with Jade Horse, stays. With OhMyDebn theme sync on, these
+  four now match by name instead of being generated from their colors
+
 ## 5.2.0
 
 ### Traffic Map

@@ -1,6 +1,6 @@
 # Themes
 
-SO-CRATES includes thirty-five UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them: hovering a theme shows a live preview without changing the rest of the app, and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
+SO-CRATES includes thirty-nine UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them: hovering a theme shows a live preview without changing the rest of the app, and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
 
 Click any screenshot below to zoom in.
 
@@ -26,8 +26,12 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/gruvbox.png" width="360" height="225" alt="Gruvbox theme">
 - **Hackerman** - dark cyberpunk theme with neon mint-green accents and icy cyan text
   <br><img loading="lazy" src="../images/themes/hackerman.png" width="360" height="225" alt="Hackerman theme">
+- **Jade Horse** - dark jade theme with soft mint accents and pale green text, from Omarchy
+  <br><img loading="lazy" src="../images/themes/jade-horse.png" width="360" height="225" alt="Jade Horse theme">
 - **Kanagawa** - dark theme inspired by the Great Wave, with crystal-blue accents and muted ink tones
   <br><img loading="lazy" src="../images/themes/kanagawa.png" width="360" height="225" alt="Kanagawa theme">
+- **Last Horizon** - near-black theme with dusty rose accents and cool gray text, from Omarchy
+  <br><img loading="lazy" src="../images/themes/last-horizon.png" width="360" height="225" alt="Last Horizon theme">
 - **Lumon** - dark monochrome blue theme inspired by the Lumon Industries aesthetic
   <br><img loading="lazy" src="../images/themes/lumon.png" width="360" height="225" alt="Lumon theme">
 - **Matte Black** - dark theme with orange/yellow accents
@@ -50,6 +54,8 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/ristretto.png" width="360" height="225" alt="Ristretto theme">
 - **Solarized Dark** - classic low-contrast dark theme with muted blue-green base tones
   <br><img loading="lazy" src="../images/themes/solarized-dark.png" width="360" height="225" alt="Solarized Dark theme">
+- **Solitude** - near-black slate-gray theme with quiet gray accents, from Omarchy
+  <br><img loading="lazy" src="../images/themes/solitude.png" width="360" height="225" alt="Solitude theme">
 - **Tokyo Night** - dark theme with blue/purple accents inspired by the Tokyo Night palette
   <br><img loading="lazy" src="../images/themes/tokyo-night.png" width="360" height="225" alt="Tokyo Night theme">
 - **Vantablack** - pure monochrome theme with white text on true black
@@ -61,6 +67,8 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/catppuccin-latte.png" width="360" height="225" alt="Catppuccin Latte theme">
 - **Flexoki Light** - light theme based on the warm, paper-like Flexoki palette, with blue accents
   <br><img loading="lazy" src="../images/themes/flexoki-light.png" width="360" height="225" alt="Flexoki Light theme">
+- **Lupine** - clean light gray theme with cobalt-blue accents, from Omarchy
+  <br><img loading="lazy" src="../images/themes/lupine.png" width="360" height="225" alt="Lupine theme">
 - **Rose Pine** - light theme based on the warm Rosé Pine Dawn palette
   <br><img loading="lazy" src="../images/themes/rose-pine.png" width="360" height="225" alt="Rose Pine theme">
 - **Sguil** - light theme inspired by the classic Sguil NSM interface, with gray chrome and navy headers

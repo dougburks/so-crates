@@ -179,12 +179,16 @@
             'everforest': { label: 'Everforest', group: 'dark' },
             'gruvbox': { label: 'Gruvbox', group: 'dark' },
             'hackerman': { label: 'Hackerman', group: 'dark' },
+            'jade-horse': { label: 'Jade Horse', group: 'dark' },
             'kanagawa': { label: 'Kanagawa', group: 'dark' },
+            'last-horizon': { label: 'Last Horizon', group: 'dark' },
+            'lupine': { label: 'Lupine', group: 'light' },
             'miasma': { label: 'Miasma', group: 'dark' },
             'nord': { label: 'Nord', group: 'dark' },
             'osaka-jade': { label: 'Osaka Jade', group: 'dark' },
             'ristretto': { label: 'Ristretto', group: 'dark' },
             'rose-pine': { label: 'Rose Pine', group: 'light' },
+            'solitude': { label: 'Solitude', group: 'dark' },
             'vantablack': { label: 'Vantablack', group: 'dark' },
             'white': { label: 'White', group: 'light' },
             'luna-blue': { label: 'Luna Blue', group: 'fun' },
@@ -388,7 +392,7 @@
 
         // Only ever touches the isolated preview iframe's own document,
         // never the real page's document.documentElement. Hovering across a
-        // packed grid of ~35 tiles with no debounce would otherwise mean a
+        // packed grid of ~40 tiles with no debounce would otherwise mean a
         // full-page, high-contrast recolor on every mouseenter - exactly
         // the large-area rapid-flash pattern WCAG 2.3.1 (Three Flashes or
         // Below Threshold) exists to prevent. Scoping the change to this
