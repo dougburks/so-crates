@@ -1783,6 +1783,15 @@ def format_version(db_path):
         return 0
 
 
+def is_current(db_path):
+    """Whether a shark.db is as new as this code's format - or newer: the
+    build runs in a child process (python3 -m shark_analyzer build), which
+    loads the code on disk, so a server left running while the code was
+    updated gets newer ones. Taken for older, it removed each as it was
+    built and queued it again, for good."""
+    return format_version(db_path) >= SHARK_FORMAT_VERSION
+
+
 # ----------------------------------------------------------------------
 # Merging into the analysis's own events.db: Suricata stays the source of
 # truth for every protocol it parses; tshark adds what it can't see.
@@ -1930,7 +1939,7 @@ def merge(dir_path):
     events_db = os.path.join(dir_path, 'events.db')
     with merge_lock(dir_path):
         if not (os.path.exists(shark_db) and os.path.exists(events_db)) or \
-                os.path.exists(os.path.join(dir_path, '.phase')) or format_version(shark_db) != SHARK_FORMAT_VERSION:
+                os.path.exists(os.path.join(dir_path, '.phase')) or not is_current(shark_db):
             return None
         stamp = _merge_stamp(shark_db)
         if tshark_merge_stamp(events_db) == stamp:
@@ -1982,12 +1991,13 @@ def status(dir_path, pcap_path=None):
     (with 'elapsed' seconds so far), 'error' (with 'message'), 'too_large'
     (over the background limit, not yet asked for) or 'not_started'. A shark.db built by an older
     tshark (see SHARK_FORMAT_VERSION) is removed here, so the
-    analysis reads as not started and gets rebuilt."""
+    analysis reads as not started and gets rebuilt - not a newer one
+    (is_current)."""
     db_path = shark_db_path(dir_path)
     if os.path.exists(db_path):
         with _lock:
             busy = dir_path == _running or dir_path in _pending
-        if busy or format_version(db_path) == SHARK_FORMAT_VERSION:
+        if busy or is_current(db_path):
             if not busy:
                 seconds, damaged = _run_info(db_path)
                 ready = {'status': 'ready'} if seconds is None else {'status': 'ready', 'seconds': round(seconds)}

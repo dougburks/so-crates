@@ -3168,6 +3168,19 @@ class TestAnalyze(unittest.TestCase):
         self.assertEqual(shark_analyzer.status(self.dir, self.pcap), {'status': 'not_started'})
         self.assertFalse(os.path.exists(db_path), 'the stale database is removed so it gets rebuilt')
 
+    def test_a_newer_format_is_kept_and_merged(self):
+        """REGRESSION: a server left running while the code was updated -
+        its build child loading the new code - took each shark.db it built
+        for an old one: removed it, queued it again, and every other
+        capture waited behind it, for good ('tshark is waiting for another
+        capture to finish')."""
+        shark_analyzer.analyze(self.dir, self.pcap)
+        db_path = shark_analyzer.shark_db_path(self.dir)
+        with mock.patch.object(shark_analyzer, 'SHARK_FORMAT_VERSION', shark_analyzer.SHARK_FORMAT_VERSION - 1):
+            self.assertEqual(shark_analyzer.status(self.dir, self.pcap)['status'], 'ready')
+            self.assertTrue(os.path.exists(db_path), 'kept')
+            self.assertTrue(shark_analyzer.is_current(db_path))
+
     def test_a_failed_run_records_why_and_leaves_no_database(self):
         with open(self.pcap, 'wb') as f:
             f.write(b'not a pcap at all')
