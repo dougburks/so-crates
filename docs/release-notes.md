@@ -45,6 +45,14 @@
   shows up as a WireGuard connection. When a capture carries the
   tunnel's keys, tshark decrypts it, and the packets inside become flows
   of their own under a WireGuard tunnel record
+- **Oracle TNS** - a record for each connection: the service or SID
+  asked for and the client's program, host and OS user, whether the
+  listener accepted, refused or redirected it, the database user and
+  whether the login succeeded, and the server's database, instance and
+  banner - or the command a connection sent the listener. And a record
+  for each distinct SQL statement, with its result and how many times it
+  was sent; a password set with IDENTIFIED BY is masked in it. These
+  were connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -54,7 +62,10 @@
   rsh, rlogin or rexec login is high; one of their services answering a
   probe is low. An OpenVPN or WireGuard tunnel that carried data is
   medium; an OpenVPN client or WireGuard peer retrying a server that
-  never answers is low
+  never answers is low. An Oracle user or role created, changed or
+  granted, or a table or other object dropped, is high; any other Oracle
+  write or change, and a command to the listener, are medium; a failed
+  Oracle login, and a SID or service the listener doesn't know, are low
 
 ### Themes
 

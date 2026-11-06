@@ -937,6 +937,102 @@ def write_rsh_pcap(path):
     write_pcap(path, rsh_packets())
 
 
+# ---------------------------------------------------------------- Oracle TNS
+#
+# CLIENT:41500 connects to TNS_SERVER's listener for service FIXDB and logs
+# in as sys from sqlplus on host attacker (OS user mallory), then creates
+# a user (its password S3cret!), grants it DBA, reads payroll twice, runs
+# a long query sent in chunks that fails (ORA-00942), drops a table and
+# inserts a row. CLIENT:41501 logs in as system and is refused (ORA-01017).
+# CLIENT:41502 asks for SID ORCLX, which the listener doesn't know
+# (ERR=12505), CLIENT:41503 sends the listener a version command, and
+# CLIENT:41504 is redirected to another port.
+
+TNS_SERVER = '198.51.100.96'
+TNS_LONG_QUERY = ('SELECT owner, table_name, num_rows FROM dba_tables WHERE owner NOT IN '
+                  "('SYS', 'SYSTEM', 'OUTLN', 'DBSNMP') AND num_rows > 1000 ORDER BY num_rows DESC")
+
+
+def _tns(kind, body):
+    return struct.pack('!HHBBH', 8 + len(body), 0, kind, 0, 0) + body
+
+
+def _tns_connect(descriptor):
+    data = descriptor.encode()
+    return _tns(1, struct.pack('!HHHHHHHHHHIBB', 314, 300, 0x0c41, 8192, 32767, 0x7f08, 0, 0x0100, len(data), 34,
+                               2048, 0x41, 0x41) + data)
+
+
+def _tns_data(payload):
+    return _tns(6, b'\x00\x00' + payload)
+
+
+def _tns_kv(name, value=''):
+    out = struct.pack('<I', len(name)) + bytes([len(name)]) + name.encode()
+    out += struct.pack('<I', len(value)) + bytes([len(value)]) + value.encode() if value else b'\x00' * 4
+    return out + b'\x00' * 4
+
+
+def _tns_login(function, user, pairs):
+    return _tns_data(bytes([3, function, 2, 1, 1, 0, 0, 0, 1, 1, 1, 1]) + bytes([len(user)]) + user.encode()
+                     + b''.join(_tns_kv(*pair) for pair in pairs))
+
+
+def _tns_sql_call(sql, chunked=False):
+    text = sql.encode()
+    if chunked:
+        string = b'\xfe' + b''.join(bytes([len(text[i:i + 64])]) + text[i:i + 64] for i in range(0, len(text), 64)) + b'\x00'
+    else:
+        string = bytes([len(text)]) + text
+    return _tns_data(b'\x03\x5e\x05\x61\x80\x00\x00\x00\x00\x00\x00\x01' + string + b'\x01\x00\x00\x00\x00')
+
+
+def _tns_reply(error=None):
+    return _tns_data(b'\x04\x01\x00\x00\x00\x00\x00\x00' + (error.encode() + b'\n' if error else b''))
+
+
+def _tns_session(user, final):
+    keys = [('AUTH_TERMINAL', 'pts/1'), ('AUTH_PROGRAM_NM', 'sqlplus@attacker (TNS V1-V3)'),
+            ('AUTH_MACHINE', 'attacker'), ('AUTH_PID', '4242'), ('AUTH_SID', 'mallory')]
+    return [(True, _tns_login(0x76, user, keys)),
+            (False, _tns_data(b'\x08\x02' + _tns_kv('AUTH_SESSKEY', 'AB' * 32) + _tns_kv('AUTH_VFR_DATA'))),
+            (True, _tns_login(0x73, user, [('AUTH_SESSKEY', 'CD' * 32), ('AUTH_PASSWORD', 'EF' * 32)] + keys)),
+            (False, final)]
+
+
+def tns_packets():
+    descriptor = ('(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=198.51.100.96)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=FIXDB)'
+                  '(CID=(PROGRAM=sqlplus@attacker)(HOST=attacker)(USER=mallory))))')
+    accept = _tns(2, struct.pack('!HHHHHHHBB', 314, 0x0c01, 8192, 32767, 0x0100, 0, 24, 0x41, 0x41))
+    welcome = _tns_data(b'\x08\x05' + _tns_kv('AUTH_VERSION_STRING', '- Production') + _tns_kv('AUTH_SESSION_ID', '42')
+                        + _tns_kv('AUTH_DBNAME', 'FIXDB') + _tns_kv('AUTH_INSTANCENAME', 'fixdb1')
+                        + _tns_kv('AUTH_SC_SERVER_HOST', 'dbhost'))
+    session = [(True, _tns_connect(descriptor)), (False, accept)] + _tns_session('sys', welcome)
+    for sql, chunked, error in (('create user backdoor identified by S3cret!', False, None),
+                                ('grant dba to backdoor', False, None), ('SELECT * FROM payroll', False, None),
+                                ('SELECT * FROM payroll', False, 'ORA-01403: no data found'),
+                                (TNS_LONG_QUERY, True, 'ORA-00942: table or view does not exist'),
+                                ('drop table audit_log', False, None), ('insert into payroll values (1, 99000)', False, None)):
+        session += [(True, _tns_sql_call(sql, chunked)), (False, _tns_reply(error))]
+    refused_login = [(True, _tns_connect(descriptor)), (False, accept)] + _tns_session(
+        'system', _tns_reply('ORA-01017: invalid username/password; logon denied'))
+    unknown = [(True, _tns_connect('(DESCRIPTION=(CONNECT_DATA=(SID=ORCLX)(CID=(PROGRAM=odat)(HOST=attacker)(USER=mallory)))'
+                                   '(ADDRESS=(PROTOCOL=TCP)(HOST=198.51.100.96)(PORT=1521)))')),
+               (False, _tns(4, b'\x22\x00' + struct.pack('!H', 56) + b'(DESCRIPTION=(TMP=)(VSNNUM=153092352)(ERR=12505))'))]
+    command = [(True, _tns_connect('(CONNECT_DATA=(COMMAND=version))')),
+               (False, _tns(4, b'\x22\x00' + struct.pack('!H', 62)
+                            + b'(DESCRIPTION=(TMP=)(VSNNUM=318767104)(ERR=0)(ALIAS=LISTENER))'))]
+    redirect = b'(ADDRESS=(PROTOCOL=tcp)(HOST=198.51.100.96)(PORT=40123))'
+    redirected = [(True, _tns_connect(descriptor)), (False, _tns(5, struct.pack('!H', len(redirect)) + redirect))]
+    return (tcp_segments(CLIENT, TNS_SERVER, 41500, 1521, session) + tcp_segments(CLIENT, TNS_SERVER, 41501, 1521, refused_login)
+            + tcp_segments(CLIENT, TNS_SERVER, 41502, 1521, unknown) + tcp_segments(CLIENT, TNS_SERVER, 41503, 1521, command)
+            + tcp_segments(CLIENT, TNS_SERVER, 41504, 1521, redirected))
+
+
+def write_tns_pcap(path):
+    write_pcap(path, tns_packets())
+
+
 # ---------------------------------------------------------------- OpenVPN
 #
 # A client (CLIENT:40500) opens an OpenVPN session over UDP with

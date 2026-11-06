@@ -79,6 +79,17 @@ def _list(values, limit=3):
     return ', '.join(str(v) for v in values[:limit]) + more
 
 
+_TNS_ACCOUNT = ('CREATE USER', 'ALTER USER', 'DROP USER', 'GRANT', 'CREATE ROLE', 'ALTER ROLE', 'DROP ROLE')
+_TNS_WRITES = ('INSERT', 'UPDATE', 'DELETE', 'MERGE', 'REVOKE', 'RENAME', 'COMMENT', 'AUDIT', 'NOAUDIT', 'FLASHBACK')
+
+
+def _tns_statement(b):
+    """A statement for a detail line: its first 120 characters (any
+    IDENTIFIED BY password already masked in the record), and its result."""
+    text = ' '.join(str(b.get('statement') or '').split())
+    return _join(text if len(text) <= 120 else text[:120] + '...', ('-', b.get('result')))
+
+
 _IEC104_CONTROL = ('Single command', 'Double command', 'Regulating step command', 'Set point (normalized)',
                    'Set point (scaled)', 'Set point (float)', 'Bitstring command', 'Reset process',
                    'Parameter activation')
@@ -257,6 +268,17 @@ RULES = (
          lambda b: _join(b.get('command'), b.get('user') or b.get('role'), _list(b.get('roles', ())),
                          ('-', b.get('result'))),
          'A user or role created, changed or given more rights - a way back in that outlasts the session.'),
+    Rule('tns_account_change', 'high', 'tns_statement', 'Oracle user or privilege created or granted',
+         _in('tns_statement', 'verb', list(_TNS_ACCOUNT)),
+         _tns_statement,
+         'A database user or role created, changed, unlocked or given more rights - a way back in that '
+         'outlasts the session.'),
+    Rule('tns_destroy', 'high', 'tns_statement', 'Oracle table or object dropped',
+         f"({_j('tns_statement', 'verb')} LIKE 'DROP %' OR {_j('tns_statement', 'verb')} LIKE 'TRUNCATE%' "
+         f"OR {_j('tns_statement', 'verb')} = 'PURGE') AND NOT {_in('tns_statement', 'verb', list(_TNS_ACCOUNT))}",
+         _tns_statement,
+         'Data or a database object deleted wholesale - a table, view, procedure, tablespace... dropped '
+         'or truncated.'),
     Rule('pn_dcp_set', 'high', 'pn_dcp', 'PROFINET device renamed, readdressed or reset',
          f"{_j('pn_dcp', 'service')} = 'Set' AND "
          + _has('pn_dcp', 'changes', ['station name', 'IP address', 'DHCP', 'reset factory settings', 'reset to factory']),
@@ -314,6 +336,19 @@ RULES = (
          lambda b: _counted((b.get('data_to_server') or 0) + (b.get('data_to_client') or 0), 'data packet'),
          "A VPN tunnel carried data. From inside a network it's a way around its monitoring and controls - "
          "check it's one you run."),
+    Rule('tns_change', 'medium', 'tns_statement', 'Oracle write or change',
+         f"({_in('tns_statement', 'verb', list(_TNS_WRITES))} OR {_j('tns_statement', 'verb')} LIKE 'CREATE %' "
+         f"OR ({_j('tns_statement', 'verb')} LIKE 'ALTER %' AND {_j('tns_statement', 'verb')} != 'ALTER SESSION')) "
+         f"AND NOT {_in('tns_statement', 'verb', list(_TNS_ACCOUNT))}",
+         _tns_statement,
+         'Rows inserted, updated or deleted, or a table, procedure or other object created or changed. '
+         "An application's writes look the same - check who sent them."),
+    Rule('tns_listener_command', 'medium', 'tns', 'Oracle listener command',
+         f"{_j('tns', 'command')} IS NOT NULL AND lower({_j('tns', 'command')}) != 'ping'",
+         lambda b: _join(b.get('command'), ('-', b.get('error') or b.get('result'))),
+         "A command to the TNS listener itself - lsnrctl's status, version or services, which describe the "
+         'server, or stop, set or reload, which change it. From anywhere but the server or an admin '
+         "host, it's a survey or an attack."),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),
@@ -379,6 +414,15 @@ RULES = (
          "A peer kept trying to open a WireGuard tunnel that nothing answered - a VPN configured to reach "
          "out, and blocked or gone, or a peer whose key the other end doesn't accept. (A scanner's probe is "
          "one attempt, and isn't listed.)"),
+    Rule('tns_login_failed', 'low', 'tns', 'Oracle login failed',
+         f"{_j('tns', 'login')} = 'failed'",
+         lambda b: _join(b.get('db_user'), ('-', b.get('login_error'))),
+         'A database login refused - a mistyped password, or one guess of many.'),
+    Rule('tns_unknown_service', 'low', 'tns', 'Oracle service or SID unknown',
+         f"{_j('tns', 'result')} = 'refused' AND {_in('tns', 'error', ['ORA-12505', 'ORA-12514'])}",
+         lambda b: _join(('SID', b.get('sid')), ('service', b.get('service_name'))),
+         "The listener didn't know the SID or service a client asked for - a misconfigured client, or "
+         "one guessing SIDs (many unknown ones from one host)."),
     Rule('rsh_answering', 'low', 'rsh', 'rsh, rlogin or rexec service answering',
          f"{_j('rsh', 'probe')} IS NOT NULL AND {_j('rsh', 'result')} != 'no response'",
          lambda b: _join(b.get('service'), ('-', b.get('error') or b.get('result'))),

@@ -1732,6 +1732,22 @@ AGGREGATION_JSON_PATHS = {
         'Server Version': ['$.mongodb.server_version'],
         'Answered': ['$.mongodb.answered'],
     },
+    'tns': {
+        'Service': ['$.tns.service_name', '$.tns.sid'],
+        'DB User': ['$.tns.db_user'],
+        'OS User': ['$.tns.os_user', '$.tns.client_user'],
+        'Program': ['$.tns.program', '$.tns.client_program'],
+        'Result': ['$.tns.result'],
+        'Login': ['$.tns.login'],
+        'Statements': ['$.tns.statements'],
+    },
+    'tns_statement': {
+        'DB User': ['$.tns_statement.db_user'],
+        'Verb': ['$.tns_statement.verb'],
+        'Statement': ['$.tns_statement.statement'],
+        'Result': ['$.tns_statement.result'],
+        'Count': ['$.tns_statement.count'],
+    },
     'mongodb_action': {
         'Command': ['$.mongodb_action.command'],
         'Database': ['$.mongodb_action.database'],
@@ -1879,6 +1895,7 @@ AGGREGATION_TRUNCATE = {
     ('dtls', 'Subject'): 40,
     ('tls_failure', 'Subject'): 40,
     ('tls_failure', 'Issuer'): 40,
+    ('tns_statement', 'Statement'): 200,
 }
 
 # Value transforms beyond plain extraction, matching extractValue's own

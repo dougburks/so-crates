@@ -2486,6 +2486,7 @@
                 mms: '#5c6bc0',
                 pn_dcp: '#26c6da',
                 mongodb: '#66bb6a',
+                tns: '#ef6c00',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -2509,6 +2510,7 @@
                 mms_action: '#ef5350',
                 pn_device: '#9ccc65',
                 mongodb_action: '#ff7043',
+                tns_statement: '#ffb74d',
                 bacnet_property: '#5c6bc0',
                 bacnet_device: '#8d6e63',
                 iec104_point: '#26a69a',
@@ -4821,6 +4823,54 @@
             return html;
         }
 
+        // tshark's Oracle TNS records (shark_protocols.TNS): a connection,
+        // and each distinct SQL statement on it.
+        function renderTnsDetails(e) {
+            const t = e.tns || {};
+            let html = htmlSection('Oracle TNS Details', COLORS.EVENT.tns);
+            html += htmlRowText('Service Name', t.service_name, 'mono');
+            html += htmlRowText('SID', t.sid, 'mono');
+            html += htmlRowText('Listener Command', t.command);
+            html += htmlRowText('Result', t.result);
+            html += htmlRowText('Error', t.error);
+            html += htmlRowText('Redirect', t.redirect, 'mono');
+            html += htmlRowText('Response', t.response, 'mono');
+            html += htmlRowText('Listener Version', t.listener_version);
+            html += htmlRowText('TNS Version', t.version !== undefined ? String(t.version) : '');
+            html += htmlRowText('Client Program', t.client_program, 'mono');
+            html += htmlRowText('Client Host', t.client_host);
+            html += htmlRowText('Client OS User', t.client_user);
+            html += htmlRowText('Client Platform', t.client_platform);
+            html += htmlRowText('DB User', t.db_user);
+            html += htmlRowText('Login', t.login);
+            html += htmlRowText('Login Error', t.login_error);
+            html += htmlRowText('OS User', t.os_user);
+            html += htmlRowText('Terminal', t.terminal);
+            html += htmlRowText('Program', t.program, 'mono');
+            html += htmlRowText('Machine', t.machine);
+            html += htmlRowText('PID', t.pid);
+            html += htmlRowText('Database', t.database);
+            html += htmlRowText('Instance', t.instance);
+            html += htmlRowText('Server Host', t.server_host);
+            html += htmlRowText('Banner', t.banner);
+            html += htmlRowText('Statements', t.statements ? t.statements.toLocaleString() + (t.statements_not_kept ? ` (${t.statements_not_kept.toLocaleString()} past the ones kept)` : '') : '');
+            html += htmlRowText('Errors', Object.entries(t.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            return html;
+        }
+
+        function renderTnsStatementDetails(e) {
+            const st = e.tns_statement || {};
+            let html = htmlSection('Oracle SQL Details', COLORS.EVENT.tns_statement);
+            html += htmlRowText('Verb', st.verb);
+            html += htmlRow('Statement', escapeHtml(st.statement || ''), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Result', st.result);
+            html += htmlRowText('Count', st.count !== undefined ? st.count.toLocaleString() : '');
+            html += htmlRowText('Password', st.password, 'mono');
+            html += htmlRowText('DB User', st.db_user);
+            html += htmlRowText('Service', st.service_name || st.sid, 'mono');
+            return html;
+        }
+
         // tshark's BACnet records (shark_protocols.BACnet): an action with
         // its reply, a read/notification summary, a device.
         function renderBacnetDetails(e) {
@@ -5383,6 +5433,8 @@
             mms_action: renderMmsActionDetails,
             pn_device: renderPnDeviceDetails,
             mongodb_action: renderMongodbActionDetails,
+            tns: renderTnsDetails,
+            tns_statement: renderTnsStatementDetails,
             bacnet_property: renderBacnetPropertyDetails,
             bacnet_device: renderBacnetDeviceDetails,
             iec104_point: renderIec104PointDetails,
@@ -8501,6 +8553,7 @@
             mms: 'MMS',
             pn_dcp: 'PROFINET DCP',
             mongodb: 'MongoDB',
+            tns: 'Oracle TNS',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -8524,6 +8577,7 @@
             mms_action: 'MMS Actions',
             pn_device: 'PROFINET Devices',
             mongodb_action: 'MongoDB Actions',
+            tns_statement: 'Oracle SQL',
             bacnet_property: 'BACnet Properties',
             bacnet_device: 'BACnet Devices',
             iec104_point: 'IEC 104 Points',
@@ -9670,6 +9724,10 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Driver', 'User', 'Login', 'Databases', 'Server Version', 'Answered'];
                 case 'mongodb_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Database', 'Collection', 'Count', 'Result'];
+                case 'tns':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'DB User', 'OS User', 'Program', 'Result', 'Login', 'Statements'];
+                case 'tns_statement':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Verb', 'Statement', 'Result', 'Count'];
                 case 'pn_device':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Station Name', 'Device Type', 'Vendor ID', 'Device ID', 'Role', 'IP', 'Count'];
                 case 'bacnet_property':
@@ -10153,6 +10211,8 @@
                 case 'pn_device':
                 case 'mongodb':
                 case 'mongodb_action':
+                case 'tns':
+                case 'tns_statement':
                 case 'rsh':
                 case 'openvpn':
                 case 'wireguard':
@@ -12824,13 +12884,13 @@
                     if (r?.value !== undefined) return String(r.value);
                     return e.opcua_action?.arguments ? e.opcua_action.arguments.join(', ') : '';
                 }
-                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
+                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || e.tns?.result || e.tns_statement?.result || '';
                 case 'Updates': return e.iec104_point?.updates !== undefined ? String(e.iec104_point.updates) : '';
                 case 'Last Value': { const r = e.iec104_point || e.bacnet_property; return r?.last_value !== undefined ? String(r.last_value) : ''; }
                 // BACnet: an action's, a read/notification summary's, a device's
                 case 'Object': return e.bacnet?.object || e.bacnet_property?.object || e.mms_action?.object || '';
                 case 'Property': return e.bacnet?.property || e.bacnet_property?.property || '';
-                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp || e.pn_dcp || e.pn_device || e.mongodb_action; return r?.count !== undefined ? String(r.count) : ''; }
+                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp || e.pn_dcp || e.pn_device || e.mongodb_action || e.tns_statement; return r?.count !== undefined ? String(r.count) : ''; }
                 // LLDP and CDP: a neighbor's announcements
                 case 'System Name': return e.lldp?.system_name || '';
                 case 'Chassis ID': return e.lldp?.chassis_id || '';
@@ -12845,7 +12905,7 @@
                 case 'Message': return e.browser?.message || e.dhcpv6?.message || e.syslog?.message || e.radius?.message || '';
                 // Syslog: a message's
                 case 'Facility': return e.syslog?.facility || '';
-                case 'Program': return e.syslog?.program || e.rpc?.program || '';
+                case 'Program': return e.syslog?.program || e.rpc?.program || e.tns?.program || e.tns?.client_program || '';
                 // ONC RPC: a call's
                 case 'Machine Name': return e.rpc?.machine_name || '';
                 case 'Workgroup': return e.browser?.destination_name || '';
@@ -12901,9 +12961,15 @@
                 case 'Keepalives': return e.wireguard ? String(e.wireguard.keepalives || 0) : '';
                 case 'Databases': return (e.mongodb?.databases || []).join(', ');
                 case 'Database': return e.mongodb_action?.database || '';
+                // Oracle TNS: a connection's, a statement's
+                case 'DB User': return (e.tns || e.tns_statement)?.db_user || '';
+                case 'OS User': return e.tns?.os_user || e.tns?.client_user || '';
+                case 'Statements': return e.tns?.statements !== undefined ? String(e.tns.statements) : '';
+                case 'Verb': return e.tns_statement?.verb || '';
+                case 'Statement': return (e.tns_statement?.statement || '').slice(0, 200);
                 case 'Collection': return e.mongodb_action?.collection || '';
                 case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || e.rsh?.password || '';
-                case 'Login': return e.telnet?.login || e.mongodb?.login || '';
+                case 'Login': return e.telnet?.login || e.mongodb?.login || e.tns?.login || '';
                 case 'Area': return e.s7comm?.items?.[0]?.area || '';
                 case 'Error': return e.s7comm?.response?.error_class || '';
                 case 'Host': return e.http?.hostname || e.syslog?.hostname || '';
@@ -13115,6 +13181,7 @@
                     if (e.event_type === 'mms_action') return e.mms_action?.service || '';
                     if (e.event_type === 'pn_dcp') return e.pn_dcp?.service || '';
                     if (e.event_type === 'rsh') return e.rsh?.service || '';
+                    if (e.tns) return e.tns.service_name || e.tns.sid || '';
                     return e.krb5?.sname || '';
                 }
                 // The name alone, as the server aggregates it - the <suffix> is

@@ -738,6 +738,120 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestTNS(unittest.TestCase):
+    """tests/protocol_fixtures.write_tns_pcap: one record per Oracle TNS
+    connection and per distinct statement - with what Suricata 8.0.8
+    logged for the capture (tests/data/tns_fixture.eve.json): flows it
+    gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_tns_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'tns.pcap')
+        write_tns_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['tns'] for r in cls.records if r['event_type'] == 'tns'}
+        cls.statements = {r['tns_statement']['statement']: r['tns_statement'] for r in cls.records
+                          if r['event_type'] == 'tns_statement'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_login_and_its_session(self):
+        c = self.connections[41500]
+        self.assertEqual({k: c.get(k) for k in ('service_name', 'client_program', 'client_host', 'client_user', 'result',
+                                                'db_user', 'login', 'program', 'machine', 'os_user', 'database',
+                                                'instance', 'server_host', 'statements', 'errors')},
+                         {'service_name': 'FIXDB', 'client_program': 'sqlplus@attacker', 'client_host': 'attacker',
+                          'client_user': 'mallory', 'result': 'accepted', 'db_user': 'sys', 'login': 'succeeded',
+                          'program': 'sqlplus@attacker (TNS V1-V3)', 'machine': 'attacker', 'os_user': 'mallory',
+                          'database': 'FIXDB', 'instance': 'fixdb1', 'server_host': 'dbhost', 'statements': 7,
+                          'errors': {'ORA-00942': 1}},
+                         "the CID's host, not the ADDRESS's; no data found isn't an error")
+
+    def test_statements(self):
+        from tests.protocol_fixtures import TNS_LONG_QUERY
+        self.assertEqual(self.statements['create user backdoor identified by ***'],
+                         {'statement': 'create user backdoor identified by ***', 'verb': 'CREATE USER', 'count': 1,
+                          'password': 'S3cret!', 'result': 'ok', 'db_user': 'sys', 'service_name': 'FIXDB'})
+        self.assertEqual((self.statements['SELECT * FROM payroll']['count'],
+                          self.statements['SELECT * FROM payroll']['result']), (2, 'ok'), 'one record, counted')
+        self.assertEqual(self.statements[TNS_LONG_QUERY]['result'], 'ORA-00942: table or view does not exist',
+                         'a long statement, sent in chunks')
+        self.assertEqual({s['verb'] for s in self.statements.values()},
+                         {'CREATE USER', 'GRANT', 'SELECT', 'DROP TABLE', 'INSERT'})
+
+    def test_a_failed_login(self):
+        c = self.connections[41501]
+        self.assertEqual((c['db_user'], c['login'], c['login_error'], c['statements']),
+                         ('system', 'failed', 'ORA-01017: invalid username/password; logon denied', 0))
+
+    def test_the_listener_refusing_redirecting_and_answering_a_command(self):
+        self.assertEqual({k: self.connections[41502].get(k) for k in ('sid', 'result', 'error', 'listener_version')},
+                         {'sid': 'ORCLX', 'result': 'refused', 'error': 'ORA-12505', 'listener_version': '9.2.0.1.0'})
+        self.assertEqual({k: self.connections[41503].get(k) for k in ('command', 'result', 'listener_version')},
+                         {'command': 'version', 'result': 'answered', 'listener_version': '19.0.0.0.0'})
+        self.assertEqual((self.connections[41504]['result'], self.connections[41504]['redirect']),
+                         ('redirected', '(ADDRESS=(PROTOCOL=tcp)(HOST=198.51.100.96)(PORT=40123))'))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('tns_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (5, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'tns_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'tns.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('tns'), counts.get('tns_statement')), (5, 6))
+        self.assertNotIn('conn_tns', counts, 'records, not a connection card')
+
+
+class TestTNSMessages(unittest.TestCase):
+    """shark_protocols' readers of TNS messages' bytes, on the shapes
+    Wireshark's sample captures showed."""
+
+    def test_a_statement_whose_length_counts_its_nul(self):
+        from shark_protocols import _tns_sql
+        self.assertEqual(_tns_sql(b'\x03\x5e\x06a\x80' + b'\x16SELECT USER FROM DUAL\x00\x01\x00'),
+                         'SELECT USER FROM DUAL')
+
+    def test_banner_text_is_not_a_statement(self):
+        from shark_protocols import _tns_sql
+        self.assertIsNone(_tns_sql(b'\x08z\x00\x1aWith the Partitioning, OLAP'))
+
+    def test_a_statement_sent_without_its_length_before_it(self):
+        """Newer clients give its length earlier in the call - and a letter
+        inside it ('R' is 82) mustn't pass for a length, which would make
+        a fragment of it a statement."""
+        from shark_protocols import _tns_sql
+        sql = b"DECLARE c1 SYS_REFCURSOR; BEGIN OPEN c1 FOR SELECT 1 A FROM DUAL; DBMS_SQL.RETURN_RESULT(c1); END;"
+        self.assertEqual(_tns_sql(b'\x03\x5e\x07' + b'\x00' * 9 + sql + b'\x01\x01\x00\x00'), sql.decode())
+        self.assertEqual(_tns_sql(b'\x00\x00UPDATE T SET S = :1 WHERE ID > :2\x01\x00'), 'UPDATE T SET S = :1 WHERE ID > :2')
+
+    def test_a_login_key_followed_by_a_letter(self):
+        """REGRESSION GUARD: 11g's AUTH_PROGRAM_NM is followed by 0x48 - an
+        H - which a pattern alone reads as part of the name."""
+        from shark_protocols import _tns_login
+        data = (b'\x03sys\x27\x00\x00\x00\x0dAUTH_TERMINAL\x0f\x00\x00\x00\x05pts/0\x00\x00\x00\x00'
+                b'\x2d\x00\x00\x00\x0fAUTH_PROGRAM_NMH\x00\x00\x00\x18sqlplus@kali (TNS V1-V3)\x00\x00\x00\x00')
+        self.assertEqual(_tns_login(data), ('sys', {'AUTH_TERMINAL': 'pts/0',
+                                                    'AUTH_PROGRAM_NM': 'sqlplus@kali (TNS V1-V3)'}))
+
+    def test_verbs(self):
+        from shark_protocols import _tns_verb
+        self.assertEqual([_tns_verb(s) for s in ('create or replace procedure p as begin null; end;',
+                                                 'drop public synonym x', 'alter session set nls_date_format = x',
+                                                 'grant dba to x', 'truncate table t')],
+                         ['CREATE OR REPLACE PROCEDURE', 'DROP PUBLIC SYNONYM', 'ALTER SESSION', 'GRANT', 'TRUNCATE TABLE'])
+
+
 class TestWireGuard(unittest.TestCase):
     """tests/protocol_fixtures.write_wireguard_pcap: one record per
     WireGuard connection - with what Suricata 8.0.8 logged for the capture

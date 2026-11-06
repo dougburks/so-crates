@@ -2613,6 +2613,311 @@ class WireGuard:
         return records
 
 
+# ---------------------------------------------------------------- Oracle TNS
+#
+# Oracle's database protocol (TCP 1521), which Suricata doesn't parse. A
+# client connects to the listener naming a service or SID, its program,
+# host and OS user; the listener accepts, refuses (an unknown SID, which
+# is how SIDs are guessed), or redirects it. Then the login - the database
+# user and the client's terminal, program and machine, in the clear, the
+# password encrypted - and SQL, in the clear too, answered by the
+# server's ORA- errors. tshark names the connect and the listener's
+# answer; the login and SQL, inside the TTC calls tshark only partly
+# decodes, are read from the messages' bytes here. Two record types:
+# 'tns', one per connection, and 'tns_statement', one per distinct
+# statement on it - counted, so an application repeating a query doesn't
+# make a record of each. A connection to the listener can be a command
+# instead (lsnrctl's status, version, stop...), its answer kept.
+
+_TNS_SQL = re.compile(r'\s*(SELECT|WITH|INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|'
+                      r'BEGIN|DECLARE|CALL|EXPLAIN|LOCK|COMMENT|RENAME|AUDIT|NOAUDIT|PURGE|FLASHBACK|COMMIT|'
+                      r'ROLLBACK|SAVEPOINT|SET\s+(?:ROLE|TRANSACTION|CONSTRAINTS?))\b', re.I)
+_TNS_OBJECT_VERBS = ('CREATE', 'ALTER', 'DROP', 'TRUNCATE')
+_TNS_ORA = re.compile(rb'ORA-(\d{5}): ?([^\x00\n]*)')
+_TNS_IDENTIFIED = re.compile(r'(\bIDENTIFIED\s+BY\s+)("[^"]*"|[^\s;]+)', re.I)
+_TNS_NO_DATA = '01403'                  # a fetch's end, not a failure
+_TNS_LOGIN_KEYS = {'AUTH_TERMINAL': 'terminal', 'AUTH_PROGRAM_NM': 'program', 'AUTH_MACHINE': 'machine',
+                   'AUTH_PID': 'pid', 'AUTH_SID': 'os_user'}
+_TNS_SERVER_KEYS = {'AUTH_DBNAME': 'database', 'AUTH_INSTANCENAME': 'instance', 'AUTH_SC_SERVER_HOST': 'server_host'}
+_TNS_STATEMENT_MAX = 2000               # characters of a statement kept
+_TNS_STATEMENTS_MAX = 500               # distinct statements kept per connection
+_TNS_TEXT_MAX = 300
+
+
+def _tns_text(data):
+    """Bytes as text if they're printable UTF-8 - else None."""
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return None
+    return text if text and all(ch.isprintable() or ch in '\t\r\n' for ch in text) else None
+
+
+def _tns_dechunk(data, at):
+    """A long TTC string (one past its 0xfe): its chunks, each led by its
+    length, to the empty one that ends them."""
+    out, end = bytearray(), len(data)
+    while at < end and data[at]:
+        out += data[at + 1:at + 1 + data[at]]
+        at += 1 + data[at]
+    return bytes(out)
+
+
+def _tns_sql(data):
+    """The SQL a client's call carries - the longest length-prefixed string
+    (or chunked one) starting like a statement - or, failing that, a run
+    of text that does, after binary (newer clients send it unprefixed,
+    its length given earlier in the call) - or None."""
+    if not _TNS_SQL.search(data.decode('latin-1')):
+        return None
+    best = None
+    for i, length in enumerate(data):
+        if i and 0x20 <= length < 0x7f and 0x20 <= data[i - 1] < 0x7f:
+            continue        # (a letter inside text, not a length before it)
+        raw = _tns_dechunk(data, i + 1) if length == 0xfe else data[i + 1:i + 1 + length] if length else b''
+        if len(raw) < 4 or (best and len(raw) <= len(best)) or (length != 0xfe and len(raw) != length):
+            continue
+        text = _tns_text(raw[:-1] if raw.endswith(b'\x00') else raw)     # (older clients count a NUL)
+        if text and _TNS_SQL.match(text) and (not text.lstrip().upper().startswith('WITH') or
+                                              re.search(r'\bSELECT\b', text, re.I)):
+            best = text
+    if best is None:
+        for match in re.finditer(rb'(?<![\x20-\x7e])[\x20-\x7e\t\r\n]{6,}', data):
+            text = match.group().decode()
+            if (not best or len(text) > len(best)) and _TNS_SQL.match(text) and (
+                    not text.lstrip().upper().startswith('WITH') or re.search(r'\bSELECT\b', text, re.I)):
+                best = text
+    return best.strip() if best else None
+
+
+def _tns_value(data, at):
+    """The printable value after a login key: its length (one byte) comes
+    after up to five bytes of the value's encoded length."""
+    for skip in range(6):
+        if at + skip >= len(data):
+            break
+        length = data[at + skip]
+        value = data[at + skip + 1:at + skip + 1 + length]
+        if length and len(value) == length:
+            text = _tns_text(value)
+            if text is not None:
+                return '' if text.startswith('AUTH_') else text
+    return ''
+
+
+def _tns_login(data):
+    """A login message's (user, {key: value}): its AUTH_ keys, each led by
+    its own length - and the user, the length-prefixed name just before
+    the first of them (a client's), or None."""
+    pairs, first = {}, None
+    for match in re.finditer(rb'AUTH_[A-Z0-9_]+', data):
+        # (its length says where the name ends: a value's length can follow
+        # as a letter - 0x48 is H)
+        length = data[match.start() - 1] if match.start() else 0
+        if not 5 < length <= len(match.group()):
+            continue
+        if first is None:
+            first = match.start() - 1
+        pairs.setdefault(match.group()[:length].decode(), _tns_value(data, match.start() + length))
+    user = None
+    for gap in range(6):
+        end = (first or 0) - gap
+        for length in range(1, min(end, 129)):
+            start = end - length
+            if start > 0 and data[start - 1] == length:
+                name = _tns_text(data[start:end])
+                if name and re.fullmatch(r'[\w$#@."-]+', name) and not name.startswith('AUTH_'):
+                    user = name
+                    break
+        if user or first is None:
+            break
+    return user, pairs
+
+
+def _tns_descriptor(text):
+    """A connect descriptor's (KEY=value) pairs, the first of each key -
+    but the client's PROGRAM, HOST and USER from its CID, whose HOST isn't
+    the ADDRESS's (the server's)."""
+    pairs = {}
+    text = text or ''
+    cid = re.search(r'\(\s*CID\s*=((?:\([^()]*\))*)\)', text, re.I)
+    if cid:
+        pairs.update(('CID_' + k, v) for k, v in _tns_descriptor(cid.group(1)).items())
+    for key, value in re.findall(r'\(\s*([A-Za-z_]+)\s*=\s*([^()]*?)\s*\)', text):
+        pairs.setdefault(key.upper(), value)
+    return pairs
+
+
+def _tns_vsnnum(text):
+    """A listener's VSNNUM as its version: 153092352 -> 9.2.0.1.0."""
+    n = _int(_tns_descriptor(text).get('VSNNUM'))
+    if not n:
+        return None
+    return f'{n >> 24}.{n >> 20 & 0xf}.{n >> 12 & 0xff}.{n >> 8 & 0xf}.{n & 0xff}'
+
+
+def _tns_verb(statement):
+    """A statement's kind: its first word - and for DDL the object's kind
+    too (CREATE USER, DROP TABLE, CREATE OR REPLACE PROCEDURE)."""
+    words = statement.upper().split()
+    if words[0] in _TNS_OBJECT_VERBS and len(words) > 1:
+        rest = words[1:4] if words[1:3] == ['OR', 'REPLACE'] else words[1:2]
+        if rest and rest[-1] in ('PUBLIC', 'GLOBAL', 'UNIQUE', 'BITMAP') and len(words) > len(rest) + 1:
+            rest = words[1:len(rest) + 2]
+        return ' '.join([words[0]] + rest)
+    return words[0]
+
+
+class _TNSConnection:
+    __slots__ = ('flow', 'first', 'client', 'body', 'statements', 'waiting', 'logging_in')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.client = None
+        self.body = {'statements': 0}
+        self.statements = {}      # statement -> its record's [when, body]
+        self.waiting = None       # the statement whose answer is next
+        self.logging_in = False   # a login's second message sent, not yet answered
+
+
+class TNS:
+    """Oracle TNS - see the comment above."""
+    event_type = 'tns'
+    app_protos = ('tns',)
+    fields = ('tns.type', 'tns.version', 'tns.connect_data', 'tns.accept_data', 'tns.refuse_data',
+              'tns.redirect_data', 'tns.data_setp_req.cli_plat', 'tns.data_opi.vers2.banner', '@tns')
+
+    def __init__(self):
+        self.connections = {}     # flow key -> _TNSConnection
+
+    def feed(self, pkt, v):
+        if not v['tns.type']:
+            return
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _TNSConnection(pkt.flow, pkt.when)
+        body = conn.body
+        types = [_int(t) for t in v['tns.type']]
+        if 1 in types and conn.client is None:
+            conn.client = pkt.src
+            descriptor = _tns_descriptor(_first(v['tns.connect_data']))
+            for key, name in (('SERVICE_NAME', 'service_name'), ('SID', 'sid'), ('CID_PROGRAM', 'client_program'),
+                              ('CID_HOST', 'client_host'), ('CID_USER', 'client_user'), ('COMMAND', 'command')):
+                if descriptor.get(key):
+                    body[name] = descriptor[key][:_TNS_TEXT_MAX]
+            if v['tns.version']:
+                body['version'] = _int(v['tns.version'][0])
+        from_client = pkt.src == (conn.client or pkt.flow.client)
+        self._listener(body, types, v)
+        if from_client and v['tns.data_setp_req.cli_plat']:
+            body.setdefault('client_platform', v['tns.data_setp_req.cli_plat'][0])
+        if v['tns.data_opi.vers2.banner']:
+            body.setdefault('banner', v['tns.data_opi.vers2.banner'][0].replace('\\n', '\n').split('\n')[0])
+        for kind, raw in zip(types, v['@tns']):
+            if kind == 6:
+                data = _hex(raw)
+                if from_client:
+                    self._call(conn, pkt.when, data)
+                else:
+                    self._reply(conn, data)
+
+    @staticmethod
+    def _listener(body, types, v):
+        if 'result' in body:
+            return
+        if 2 in types:
+            body['result'] = 'accepted'
+            if body.get('command') and v['tns.accept_data']:
+                body['response'] = v['tns.accept_data'][0][:_TNS_TEXT_MAX]
+        elif 4 in types:
+            refuse = _first(v['tns.refuse_data'])
+            error = _tns_descriptor(refuse).get('ERR')
+            # (a listener answers a command with a refuse - ERR=0 when it's done)
+            body['result'] = 'answered' if body.get('command') and error in (None, '0') else 'refused'
+            if error and error != '0':
+                body['error'] = f'ORA-{int(error):05d}' if error.isdigit() else error
+            version = _tns_vsnnum(refuse)
+            if version:
+                body['listener_version'] = version
+            if body.get('command'):
+                body['response'] = refuse[:_TNS_TEXT_MAX]
+        elif 5 in types:
+            body['result'] = 'redirected'
+            body['redirect'] = _first(v['tns.redirect_data'])[:_TNS_TEXT_MAX]
+
+    def _call(self, conn, when, data):
+        body = conn.body
+        if b'AUTH_' in data:
+            user, pairs = _tns_login(data)
+            if user:
+                body.setdefault('db_user', user)
+            for key, name in _TNS_LOGIN_KEYS.items():
+                if pairs.get(key):
+                    body.setdefault(name, pairs[key][:_TNS_TEXT_MAX])
+            if 'AUTH_PASSWORD' in pairs:
+                conn.logging_in = True
+            return
+        statement = _tns_sql(data)
+        if not statement:
+            return
+        body['statements'] += 1
+        record = conn.statements.get(statement)
+        if record is None:
+            if len(conn.statements) >= _TNS_STATEMENTS_MAX:
+                body['statements_not_kept'] = body.get('statements_not_kept', 0) + 1
+                conn.waiting = None
+                return
+            shown = _TNS_IDENTIFIED.sub(r'\1***', statement)
+            record = conn.statements[statement] = [when, {'statement': shown[:_TNS_STATEMENT_MAX],
+                                                          'verb': _tns_verb(statement), 'count': 0}]
+            password = _TNS_IDENTIFIED.search(statement)
+            if password:
+                record[1]['password'] = password.group(2).strip('"')
+        record[1]['count'] += 1
+        conn.waiting = record[1]
+
+    def _reply(self, conn, data):
+        body = conn.body
+        errors = [(code.decode(), (b'ORA-' + code + b': ' + text).decode('utf-8', 'replace').strip())
+                  for code, text in _TNS_ORA.findall(data)]
+        errors = [(code, text[:_TNS_TEXT_MAX]) for code, text in errors if code != _TNS_NO_DATA]
+        if b'AUTH_' in data:
+            _, pairs = _tns_login(data)
+            for key, name in _TNS_SERVER_KEYS.items():
+                if pairs.get(key):
+                    body.setdefault(name, pairs[key][:_TNS_TEXT_MAX])
+            if conn.logging_in and ('AUTH_SESSION_ID' in pairs or 'AUTH_VERSION_NO' in pairs):
+                body['login'] = 'succeeded'
+                body.pop('login_error', None)
+                conn.logging_in = False
+        if conn.logging_in and errors:
+            body['login'], body['login_error'] = 'failed', errors[0][1]
+            conn.logging_in = False
+            return
+        for code, _ in errors:
+            counts = body.setdefault('errors', {})
+            counts[f'ORA-{code}'] = counts.get(f'ORA-{code}', 0) + 1
+        if conn.waiting is not None:
+            conn.waiting.setdefault('result', errors[0][1] if errors else 'ok')
+            conn.waiting = None
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            body = dict(conn.body)
+            body.setdefault('result', 'no response' if conn.client else 'no connect seen')
+            if body.get('login') is None and conn.logging_in:
+                body['login'] = 'no response'
+            records.append((conn.flow, conn.first, 'tns', body))
+            for when, statement in conn.statements.values():
+                statement = dict(statement, result=statement.get('result', 'no response'))
+                for key in ('db_user', 'service_name', 'sid'):
+                    if key in body:
+                        statement[key] = body[key]
+                records.append((conn.flow, when, 'tns_statement', statement))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -4619,7 +4924,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).
