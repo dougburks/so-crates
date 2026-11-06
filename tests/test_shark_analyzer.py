@@ -738,6 +738,69 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestMemcache(unittest.TestCase):
+    """tests/protocol_fixtures.write_memcache_pcap: one record per
+    memcached connection or UDP exchange - with what Suricata 8.0.8 logged
+    for the capture (tests/data/memcache_fixture.eve.json): flows it gives
+    no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_memcache_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'memcache.pcap')
+        write_memcache_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.exchanges = {r['src_port']: r['memcache'] for r in cls.records if r['event_type'] == 'memcache'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_text_session(self):
+        self.assertEqual(self.exchanges[41600], {
+            'commands': {'version': 1, 'set': 1, 'get': 1, 'incr': 2, 'add': 1, 'delete': 1, 'flush_all': 1},
+            'keys': ['session:4711', 'hits'], 'encoding': 'text', 'answered': True, 'version': '1.6.38',
+            'not_found': 1, 'unknown': 1, 'errors': 1, 'last_error': 'ERROR', 'changes': 6,
+            'request_bytes': 157, 'response_bytes': 114})
+
+    def test_a_stored_value_is_never_read_as_commands(self):
+        self.assertEqual(self.exchanges[41601]['commands'], {'set': 1}, 'its lines say flush_all and shutdown')
+
+    def test_stats_and_the_binary_protocol(self):
+        self.assertEqual({k: self.exchanges[41602].get(k) for k in ('commands', 'stats', 'version', 'answered')},
+                         {'commands': {'stats': 1}, 'stats': ['stats'], 'version': '1.6.38', 'answered': True})
+        self.assertEqual({k: self.exchanges[41603].get(k) for k in ('commands', 'keys', 'encoding', 'version', 'not_found')},
+                         {'commands': {'version': 1, 'set': 1, 'get': 1}, 'keys': ['bin:key', 'nope'],
+                          'encoding': 'binary', 'version': '1.6.38', 'not_found': 1})
+
+    def test_udp_amplification_and_probes(self):
+        reflected = self.exchanges[41700]
+        self.assertEqual((reflected['stats'], reflected['request_bytes'], reflected['amplification']),
+                         (['stats items'], 21, round(reflected['response_bytes'] / 21, 1)))
+        self.assertGreater(reflected['amplification'], 500, 'three datagrams back for one')
+        self.assertEqual((self.exchanges[41800]['answered'], 'amplification' in self.exchanges[41800]), (False, False))
+        self.assertNotIn(41801, self.exchanges, 'random bytes to the port')
+        self.assertNotIn(11211, self.exchanges, "random bytes from it, which start like incr's answer")
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('memcache_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (8, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'memcache_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'memcache.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('memcache'), 6)
+        self.assertNotIn('conn_memcache', counts, 'records, not a connection card')
+        self.assertNotIn(db.PROBED_CONNECTION_TYPE, counts, 'nor are the random bytes a probe')
+
+
 class TestTNS(unittest.TestCase):
     """tests/protocol_fixtures.write_tns_pcap: one record per Oracle TNS
     connection and per distinct statement - with what Suricata 8.0.8
@@ -2572,19 +2635,19 @@ class TestAnswered(unittest.TestCase):
         self.assertEqual(flows['10.9.0.2']['flow']['pkts_toclient'], 1, 'the ICMP error still counts as a packet back')
 
     def test_the_merge_gives_the_protocols_nobody_answered_one_card(self):
-        """Echo was answered once, so it keeps its card; memcached's probes
+        """Echo was answered once, so it keeps its card; chargen's probes
         got only an ICMP error, so they're filed under Probed Only - with
         their own app_proto."""
         from tests.pcap_fixtures import write_pcap
         from tests.protocol_fixtures import _icmp_unreachable, _udp_packet
         echo = b'hello'
-        memcache = b'\x00\x01\x00\x00\x00\x01\x00\x00stats\r\n'
-        probe = _udp_packet('10.9.0.1', '10.9.0.2', 40005, 11211, memcache)
+        chargen = b'x'
+        probe = _udp_packet('10.9.0.1', '10.9.0.2', 40005, 19, chargen)
         packets = [_udp_packet('10.9.0.1', '10.9.0.3', 40002, 7, echo),
                    _udp_packet('10.9.0.3', '10.9.0.1', 7, 40002, echo),
                    _udp_packet('10.9.0.1', '10.9.0.4', 40003, 7, echo),
                    probe, _icmp_unreachable('10.9.0.2', '10.9.0.1', probe),
-                   _udp_packet('10.9.0.1', '10.9.0.5', 40006, 11211, memcache)]
+                   _udp_packet('10.9.0.1', '10.9.0.5', 40006, 19, chargen)]
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
         pcap = os.path.join(d, 'probes.pcap')
@@ -2594,14 +2657,14 @@ class TestAnswered(unittest.TestCase):
         events_db = os.path.join(d, 'events.db')
         db.create_sqlite_db(events_db, eve)
         self.assertTrue(shark_analyzer.build(d, pcap))
-        self.assertEqual(shark_analyzer.probe_only_protocols(shark_analyzer.shark_db_path(d)), {'memcache'})
+        self.assertEqual(shark_analyzer.probe_only_protocols(shark_analyzer.shark_db_path(d)), {'chargen'})
         shark_analyzer.merge(d)
         counts = db.get_event_types_sqlite(events_db)
         self.assertEqual((counts.get('conn_echo'), counts.get(db.PROBED_CONNECTION_TYPE)), (2, 2))
-        self.assertNotIn('conn_memcache', counts)
+        self.assertNotIn('conn_chargen', counts)
         probed = db.query_events_sqlite(events_db, db.PROBED_CONNECTION_TYPE)
         self.assertEqual(sorted((e['app_proto'], e['shark']['answered']) for e in probed),
-                         [('memcache', 'ICMP error only'), ('memcache', 'no')])
+                         [('chargen', 'ICMP error only'), ('chargen', 'no')])
 
 
 class TestFlowOrientation(unittest.TestCase):
@@ -3139,10 +3202,10 @@ class TestMergeRows(unittest.TestCase):
         self.assertEqual(len(list(shark_analyzer.merge_rows(rows, self.SURICATA))), 2)
 
     def test_flows_become_connection_rows_only_for_protocols_with_nothing_else(self):
-        self.assertEqual(self._kept([_row('flow', app='memcache'), _row('flow', app='wol'),
+        self.assertEqual(self._kept([_row('flow', app='tacplus'), _row('flow', app='wol'),
                                      _row('flow', app='telnet'), _row('flow', app='http'), _row('flow', app='arp'),
                                      _row('flow', app='s7comm'), _row('flow', app='syslog'), _row('flow', app='')]),
-                         [('conn_memcache', 'memcache'), ('conn_wol', 'wol')],
+                         [('conn_tacplus', 'tacplus'), ('conn_wol', 'wol')],
                          "telnet, http and arp are Suricata's; s7comm and syslog have records; '' is no protocol")
 
     def test_nothing_on_a_flow_suricata_gave_a_protocol(self):

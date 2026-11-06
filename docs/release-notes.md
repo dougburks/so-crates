@@ -53,6 +53,11 @@
   for each distinct SQL statement, with its result and how many times it
   was sent; a password set with IDENTIFIED BY is masked in it. These
   were connection cards before
+- **memcached** - a record for each connection or UDP exchange: the
+  commands and keys, the stats asked for, the server's version, its
+  errors, and the bytes each way - over UDP, how many times the request
+  came back amplified. Text and binary protocol both. These were
+  connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -65,7 +70,9 @@
   never answers is low. An Oracle user or role created, changed or
   granted, or a table or other object dropped, is high; any other Oracle
   write or change, and a command to the listener, are medium; a failed
-  Oracle login, and a SID or service the listener doesn't know, are low
+  Oracle login, and a SID or service the listener doesn't know, are low.
+  A memcached server answering over UDP (an amplifier), and memcached
+  flushed or shut down, are high; memcached stats answered is low
 
 ### Themes
 

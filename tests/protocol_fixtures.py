@@ -937,6 +937,66 @@ def write_rsh_pcap(path):
     write_pcap(path, rsh_packets())
 
 
+# ---------------------------------------------------------------- memcached
+#
+# Shaped on a capture of memcached 1.6.38. CLIENT:41600 uses the text
+# protocol: version, a session stored, read and deleted, a counter, a
+# command memcached doesn't know, and flush_all. CLIENT:41601 stores a
+# 3000-byte value whose lines look like commands. CLIENT:41602 asks for
+# stats over TCP, CLIENT:41603 speaks the binary protocol. Over UDP,
+# MEMCACHE_VICTIM:41700 (a forged source, as an attack's would be) asks
+# for stats and gets three datagrams back; a scanner's stats items gets
+# nothing, another sends random bytes to the port, and one random-byte
+# packet comes from port 11211 itself.
+
+MEMCACHE_SERVER, MEMCACHE_VICTIM, MEMCACHE_SCANNER = '198.51.100.97', '10.1.0.81', '10.1.0.82'
+
+
+def _memcache_udp(request_id, seq, total, payload):
+    return struct.pack('!HHHH', request_id, seq, total, 0) + payload
+
+
+def _memcache_binary(magic, opcode, key=b'', extras=b'', value=b'', status=0, opaque=0):
+    return struct.pack('!BBHBBHIIQ', magic, opcode, len(key), len(extras), 0, status,
+                       len(key) + len(extras) + len(value), opaque, 0) + extras + key + value
+
+
+def memcache_packets():
+    text = [(True, b'version\r\n'), (False, b'VERSION 1.6.38\r\n'),
+            (True, b'set session:4711 0 3600 16\r\n{"user":"alice"}\r\n'), (False, b'STORED\r\n'),
+            (True, b'get session:4711\r\n'), (False, b'VALUE session:4711 0 16\r\n{"user":"alice"}\r\nEND\r\n'),
+            (True, b'incr hits 1\r\n'), (False, b'NOT_FOUND\r\n'), (True, b'add hits 0 0 1\r\n5\r\n'),
+            (False, b'STORED\r\n'), (True, b'incr hits 3\r\n'), (False, b'8\r\n'),
+            (True, b'delete session:4711\r\n'), (False, b'DELETED\r\n'), (True, b'bogus\r\n'), (False, b'ERROR\r\n'),
+            (True, b'flush_all\r\n'), (False, b'OK\r\n')]
+    value = (b'flush_all\r\nshutdown\r\n' * 150)[:3000]
+    blob = [(True, b'set blob 0 0 3000\r\n' + value + b'\r\n'), (False, b'STORED\r\n')]
+    stats_reply = b''.join(b'STAT %s %s\r\n' % (k, v) for k, v in (
+        (b'pid', b'1'), (b'uptime', b'86400'), (b'version', b'1.6.38'), (b'curr_connections', b'12'),
+        (b'curr_items', b'52310'), (b'total_items', b'913204'), (b'bytes', b'48211904'))) + b'END\r\n'
+    stats = [(True, b'stats\r\n'), (False, stats_reply)]
+    binary = [(True, _memcache_binary(0x80, 0x0b, opaque=1)), (False, _memcache_binary(0x81, 0x0b, value=b'1.6.38', opaque=1)),
+              (True, _memcache_binary(0x80, 0x01, b'bin:key', struct.pack('!II', 0, 0), b'binary value', opaque=2)),
+              (False, _memcache_binary(0x81, 0x01, opaque=2)),
+              (True, _memcache_binary(0x80, 0x00, b'nope', opaque=3)),
+              (False, _memcache_binary(0x81, 0x00, value=b'Not found', status=1, opaque=3))]
+    big = b''.join(b'STAT items:%d:number %d\r\n' % (i, i * 7) for i in range(1, 400)) + b'END\r\n'
+    parts = [big[i:i + 1400] for i in range(0, len(big), 1400)]
+    out = (tcp_segments(CLIENT, MEMCACHE_SERVER, 41600, 11211, text) + tcp_segments(CLIENT, MEMCACHE_SERVER, 41601, 11211, blob)
+           + tcp_segments(CLIENT, MEMCACHE_SERVER, 41602, 11211, stats) + tcp_segments(CLIENT, MEMCACHE_SERVER, 41603, 11211, binary))
+    udp = [(MEMCACHE_VICTIM, MEMCACHE_SERVER, 41700, 11211, _memcache_udp(0x1234, 0, 1, b'stats items\r\n'))]
+    udp += [(MEMCACHE_SERVER, MEMCACHE_VICTIM, 11211, 41700, _memcache_udp(0x1234, i, len(parts), part))
+            for i, part in enumerate(parts)]
+    udp += [(MEMCACHE_SCANNER, MEMCACHE_SERVER, 41800, 11211, _memcache_udp(0, 0, 1, b'stats items\r\n')),
+            (MEMCACHE_SCANNER, MEMCACHE_SERVER, 41801, 11211, bytes.fromhex('392e3419365d673a1a1d6d75570211')),
+            (MEMCACHE_SCANNER, MEMCACHE_SERVER, 11211, 8081, bytes.fromhex('5c2e50616a0e557f330a1f13acef'))]
+    return out + [_udp_packet(*p) for p in udp]
+
+
+def write_memcache_pcap(path):
+    write_pcap(path, memcache_packets())
+
+
 # ---------------------------------------------------------------- Oracle TNS
 #
 # CLIENT:41500 connects to TNS_SERVER's listener for service FIXDB and logs

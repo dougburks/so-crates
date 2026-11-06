@@ -2487,6 +2487,7 @@
                 pn_dcp: '#26c6da',
                 mongodb: '#66bb6a',
                 tns: '#ef6c00',
+                memcache: '#26a69a',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -4823,6 +4824,28 @@
             return html;
         }
 
+        // tshark's memcached records (shark_protocols.Memcache): one per
+        // connection or UDP exchange.
+        function renderMemcacheDetails(e) {
+            const m = e.memcache || {};
+            let html = htmlSection('memcached Details', COLORS.EVENT.memcache);
+            html += htmlRowText('Commands', Object.entries(m.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Keys', (m.keys || []).join(', '), 'mono');
+            html += htmlRowText('Stats Asked', (m.stats || []).join(', '));
+            html += htmlRowText('Encoding', m.encoding);
+            html += htmlRowText('Server Version', m.version);
+            html += htmlRowText('Answered', m.answered ? 'yes' : 'no');
+            html += htmlRowText('Login', m.login);
+            if (m.changes) html += htmlRowText('Changes', m.changes.toLocaleString());
+            if (m.not_found) html += htmlRowText('Not Found', m.not_found.toLocaleString());
+            if (m.errors) html += htmlRowText('Errors', `${m.errors.toLocaleString()} (last: ${m.last_error || ''})`);
+            if (m.unknown) html += htmlRowText('Unrecognized', `${m.unknown.toLocaleString()} lines`);
+            html += htmlRowText('Request Bytes', (m.request_bytes || 0).toLocaleString());
+            html += htmlRowText('Response Bytes', (m.response_bytes || 0).toLocaleString());
+            if (m.amplification !== undefined) html += htmlRowText('Amplification', `${m.amplification.toLocaleString()}× (UDP)`);
+            return html;
+        }
+
         // tshark's Oracle TNS records (shark_protocols.TNS): a connection,
         // and each distinct SQL statement on it.
         function renderTnsDetails(e) {
@@ -5434,6 +5457,7 @@
             pn_device: renderPnDeviceDetails,
             mongodb_action: renderMongodbActionDetails,
             tns: renderTnsDetails,
+            memcache: renderMemcacheDetails,
             tns_statement: renderTnsStatementDetails,
             bacnet_property: renderBacnetPropertyDetails,
             bacnet_device: renderBacnetDeviceDetails,
@@ -8554,6 +8578,7 @@
             pn_dcp: 'PROFINET DCP',
             mongodb: 'MongoDB',
             tns: 'Oracle TNS',
+            memcache: 'memcached',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -9724,6 +9749,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Driver', 'User', 'Login', 'Databases', 'Server Version', 'Answered'];
                 case 'mongodb_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Database', 'Collection', 'Count', 'Result'];
+                case 'memcache':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Keys', 'Server Version', 'Answered', 'Req Bytes', 'Resp Bytes', 'Amplification'];
                 case 'tns':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'DB User', 'OS User', 'Program', 'Result', 'Login', 'Statements'];
                 case 'tns_statement':
@@ -10213,6 +10240,7 @@
                 case 'mongodb_action':
                 case 'tns':
                 case 'tns_statement':
+                case 'memcache':
                 case 'rsh':
                 case 'openvpn':
                 case 'wireguard':
@@ -12965,6 +12993,12 @@
                 case 'DB User': return (e.tns || e.tns_statement)?.db_user || '';
                 case 'OS User': return e.tns?.os_user || e.tns?.client_user || '';
                 case 'Statements': return e.tns?.statements !== undefined ? String(e.tns.statements) : '';
+                // memcached: a connection's or UDP exchange's
+                case 'Commands': return Object.keys(e.memcache?.commands || {}).join(', ');
+                case 'Keys': return (e.memcache?.keys || []).join(', ');
+                case 'Req Bytes': return e.memcache ? String(e.memcache.request_bytes || 0) : '';
+                case 'Resp Bytes': return e.memcache ? String(e.memcache.response_bytes || 0) : '';
+                case 'Amplification': return e.memcache?.amplification !== undefined ? String(e.memcache.amplification) : '';
                 case 'Verb': return e.tns_statement?.verb || '';
                 case 'Statement': return (e.tns_statement?.statement || '').slice(0, 200);
                 case 'Collection': return e.mongodb_action?.collection || '';
@@ -13166,6 +13200,7 @@
                 }
                 case 'Server Version': {
                     if (e.mongodb) return e.mongodb.server_version || '';
+                    if (e.memcache) return e.memcache.version || '';
                     if (e.event_type === 'rfb') {
                         const spv = e.rfb?.server_protocol_version;
                         return spv ? `${spv.major}.${spv.minor}` : '';
@@ -13238,7 +13273,10 @@
                 }
                 case 'Event': return e.anomaly?.event || '';
                 case 'Layer': return e.anomaly?.layer || '';
-                case 'Answered': return e.mongodb ? (e.mongodb.answered ? 'yes' : 'no') : e.shark?.answered || '';
+                case 'Answered': {
+                    const r = e.mongodb || e.memcache;
+                    return r ? (r.answered ? 'yes' : 'no') : e.shark?.answered || '';
+                }
                 case 'App Proto': return e.event_type === 'anomaly' ? (e.anomaly?.app_proto || '') : (e.app_proto || '');
                 case 'Stratum': return e.ntp?.stratum !== undefined ? String(e.ntp.stratum) : '';
                 case 'Reference ID': return e.ntp?.reference_id || '';

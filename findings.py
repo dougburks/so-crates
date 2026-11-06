@@ -268,6 +268,19 @@ RULES = (
          lambda b: _join(b.get('command'), b.get('user') or b.get('role'), _list(b.get('roles', ())),
                          ('-', b.get('result'))),
          'A user or role created, changed or given more rights - a way back in that outlasts the session.'),
+    Rule('memcache_amplifier', 'high', 'memcache', 'memcached answering over UDP',
+         f"{_j('memcache', 'amplification')} IS NOT NULL",
+         lambda b: f"{b['amplification']:g}x amplification - {b.get('response_bytes') or 0:,} bytes back for "
+                   f"{b.get('request_bytes') or 0:,}",
+         "A memcached server answered over UDP - the amplifier of the 2018 attacks (CVE-2018-1000115): a "
+         "request's source address forged, its reply goes to the victim, up to thousands of times larger. "
+         'Turn UDP off (-U 0) or keep the port off the internet.'),
+    Rule('memcache_flush', 'high', 'memcache', 'memcached flushed or shut down',
+         f"({_j('memcache', 'commands.flush_all')} IS NOT NULL OR {_j('memcache', 'commands.shutdown')} IS NOT NULL)",
+         lambda b: _join(_list([c for c in ('flush_all', 'shutdown') if c in (b.get('commands') or {})]),
+                         ('-', 'answered' if b.get('answered') else 'no answer')),
+         'Every item in the cache dropped, or the server stopped - what an application does rarely, and '
+         'anyone who reaches an open memcached can do.'),
     Rule('tns_account_change', 'high', 'tns_statement', 'Oracle user or privilege created or granted',
          _in('tns_statement', 'verb', list(_TNS_ACCOUNT)),
          _tns_statement,
@@ -414,6 +427,11 @@ RULES = (
          "A peer kept trying to open a WireGuard tunnel that nothing answered - a VPN configured to reach "
          "out, and blocked or gone, or a peer whose key the other end doesn't accept. (A scanner's probe is "
          "one attempt, and isn't listed.)"),
+    Rule('memcache_stats', 'low', 'memcache', 'memcached stats answered',
+         f"{_j('memcache', 'commands.stats')} IS NOT NULL AND {_j('memcache', 'answered')} = 1",
+         lambda b: _join(_list(b.get('stats', ())), ('- version', b.get('version'))),
+         'A memcached server told a client its stats - version, uptime, connections, item counts, and with '
+         "stats items or cachedump, what's stored. Routine from monitoring, a survey from anywhere else."),
     Rule('tns_login_failed', 'low', 'tns', 'Oracle login failed',
          f"{_j('tns', 'login')} = 'failed'",
          lambda b: _join(b.get('db_user'), ('-', b.get('login_error'))),

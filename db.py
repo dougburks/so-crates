@@ -1732,6 +1732,15 @@ AGGREGATION_JSON_PATHS = {
         'Server Version': ['$.mongodb.server_version'],
         'Answered': ['$.mongodb.answered'],
     },
+    'memcache': {
+        'Commands': ['$.memcache.commands'],
+        'Keys': ['$.memcache.keys'],
+        'Server Version': ['$.memcache.version'],
+        'Answered': ['$.memcache.answered'],
+        'Req Bytes': ['$.memcache.request_bytes'],
+        'Resp Bytes': ['$.memcache.response_bytes'],
+        'Amplification': ['$.memcache.amplification'],
+    },
     'tns': {
         'Service': ['$.tns.service_name', '$.tns.sid'],
         'DB User': ['$.tns.db_user'],
@@ -1901,6 +1910,9 @@ AGGREGATION_TRUNCATE = {
 # Value transforms beyond plain extraction, matching extractValue's own
 # formatting exactly (e.g. "Sev " + severity, or a boolean -> Yes/No).
 AGGREGATION_VALUE_TRANSFORMS = {
+    # true/false as extractValue() shows them
+    ('mongodb', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('memcache', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('alert', 'Severity'): lambda expr: f"'Sev ' || COALESCE({expr}, 0)",
     # Classifies signature_id into the curated ruleset it most likely came
     # from - see suricata_sid_ranges.py for how SURICATA_SID_RANGES was
@@ -1947,8 +1959,11 @@ AGGREGATION_CAST_TEXT = {
 AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
-    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'),
+    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'),
 }
+# Object-valued columns shown as their keys, joined the same way (a count
+# per name: memcached's commands)
+AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands')}
 
 
 def _aggregation_expr(event_type, label, paths, prefix=''):
@@ -1961,6 +1976,8 @@ def _aggregation_expr(event_type, label, paths, prefix=''):
     """
     if (event_type, label) in AGGREGATION_ARRAY_JOIN_COLUMNS:
         expr = f"(SELECT group_concat(value, ', ') FROM json_each({prefix}json_data, '{paths[0]}'))"
+    elif (event_type, label) in AGGREGATION_KEY_JOIN_COLUMNS:
+        expr = f"(SELECT group_concat(key, ', ') FROM json_each({prefix}json_data, '{paths[0]}'))"
     else:
         parts = [f"json_extract({prefix}json_data, '{p}')" for p in paths]
         expr = parts[0] if len(parts) == 1 else f"COALESCE({', '.join(parts)})"

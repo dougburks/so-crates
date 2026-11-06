@@ -2918,6 +2918,203 @@ class TNS:
         return records
 
 
+# ---------------------------------------------------------------- memcached
+#
+# memcached (TCP or UDP 11211), which Suricata doesn't parse: a cache with
+# no login (but the binary protocol's rarely used SASL), whose UDP port
+# answered anyone - a request's source address spoofed, its stats or a
+# large value went to the victim, up to tens of thousands of times the
+# request's size: the 2018 attacks' amplifier (CVE-2018-1000115). One
+# record per connection or UDP exchange: the commands and keys, the
+# version the server gave, its errors, and the bytes each way - for UDP,
+# the amplification. Read from the messages' bytes, text or binary
+# protocol: tshark decodes neither over UDP (each datagram leads with an
+# 8-byte frame header), and leaves gaps in TCP. A stored or returned value
+# is skipped by its length - its contents are never read as commands -
+# and a packet that's neither (scanners send random bytes to the port)
+# makes no record.
+
+_MEMCACHE_COMMANDS = frozenset(
+    'get gets gat gats set add replace append prepend cas delete incr decr touch stats flush_all version '
+    'verbosity quit shutdown cache_memlimit slabs lru_crawler lru watch mn mg ms md ma me misbehave'.split())
+_MEMCACHE_STORAGE = frozenset('set add replace append prepend cas'.split())
+_MEMCACHE_REPLIES = frozenset('VALUE END STORED NOT_STORED EXISTS NOT_FOUND DELETED TOUCHED OK ERROR CLIENT_ERROR '
+                              'SERVER_ERROR STAT VERSION RESET HD VA EN NF NS EX MN'.split())
+_MEMCACHE_CHANGES = frozenset('set add replace append prepend cas delete incr decr touch flush_all ms md ma'.split())
+_MEMCACHE_OPCODES = {0x00: 'get', 0x01: 'set', 0x02: 'add', 0x03: 'replace', 0x04: 'delete', 0x05: 'incr',
+                     0x06: 'decr', 0x07: 'quit', 0x08: 'flush_all', 0x09: 'get', 0x0a: 'noop', 0x0b: 'version',
+                     0x0c: 'get', 0x0d: 'get', 0x0e: 'append', 0x0f: 'prepend', 0x10: 'stats', 0x11: 'set',
+                     0x12: 'add', 0x13: 'replace', 0x14: 'delete', 0x15: 'incr', 0x16: 'decr', 0x17: 'quit',
+                     0x18: 'flush_all', 0x19: 'append', 0x1a: 'prepend', 0x1b: 'verbosity', 0x1c: 'touch',
+                     0x1d: 'gat', 0x1e: 'gat', 0x20: 'sasl_list_mechs', 0x21: 'sasl_auth', 0x22: 'sasl_step'}
+_MEMCACHE_STATUS = {0x01: 'key not found', 0x02: 'key exists', 0x03: 'value too large', 0x04: 'invalid arguments',
+                    0x05: 'item not stored', 0x06: 'non-numeric value', 0x20: 'authentication error',
+                    0x21: 'authentication continue', 0x81: 'unknown command', 0x82: 'out of memory'}
+_MEMCACHE_KEYS_MAX = 10
+_MEMCACHE_PORT = 11211
+
+
+class _MemcacheExchange:
+    __slots__ = ('flow', 'first', 'body', 'keys', 'skip', 'known')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'request_bytes': 0, 'response_bytes': 0}
+        self.keys = {}                 # key -> None, in first-seen order
+        self.skip = [0, 0]             # value bytes still to come: from the client, from the server
+        self.known = False             # a message of memcached's seen
+
+
+class Memcache:
+    """memcached - see the comment above."""
+    event_type = 'memcache'
+    app_protos = ('memcache',)
+    fields = ('@memcache',)
+
+    def __init__(self):
+        self.exchanges = {}            # flow key -> _MemcacheExchange
+
+    def feed(self, pkt, v):
+        if not v['@memcache']:
+            return
+        exchange = self.exchanges.get(pkt.flow.key)
+        if exchange is None:
+            exchange = self.exchanges[pkt.flow.key] = _MemcacheExchange(pkt.flow, pkt.when)
+        if _MEMCACHE_PORT in (pkt.sport, pkt.dport):
+            from_client = pkt.dport == _MEMCACHE_PORT and pkt.sport != _MEMCACHE_PORT
+        else:
+            from_client = pkt.src == pkt.flow.client
+        udp = pkt.flow.proto == 'UDP'
+        for raw in v['@memcache']:
+            data = _hex(raw)
+            exchange.body['request_bytes' if from_client else 'response_bytes'] += len(data)
+            if udp:
+                if len(data) < 8:
+                    continue
+                if from_client:
+                    exchange.skip[0] = 0          # each request is whole in its datagram
+                data = data[8:]
+            self._chunk(exchange, data, from_client)
+
+    def _chunk(self, exchange, data, from_client):
+        side = 0 if from_client else 1
+        at = min(exchange.skip[side], len(data))
+        exchange.skip[side] -= at
+        while at < len(data):
+            if data[at] in (0x80, 0x81):
+                at = self._binary(exchange, data, at, side)
+            else:
+                at = self._text(exchange, data, at, side)
+            if at is None:
+                return
+
+    def _binary(self, exchange, data, at, side):
+        if len(data) - at < 24:
+            return None
+        magic, opcode, keylen, extlen, _, status, bodylen = struct.unpack('!BBHBBHI', data[at:at + 12])
+        if (magic == 0x80) != (side == 0) or extlen + keylen > bodylen:
+            return None
+        body, exchange.known = exchange.body, True
+        body['encoding'] = 'binary'
+        payload = data[at + 24:at + 24 + bodylen]
+        exchange.skip[side] = bodylen - len(payload)
+        name = _MEMCACHE_OPCODES.get(opcode, f'opcode 0x{opcode:02x}')
+        key = payload[extlen:extlen + keylen]
+        value = payload[extlen + keylen:]
+        if side == 0:
+            self._command(exchange, name, [key.decode('utf-8', 'replace')] if key else [])
+        else:
+            body['answered'] = True
+            if status and status != 0x21:
+                text = _MEMCACHE_STATUS.get(status, f'status 0x{status:04x}')
+                if status == 0x01:
+                    body['not_found'] = body.get('not_found', 0) + 1
+                else:
+                    body['errors'] = body.get('errors', 0) + 1
+                    body['last_error'] = text
+            if name == 'version' and not status and value:
+                body['version'] = value.decode('utf-8', 'replace')[:64]
+            if name in ('sasl_auth', 'sasl_step') and status in (0, 0x20):
+                body['login'] = 'succeeded' if status == 0 else 'failed'
+        return at + 24 + bodylen
+
+    def _text(self, exchange, data, at, side):
+        end = data.find(b'\n', at)
+        line = data[at:end if end >= 0 else len(data)].rstrip(b'\r')
+        words = line.decode('utf-8', 'replace').split()
+        next_at = len(data) if end < 0 else end + 1
+        if not words:
+            return next_at
+        body = exchange.body
+        if side == 0:
+            name = words[0].lower()
+            if name not in _MEMCACHE_COMMANDS:
+                if exchange.known:
+                    body['unknown'] = body.get('unknown', 0) + 1
+                return None             # not memcached's - nothing more of it is read
+            exchange.known = True
+            body.setdefault('encoding', 'text')
+            keys = words[2:] if name in ('gat', 'gats') else words[1:] if name in ('get', 'gets') else \
+                words[1:2] if name not in ('stats', 'flush_all', 'version', 'verbosity', 'quit', 'shutdown') else []
+            self._command(exchange, name, keys)
+            size = _int(words[4]) if name in _MEMCACHE_STORAGE and len(words) > 4 else \
+                _int(words[2]) if name == 'ms' and len(words) > 2 else None
+            if name == 'stats':
+                asked = body.setdefault('stats', [])
+                request = ' '.join(words[:2]).lower()[:40]
+                if request not in asked and len(asked) < _MEMCACHE_KEYS_MAX:
+                    asked.append(request)
+        else:
+            reply = words[0]
+            # (a number - incr's or decr's answer - only once memcached's own
+            # messages were seen: a random byte string can start '3\n' too)
+            if reply not in _MEMCACHE_REPLIES and not (reply.isdigit() and exchange.known):
+                return None
+            exchange.known = True
+            body['answered'] = True
+            size = _int(words[3]) if reply == 'VALUE' and len(words) > 3 else \
+                _int(words[1]) if reply == 'VA' and len(words) > 1 else None
+            if reply == 'VERSION' and len(words) > 1:
+                body['version'] = words[1][:64]
+            elif reply == 'STAT' and len(words) > 2 and words[1] == 'version':
+                body['version'] = words[2][:64]
+            elif reply in ('ERROR', 'CLIENT_ERROR', 'SERVER_ERROR'):
+                body['errors'] = body.get('errors', 0) + 1
+                body['last_error'] = ' '.join(words)[:120]
+            elif reply in ('NOT_FOUND', 'EN', 'NF'):
+                body['not_found'] = body.get('not_found', 0) + 1
+        if size:
+            value_end = next_at + size + 2
+            exchange.skip[side] = max(0, value_end - len(data))
+            return min(value_end, len(data))
+        return next_at
+
+    @staticmethod
+    def _command(exchange, name, keys):
+        commands = exchange.body['commands']
+        commands[name] = commands.get(name, 0) + 1
+        for key in keys:
+            if len(exchange.keys) < _MEMCACHE_KEYS_MAX:
+                exchange.keys.setdefault(key[:250], None)
+
+    def finish(self):
+        records = []
+        for exchange in self.exchanges.values():
+            if not exchange.known:
+                continue
+            body = dict(exchange.body)
+            body.setdefault('answered', False)
+            if exchange.keys:
+                body['keys'] = list(exchange.keys)
+            changes = sum(n for c, n in body['commands'].items() if c in _MEMCACHE_CHANGES)
+            if changes:
+                body['changes'] = changes
+            if exchange.flow.proto == 'UDP' and body['answered'] and body['request_bytes']:
+                body['amplification'] = round(body['response_bytes'] / body['request_bytes'], 1)
+            records.append((exchange.flow, exchange.first, 'memcache', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -4924,7 +5121,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

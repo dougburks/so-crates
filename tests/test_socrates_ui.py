@@ -22740,13 +22740,13 @@ class TestTsharkUI(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements("""
             window.__jsdom_result = {
-                labels: [eventTypeLabel('conn_ftp-data'), eventTypeLabel('conn_memcache'), eventTypeLabel('dns')],
+                labels: [eventTypeLabel('conn_ftp-data'), eventTypeLabel('conn_tacplus'), eventTypeLabel('dns')],
                 order: sortEventTypes(['conn_s7comm', 'tls', 'conn_ftp', 'alert', 'dns']),
                 columns: getColumnsForType('conn_s7comm'),
                 flowColumns: getColumnsForType('flow'),
             };
         """)
-        self.assertEqual(result['labels'], ['FTP Data', 'MEMCACHE', 'DNS Queries'], "a known type's label, else its name in capitals")
+        self.assertEqual(result['labels'], ['FTP Data', 'TACPLUS', 'DNS Queries'], "a known type's label, else its name in capitals")
         self.assertEqual(result['order'], ['alert', 'dns', 'tls', 'conn_ftp', 'conn_s7comm'], 'after every record type')
         self.assertIn('App Proto', result['columns'])
         self.assertNotIn('State', result['columns'])
@@ -23266,6 +23266,9 @@ class TestTsharkUI(unittest.TestCase):
         'openvpn': {'event_type': 'openvpn', 'openvpn': {'stage': 'established', 'version': 'V2', 'control_protection': 'tls-auth',
                                                         'client_resets': 1, 'data_to_server': 2, 'data_to_client': 3,
                                                         'certificate': {'subject': 'CN=vpn.example', 'issuerdn': 'CN=CA'}}},
+        'memcache': {'event_type': 'memcache', 'memcache': {'commands': {'stats': 1, 'get': 2}, 'keys': ['blob'],
+                                                           'version': '1.6.38', 'answered': True, 'request_bytes': 33,
+                                                           'response_bytes': 62609, 'amplification': 1897.2}},
         'tns': {'event_type': 'tns', 'tns': {'service_name': 'FIXDB', 'db_user': 'sys', 'os_user': 'mallory',
                                              'program': 'sqlplus@attacker', 'result': 'accepted', 'login': 'succeeded',
                                              'statements': 7}},
@@ -23346,6 +23349,7 @@ class TestTsharkUI(unittest.TestCase):
         'mms': ['accepted', 'IED1LD0, IED1CTRL', 'Fixture Vendor', 'Fixture Relay'],
         'openvpn': ['established', 'V2', 'tls-auth', 'CN=vpn.example', '1', '2', '3'],
         'wireguard': ['established', '2', '2', '0', '0', '4', '5'],
+        'memcache': ['stats, get', 'blob', '1.6.38', 'yes', '33', '62609', '1897.2'],
         'tns': ['FIXDB', 'sys', 'mallory', 'sqlplus@attacker', 'accepted', 'succeeded', '7'],
         'tns_statement': ['sys', 'GRANT', 'grant dba to backdoor', 'ok', '2'],
         'rsh': ['rexec', 'operator', '', 'shutdown -r now', 's3cret', 'refused'],
@@ -23431,7 +23435,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 
