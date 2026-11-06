@@ -1037,6 +1037,52 @@ def write_hart_ip_pcap(path):
     write_pcap(path, hart_ip_packets())
 
 
+# ---------------------------------------------------------------- C37.118
+#
+# Shaped on pyPMU's PMU and PDC talking: a PDC (CLIENT:42200) asks
+# SYNPHASOR_PMU (stream 1410, station "Substation B PMU", ID 7734: three
+# voltage phasors, an analog, 16 breaker statuses, 60 Hz, 30 frames a
+# second) for its header and configuration, turns its data on - five
+# frames, one saying the PMU lost GPS time sync, one a trigger - and off.
+
+SYNPHASOR_PMU = '10.1.0.98'
+
+
+def _c37_crc(data):
+    crc = 0xffff
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (crc << 1) ^ 0x1021 if crc & 0x8000 else crc << 1
+            crc &= 0xffff
+    return crc
+
+
+def _c37(kind, body, stream=1410, soc=1700000000, fracsec=0):
+    frame = struct.pack('!HHHII', 0xaa01 | kind << 4, 14 + len(body) + 2, stream, soc, fracsec) + body
+    return frame + struct.pack('!H', _c37_crc(frame))
+
+
+def synphasor_packets():
+    name = lambda text: text.encode().ljust(16)[:16]
+    labels = ['VA', 'VB', 'VC', 'ANALOG1'] + [f'BREAKER {i} STATUS' for i in range(1, 17)]
+    config = (struct.pack('!IH', 1000000, 1) + name('Substation B PMU') + struct.pack('!HHHHH', 7734, 0x0004, 3, 1, 1)
+              + b''.join(name(n) for n in labels) + struct.pack('!III', 915527, 915527, 915527) + struct.pack('!I', 0x01000001)
+              + struct.pack('!HH', 0x0000, 0xffff) + struct.pack('!HH', 0, 1) + struct.pack('!h', 30))
+    data = lambda stat, n: _c37(0, struct.pack('!H', stat) + struct.pack('!hhhhhh', 14635, 0, -7318, -12676, -7318, 12675)
+                                + struct.pack('!hh', 2500, 0) + struct.pack('!f', 9.91) + struct.pack('!H', 1), fracsec=n * 33333)
+    command = lambda code: _c37(4, struct.pack('!H', code))
+    exchange = [(True, command(3)), (False, _c37(1, b'Hello I am a PMU at Substation B')),
+                (True, command(5)), (False, _c37(3, config)), (True, command(2))]
+    exchange += [(False, data(stat, n)) for n, stat in enumerate((0, 0, 0x2000, 0x0800, 0))]
+    exchange.append((True, command(1)))
+    return tcp_segments(CLIENT, SYNPHASOR_PMU, 42200, 4712, exchange)
+
+
+def write_synphasor_pcap(path):
+    write_pcap(path, synphasor_packets())
+
+
 # ---------------------------------------------------------------- TACACS+
 #
 # A router (TACACS_NAS) asks TACACS_SERVER over one unencrypted connection

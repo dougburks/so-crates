@@ -3676,6 +3676,128 @@ class TACACS:
         return records
 
 
+# ---------------------------------------------------------------- C37.118
+#
+# IEEE C37.118 synchrophasors (TCP 4712, UDP 4713), which Suricata doesn't
+# parse: phasor measurement units (PMUs) in substations streaming the
+# grid's voltages, currents and frequency, time-stamped by GPS, to a
+# phasor data concentrator (PDC) for wide-area monitoring and protection.
+# The PDC asks for a PMU's header and configuration, turns its data on
+# and off. One record per stream: the commands, each PMU's station name,
+# ID, channel names and nominal frequency (read from the configuration
+# frame's bytes - tshark shows CFG-1 and CFG-2's station names only in its
+# tree), the data rate, the header's text, the data frames, and how many
+# said the PMU had lost time sync, triggered, or changed configuration.
+# There's no login: anyone who reaches a PMU can read its configuration or
+# stop its data.
+
+_SYNPHASOR_FRAMES = {0: 'data', 1: 'header', 2: 'configuration 1', 3: 'configuration 2', 4: 'command',
+                     5: 'configuration 3'}
+_SYNPHASOR_PMUS_MAX = 20
+
+
+def _synphasor_config(data):
+    """A CFG-1 or CFG-2 frame's PMU blocks: (station, ID, phasor names,
+    analog names, digital status labels, nominal frequency) each."""
+    if len(data) < 22:
+        return []
+    count, at, pmus = struct.unpack('!H', data[18:20])[0], 20, []
+    for _ in range(min(count, _SYNPHASOR_PMUS_MAX)):
+        if at + 26 > len(data):
+            break
+        station = data[at:at + 16].decode('latin-1').strip(' \x00')
+        ident, _, phasors, analogs, digitals = struct.unpack('!HHHHH', data[at + 16:at + 26])
+        names_at, names = at + 26, phasors + analogs + 16 * digitals
+        if names_at + 16 * names + 4 * (phasors + analogs + digitals) + 4 > len(data):
+            break
+        label = lambda i: data[names_at + 16 * i:names_at + 16 * (i + 1)].decode('latin-1').strip(' \x00')
+        at = names_at + 16 * names + 4 * (phasors + analogs + digitals)
+        fnom = struct.unpack('!H', data[at:at + 2])[0]
+        pmus.append({'station': station, 'id': ident, 'phasors': [label(i) for i in range(phasors)],
+                     'analogs': [label(phasors + i) for i in range(analogs)],
+                     'digitals': [n for n in (label(phasors + analogs + i) for i in range(16 * digitals)) if n][:32],
+                     'nominal_frequency': 50 if fnom & 1 else 60})
+        at += 4
+    return pmus
+
+
+class _SynphasorStream:
+    __slots__ = ('flow', 'first', 'body')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'frames': {}}
+
+
+class Synphasor:
+    """IEEE C37.118 - see the comment above."""
+    event_type = 'synphasor'
+    app_protos = ('synphasor',)
+    fields = ('synphasor.frtype', 'synphasor.version', 'synphasor.idcode_stream_source', 'vals(synphasor.command)',
+              'synphasor.station_name', 'synphasor.idcode_data_source', 'synphasor.rate_of_transmission',
+              'synphasor.data', 'synphasor.data.sync', 'synphasor.data.trigger', 'synphasor.data.CFGchange',
+              'synphasor.data.data_modified', '@synphasor')
+
+    def __init__(self):
+        self.streams = {}         # flow key -> _SynphasorStream
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        kind = _int(first('synphasor.frtype'))
+        if kind is None:
+            return
+        stream = self.streams.get(pkt.flow.key)
+        if stream is None:
+            stream = self.streams[pkt.flow.key] = _SynphasorStream(pkt.flow, pkt.when)
+        body = stream.body
+        name = _SYNPHASOR_FRAMES.get(kind, f'type {kind}')
+        body['frames'][name] = body['frames'].get(name, 0) + 1
+        if first('synphasor.idcode_stream_source'):
+            body.setdefault('stream_id', _int(first('synphasor.idcode_stream_source')))
+        if first('synphasor.version'):
+            body.setdefault('version', _int(first('synphasor.version')))
+        if kind == 4:
+            command = first('vals(synphasor.command)') or 'unknown'
+            body['commands'][command] = body['commands'].get(command, 0) + 1
+            if 'transmission on' in command:
+                body['data_on'] = True
+            elif 'transmission off' in command:
+                body['data_on'] = False
+        elif kind == 1:
+            text = _hex(first('synphasor.data')).decode('latin-1').strip(' \x00')
+            if text:
+                body['header'] = text[:300]
+        elif kind in (2, 3):
+            pmus = _synphasor_config(_hex(first('@synphasor')))
+            if pmus:
+                body['pmus'] = pmus
+            if first('synphasor.rate_of_transmission'):
+                rate = _int(first('synphasor.rate_of_transmission'))
+                body['data_rate'] = f'{rate} per second' if rate > 0 else f'1 per {-rate} seconds'
+        elif kind == 5:
+            stations = [n.strip() for n in v['synphasor.station_name'] if n.strip()]
+            if stations:
+                body.setdefault('pmus', [{'station': n} for n in stations[:_SYNPHASOR_PMUS_MAX]])
+            if first('synphasor.rate_of_transmission'):
+                rate = _int(first('synphasor.rate_of_transmission'))
+                body['data_rate'] = f'{rate} per second' if rate > 0 else f'1 per {-rate} seconds'
+        elif kind == 0:
+            for field, key in (('synphasor.data.sync', 'not_synced'), ('synphasor.data.trigger', 'triggered'),
+                               ('synphasor.data.CFGchange', 'config_changed'),
+                               ('synphasor.data.data_modified', 'data_modified')):
+                if any(x in ('1', 'True') for x in v[field]):
+                    body[key] = body.get(key, 0) + 1
+
+    def finish(self):
+        records = []
+        for stream in self.streams.values():
+            body = dict(stream.body)
+            if body.get('pmus'):
+                body['stations'] = [p['station'] for p in body['pmus'] if p.get('station')]
+            records.append((stream.flow, stream.first, 'synphasor', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -5682,7 +5804,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

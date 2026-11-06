@@ -79,6 +79,11 @@
   for a body sent unencrypted - the user, their password, the line and
   address they came from, the command authorized and the answer. These
   were connection cards before
+- **C37.118** - a record for each synchrophasor stream: the commands a
+  PDC sent its PMU, the stations, channels, nominal frequency and data
+  rate from the PMU's configuration, its header, and how many data frames
+  said it had lost time sync, triggered or changed configuration. These
+  were connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -100,7 +105,8 @@
   medium; an Omron PLC identified by a Controller Data Read, and a
   HART-IP session accepted, are low; so is a RakNet game server answering.
   TACACS+ sent unencrypted is high; a TACACS+ login or command refused is
-  low
+  low. A PMU told to stop sending data is medium; a PMU that lost time
+  sync, and a PMU's configuration read, are low
 
 ### Themes
 

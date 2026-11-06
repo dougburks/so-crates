@@ -23278,6 +23278,10 @@ class TestTsharkUI(unittest.TestCase):
         'hart_ip_action': {'event_type': 'hart_ip_action', 'hart_ip_action': {'command': 'Perform Device Reset', 'number': 42,
                                                                               'device': '264e0000d2', 'data': '',
                                                                               'result': 'access restricted'}},
+        'synphasor': {'event_type': 'synphasor', 'synphasor': {'stations': ['Substation B PMU'], 'stream_id': 1410,
+                                                               'data_rate': '30 per second',
+                                                               'commands': {'send CFG-2 frame': 1, 'data transmission on': 1},
+                                                               'frames': {'data': 45}, 'not_synced': 2}},
         'tacacs': {'event_type': 'tacacs', 'tacacs': {'type': 'authorization', 'user': 'admin', 'command': 'write erase',
                                                       'port': 'vty0', 'remote_address': '10.9.9.9', 'result': 'FAIL',
                                                       'encrypted': False}},
@@ -23371,6 +23375,7 @@ class TestTsharkUI(unittest.TestCase):
         'fins_action': ['Memory Area Write', 'DM : Word contents', '0x0064', '', 'ffff', 'ok'],
         'hart_ip': ['primary master', 'accepted', 'Session Initiate, Read Primary Variable', 'PT-101', 'yes'],
         'hart_ip_action': ['Perform Device Reset', '264e0000d2', '', 'access restricted'],
+        'synphasor': ['Substation B PMU', '1410', '30 per second', 'send CFG-2 frame, data transmission on', '45', '2'],
         'tacacs': ['authorization', 'admin', 'write erase', 'vty0', '10.9.9.9', 'FAIL', 'no'],
         'raknet': ['Unconnected Ping, Unconnected Pong', 'MCPE', 'Lab Server', '1.21.20', '3', 'no', 'yes'],
         'memcache': ['stats, get', 'blob', '1.6.38', 'yes', '33', '62609', '1897.2'],
@@ -23460,7 +23465,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'raknet', 'tacacs', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'raknet', 'tacacs', 'synphasor', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 

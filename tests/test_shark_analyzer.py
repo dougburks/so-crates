@@ -738,6 +738,58 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestSynphasor(unittest.TestCase):
+    """tests/protocol_fixtures.write_synphasor_pcap: one record per C37.118
+    stream - with what Suricata 8.0.8 logged for the capture
+    (tests/data/synphasor_fixture.eve.json): a flow it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_synphasor_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'synphasor.pcap')
+        write_synphasor_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        [cls.stream] = [r['synphasor'] for r in cls.records if r['event_type'] == 'synphasor']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_commands_header_and_data(self):
+        s = self.stream
+        self.assertEqual({k: s.get(k) for k in ('commands', 'frames', 'stream_id', 'header', 'data_rate', 'data_on',
+                                                'not_synced', 'triggered', 'stations')},
+                         {'commands': {'send HDR frame': 1, 'send CFG-2 frame': 1, 'data transmission on': 1,
+                                       'data transmission off': 1},
+                          'frames': {'command': 4, 'header': 1, 'configuration 2': 1, 'data': 5}, 'stream_id': 1410,
+                          'header': 'Hello I am a PMU at Substation B', 'data_rate': '30 per second', 'data_on': False,
+                          'not_synced': 1, 'triggered': 1, 'stations': ['Substation B PMU']})
+
+    def test_the_configuration_from_its_bytes(self):
+        [pmu] = self.stream['pmus']
+        self.assertEqual({k: pmu[k] for k in ('station', 'id', 'phasors', 'analogs', 'nominal_frequency')},
+                         {'station': 'Substation B PMU', 'id': 7734, 'phasors': ['VA', 'VB', 'VC'], 'analogs': ['ANALOG1'],
+                          'nominal_frequency': 60})
+        self.assertEqual((len(pmu['digitals']), pmu['digitals'][0]), (16, 'BREAKER 1 STATUS'))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('synphasor_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (1, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'synphasor_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'synphasor.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('synphasor'), 1)
+        self.assertNotIn('conn_synphasor', counts, 'records, not a connection card')
+
+
 class TestTACACS(unittest.TestCase):
     """tests/protocol_fixtures.write_tacacs_pcap: one record per TACACS+
     session - with what Suricata 8.0.8 logged for the capture

@@ -2492,6 +2492,7 @@
                 hart_ip: '#9ccc65',
                 raknet: '#8d6e63',
                 tacacs: '#5c6bc0',
+                synphasor: '#ffca28',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -4893,6 +4894,31 @@
             return html;
         }
 
+        // tshark's C37.118 synchrophasor records (shark_protocols.Synphasor):
+        // one per stream.
+        function renderSynphasorDetails(e) {
+            const c = e.synphasor || {};
+            let html = htmlSection('C37.118 Details', COLORS.EVENT.synphasor);
+            html += htmlRowText('Stream ID', c.stream_id !== undefined ? String(c.stream_id) : '');
+            html += htmlRowText('Commands', Object.entries(c.commands || {}).map(([k, n]) => `${k} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Data', c.data_on === undefined ? '' : (c.data_on ? 'on' : 'turned off'));
+            html += htmlRowText('Frames', Object.entries(c.frames || {}).map(([k, n]) => `${k} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Data Rate', c.data_rate);
+            html += htmlRowText('Header', c.header);
+            for (const p of c.pmus || []) {
+                const parts = [p.id !== undefined && `ID ${p.id}`, p.nominal_frequency && `${p.nominal_frequency} Hz`,
+                               (p.phasors || []).length && `phasors ${p.phasors.join(', ')}`,
+                               (p.analogs || []).length && `analogs ${p.analogs.join(', ')}`,
+                               (p.digitals || []).length && `digitals ${p.digitals.join(', ')}`].filter(Boolean);
+                html += htmlRowText(`PMU ${p.station || ''}`, parts.join('; '));
+            }
+            if (c.not_synced) html += htmlRowText('Not Synced', `${c.not_synced.toLocaleString()} data frames (PMU lost its time source)`);
+            if (c.triggered) html += htmlRowText('Triggered', `${c.triggered.toLocaleString()} data frames`);
+            if (c.config_changed) html += htmlRowText('Configuration Changed', `${c.config_changed.toLocaleString()} data frames`);
+            if (c.data_modified) html += htmlRowText('Data Modified', `${c.data_modified.toLocaleString()} data frames`);
+            return html;
+        }
+
         // tshark's TACACS+ records (shark_protocols.TACACS): one per session -
         // an authentication, authorization or accounting exchange.
         function renderTacacsDetails(e) {
@@ -5578,6 +5604,7 @@
             memcache: renderMemcacheDetails,
             raknet: renderRaknetDetails,
             tacacs: renderTacacsDetails,
+            synphasor: renderSynphasorDetails,
             fins: renderFinsDetails,
             fins_action: renderFinsActionDetails,
             hart_ip: renderHartIpDetails,
@@ -8707,6 +8734,7 @@
             hart_ip: 'HART-IP',
             raknet: 'RakNet',
             tacacs: 'TACACS+',
+            synphasor: 'C37.118',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -9887,6 +9915,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Host Type', 'Session', 'Commands', 'Tags', 'Answered'];
                 case 'hart_ip_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Device', 'Data', 'Result'];
+                case 'synphasor':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Stations', 'Stream ID', 'Data Rate', 'Commands', 'Data Frames', 'Not Synced'];
                 case 'tacacs':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Type', 'User', 'Command', 'Line', 'Remote Address', 'Result', 'Encrypted'];
                 case 'raknet':
@@ -10389,6 +10419,7 @@
                 case 'hart_ip_action':
                 case 'raknet':
                 case 'tacacs':
+                case 'synphasor':
                 case 'rsh':
                 case 'openvpn':
                 case 'wireguard':
@@ -13148,7 +13179,13 @@
                 case 'OS User': return e.tns?.os_user || e.tns?.client_user || '';
                 case 'Statements': return e.tns?.statements !== undefined ? String(e.tns.statements) : '';
                 // memcached: a connection's or UDP exchange's
-                case 'Commands': return Object.keys((e.memcache || e.fins || e.hart_ip)?.commands || {}).join(', ');
+                case 'Commands': return Object.keys((e.memcache || e.fins || e.hart_ip || e.synphasor)?.commands || {}).join(', ');
+                // C37.118: a stream's
+                case 'Stations': return (e.synphasor?.stations || []).join(', ');
+                case 'Stream ID': return e.synphasor?.stream_id !== undefined ? String(e.synphasor.stream_id) : '';
+                case 'Data Rate': return e.synphasor?.data_rate || '';
+                case 'Data Frames': return e.synphasor ? String(e.synphasor.frames?.data || 0) : '';
+                case 'Not Synced': return e.synphasor ? String(e.synphasor.not_synced || 0) : '';
                 // Omron FINS, HART-IP
                 case 'Data': return (e.fins_action || e.hart_ip_action)?.data || '';
                 case 'Host Type': return e.hart_ip?.host_type || '';

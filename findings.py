@@ -397,6 +397,12 @@ RULES = (
          f"CAST({_j('hart_ip_action', 'number')} AS INTEGER) NOT IN ({', '.join(str(n) for n in _HART_PROCESS)})",
          lambda b: _join(b.get('command'), ('on', b.get('device')), ('-', b.get('result'))),
          "A field instrument's tag, message, damping, units or other setting written, or a self test run."),
+    Rule('synphasor_data_off', 'medium', 'synphasor', 'PMU told to stop sending data',
+         f"{_j('synphasor', 'commands')} LIKE '%transmission off%'",
+         lambda b: _join(_list(b.get('stations', ())), ('stream', b.get('stream_id'))),
+         "A C37.118 command turning off a phasor measurement unit's data - routine from its PDC when it "
+         'disconnects, and from anywhere else, a way to blind wide-area monitoring and protection. C37.118 has '
+         'no login.'),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),
@@ -494,6 +500,16 @@ RULES = (
          lambda b: _join(b.get('user'), ('-', b.get('command'))),
          "A command on a network device its TACACS+ server wouldn't allow the user - beyond their role, "
          'or tried by someone who got in. (Only an unencrypted body shows it.)'),
+    Rule('synphasor_not_synced', 'low', 'synphasor', 'PMU lost time sync',
+         f"{_j('synphasor', 'not_synced')} > 0",
+         lambda b: _join(_list(b.get('stations', ())), ('-', _counted(b.get('not_synced'), 'data frame'))),
+         "A phasor measurement unit said its data wasn't synchronized to its time source - a lost GPS signal, "
+         'or GPS spoofing; its phasors can no longer be compared with other PMUs.'),
+    Rule('synphasor_config_read', 'low', 'synphasor', 'PMU configuration read',
+         f"{_j('synphasor', 'pmus')} IS NOT NULL",
+         lambda b: _join(_list(b.get('stations', ())), ('stream', b.get('stream_id'))),
+         "A phasor measurement unit gave out its configuration - its station, channels and rate. Routine for "
+         "its PDC, a survey of the substation from anywhere else."),
     Rule('tns_login_failed', 'low', 'tns', 'Oracle login failed',
          f"{_j('tns', 'login')} = 'failed'",
          lambda b: _join(b.get('db_user'), ('-', b.get('login_error'))),

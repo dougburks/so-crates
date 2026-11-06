@@ -1761,6 +1761,14 @@ AGGREGATION_JSON_PATHS = {
         'Data': ['$.hart_ip_action.data'],
         'Result': ['$.hart_ip_action.result'],
     },
+    'synphasor': {
+        'Stations': ['$.synphasor.stations'],
+        'Stream ID': ['$.synphasor.stream_id'],
+        'Data Rate': ['$.synphasor.data_rate'],
+        'Commands': ['$.synphasor.commands'],
+        'Data Frames': ['$.synphasor.frames.data'],
+        'Not Synced': ['$.synphasor.not_synced'],
+    },
     'tacacs': {
         'Type': ['$.tacacs.type'],
         'User': ['$.tacacs.user'],
@@ -2011,11 +2019,11 @@ AGGREGATION_CAST_TEXT = {
 AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
-    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'),
+    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'), ('synphasor', 'Stations'),
 }
 # Object-valued columns shown as their keys, joined the same way (a count
 # per name: memcached's commands)
-AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages')}
+AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages'), ('synphasor', 'Commands')}
 
 
 def _aggregation_expr(event_type, label, paths, prefix=''):
