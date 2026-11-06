@@ -1707,6 +1707,15 @@ AGGREGATION_JSON_PATHS = {
         'Data Pkts →': ['$.openvpn.data_to_server'],
         'Data Pkts ←': ['$.openvpn.data_to_client'],
     },
+    'wireguard': {
+        'Stage': ['$.wireguard.stage'],
+        'Initiations': ['$.wireguard.initiations'],
+        'Handshakes': ['$.wireguard.handshakes'],
+        'Unanswered': ['$.wireguard.unanswered'],
+        'Keepalives': ['$.wireguard.keepalives'],
+        'Data Pkts →': ['$.wireguard.data_to_server'],
+        'Data Pkts ←': ['$.wireguard.data_to_client'],
+    },
     'rsh': {
         'Service': ['$.rsh.service'],
         'User': ['$.rsh.user'],

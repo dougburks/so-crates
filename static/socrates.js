@@ -2479,6 +2479,7 @@
                 telnet: '#ffa726',
                 rsh: '#ff8a65',
                 openvpn: '#5c6bc0',
+                wireguard: '#e57373',
                 iec104: '#ef5350',
                 bacnet: '#ab47bc',
                 opcua: '#29b6f6',
@@ -4959,6 +4960,25 @@
             return html;
         }
 
+        // tshark's WireGuard records (shark_protocols.WireGuard): one per connection.
+        function renderWireguardDetails(e) {
+            const w = e.wireguard || {};
+            const n = v => v !== undefined ? v.toLocaleString() : '';
+            let html = htmlSection('WireGuard Details', COLORS.EVENT.wireguard);
+            html += htmlRowText('Stage', w.stage);
+            html += htmlRowText('Initiations', n(w.initiations) + (w.both_initiated ? ' (by both peers)' : ''));
+            html += htmlRowText('Handshakes', n(w.handshakes));
+            if (w.unanswered) html += htmlRowText('Unanswered', n(w.unanswered));
+            if (w.cookie_replies) html += htmlRowText('Cookie Replies', n(w.cookie_replies));
+            if (w.under_load) html += htmlRowText('Under Load', 'yes (handshakes carried a cookie)');
+            html += htmlRowText('Data Packets', `${n(w.data_to_server || 0)} to server, ${n(w.data_to_client || 0)} to client`);
+            if (w.keepalives) html += htmlRowText('Keepalives', n(w.keepalives));
+            // only when tshark had the keys to decrypt the handshake
+            html += htmlRowText('Initiator Key', w.initiator_key, 'mono');
+            html += htmlRowText('Responder Key', w.responder_key, 'mono');
+            return html;
+        }
+
         // tshark's SSDP records (shark_protocols.SSDP).
         function renderSsdpDetails(e) {
             const sp = e.ssdp || {};
@@ -5333,6 +5353,7 @@
             telnet: renderTelnetDetails,
             rsh: renderRshDetails,
             openvpn: renderOpenvpnDetails,
+            wireguard: renderWireguardDetails,
             iec104: renderIec104Details,
             bacnet: renderBacnetDetails,
             opcua: renderOpcuaDetails,
@@ -8473,6 +8494,7 @@
             telnet: 'Telnet',
             rsh: 'Remote Shell',
             openvpn: 'OpenVPN',
+            wireguard: 'WireGuard',
             iec104: 'IEC 104',
             bacnet: 'BACnet',
             opcua: 'OPC UA',
@@ -9640,6 +9662,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Query', 'Changes', 'Station Name', 'IP', 'Result', 'Count'];
                 case 'openvpn':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Stage', 'Version', 'Protection', 'Subject', 'Resets', 'Data Pkts →', 'Data Pkts ←'];
+                case 'wireguard':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Stage', 'Initiations', 'Handshakes', 'Unanswered', 'Keepalives', 'Data Pkts →', 'Data Pkts ←'];
                 case 'rsh':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'User', 'Local User', 'Command', 'Password', 'Result'];
                 case 'mongodb':
@@ -10131,6 +10155,7 @@
                 case 'mongodb_action':
                 case 'rsh':
                 case 'openvpn':
+                case 'wireguard':
                 case 'goose':
                 case 'browser':
                 case 'lldp':
@@ -12864,12 +12889,16 @@
                 case 'Driver': return e.mongodb?.driver || '';
                 // rsh, rlogin, rexec: a connection's
                 case 'Local User': return e.rsh?.local_user || '';
-                // OpenVPN: a connection's
-                case 'Stage': return e.openvpn?.stage || '';
+                // OpenVPN, WireGuard: a connection's
+                case 'Stage': return (e.openvpn || e.wireguard)?.stage || '';
                 case 'Protection': return e.openvpn?.control_protection || '';
                 case 'Resets': return e.openvpn?.client_resets !== undefined ? String(e.openvpn.client_resets) : '';
-                case 'Data Pkts →': return e.openvpn?.data_to_server !== undefined ? String(e.openvpn.data_to_server) : '';
-                case 'Data Pkts ←': return e.openvpn?.data_to_client !== undefined ? String(e.openvpn.data_to_client) : '';
+                case 'Data Pkts →': { const v = (e.openvpn || e.wireguard)?.data_to_server; return v !== undefined ? String(v) : ''; }
+                case 'Data Pkts ←': { const v = (e.openvpn || e.wireguard)?.data_to_client; return v !== undefined ? String(v) : ''; }
+                case 'Initiations': return e.wireguard?.initiations !== undefined ? String(e.wireguard.initiations) : '';
+                case 'Handshakes': return e.wireguard?.handshakes !== undefined ? String(e.wireguard.handshakes) : '';
+                case 'Unanswered': return e.wireguard?.unanswered !== undefined ? String(e.wireguard.unanswered) : '';
+                case 'Keepalives': return e.wireguard ? String(e.wireguard.keepalives || 0) : '';
                 case 'Databases': return (e.mongodb?.databases || []).join(', ');
                 case 'Database': return e.mongodb_action?.database || '';
                 case 'Collection': return e.mongodb_action?.collection || '';

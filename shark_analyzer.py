@@ -67,7 +67,7 @@ SHARK_ARTIFACTS = (SHARK_DB, SHARK_DB + '-wal', SHARK_DB + '-shm', SHARK_DB + '.
 # change here or in shark_protocols changes what a run produces: a
 # shark.db stamped with an older version is rebuilt the next time its
 # status is asked for, so existing analyses pick up the change.
-SHARK_FORMAT_VERSION = 43
+SHARK_FORMAT_VERSION = 44
 
 # The fields every packet is read for, one per column of tshark's
 # tab-separated output, in this order - then each of shark_protocols'
@@ -448,7 +448,7 @@ class _Flow:
 # for: it decodes tunnels to inspect what's inside but logs only the
 # inner flows - which is all tshark's flows here are (see _FIELDS).
 _TUNNEL_LAYERS = (('vxlan', 'VXLAN'), ('geneve', 'Geneve'), ('teredo', 'Teredo'), ('ayiya', 'AYIYA'),
-                  ('gtp', 'GTP-U'), ('erspan', 'ERSPAN'), ('gre', 'GRE'))
+                  ('gtp', 'GTP-U'), ('erspan', 'ERSPAN'), ('gre', 'GRE'), ('wg', 'WireGuard'))
 _BARE_TUNNELS = {('ip', 'ip'): 'IP-in-IP', ('ip', 'ipv6'): '6in4', ('ipv6', 'ip'): '4in6',
                  ('ipv6', 'ipv6'): 'IPv6-in-IPv6'}
 _TUNNEL_OUTER_PROTO = {'IP-in-IP': 'IP-in-IP', '6in4': 'IPv6', '4in6': 'IP-in-IP', 'IPv6-in-IPv6': 'IPv6', 'GRE': 'GRE',
@@ -739,6 +739,7 @@ def _add_outer(flows, f, app, when, length):
     cid = _community_id(src, dst, _PROTO_NUMBERS.get(proto, _int(f[_F_IP_PROTO] or f[_F_IP6_NXT])), sport, dport) \
         if not flow.community_id else ''
     flow.add(src, sport, length, when, app, cid, False)
+    return flow, src, dst, sport, dport
 
 
 class _LaterPasses:
@@ -841,7 +842,15 @@ def iter_records(lines, pcap_path=None, deadline=None, combined=()):
             tunnels.add(raw_cols, raw_cols[_F_PROTOS].split(':'), when, length,
                         None if bare else _packet_key(f, '')[-1])
             if split[2] is not None:
-                _add_outer(flows, split[2], split[3], when, length)
+                outer, *ends = _add_outer(flows, split[2], split[3], when, length)
+                # A tunnel with records of its own (decrypted WireGuard):
+                # each of its packets is the outer flow's message too
+                outer_frame = _int(split[2][_F_FRAME])
+                if split[3] in fed_apps:
+                    _feed(raw_cols, feeds, Packet(outer_frame, when, outer, ends[2], ends[3], split[3], *ends[:2]))
+                elif split[3] in pass_apps and outer_frame:
+                    outer.recorded = True
+                    spans.append((outer_frame, outer_frame))
             if bare:
                 continue
             # The packet inside is its flow's, as Suricata counts it: from its
@@ -1207,6 +1216,8 @@ def _feed_protocols(cols, index, feeds):
         return
     split = _split_tunnel(cols) if cols[_F_PROTOS].count(':ip') > 1 else None
     if split is not None:
+        if split[2] is not None and split[3] in _RECORDED_FIELD_APPS:
+            _feed_outer(cols, split[2], split[3], index, feeds)
         cols = split[1]
     f = [_last(c) for c in cols[:len(_FIELDS)]]
     try:
@@ -1225,6 +1236,20 @@ def _feed_protocols(cols, index, feeds):
     if not candidates:
         return
     _feed(cols, feeds, Packet(_int(f[_F_FRAME]), when, _open_at(candidates, when), sport, dport, app, src, dst))
+
+
+def _feed_outer(cols, f, app, index, feeds):
+    """A tunneled packet to its tunnel's outer flow's records, for a
+    tunnel that has them (_split_tunnel's outer fields and app)."""
+    try:
+        when = float(f[_F_TIME])
+    except ValueError:
+        return
+    _, src, dst, proto, _, sport, dport, key = _packet_key(f, app)
+    candidates = index.get((proto, frozenset(((src, sport), (dst, dport))))
+                           if proto in ('TCP', 'UDP') else key)
+    if candidates:
+        _feed(cols, feeds, Packet(_int(f[_F_FRAME]), when, _open_at(candidates, when), sport, dport, app, src, dst))
 
 
 def _feed(cols, feeds, packet):

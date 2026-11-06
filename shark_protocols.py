@@ -2521,6 +2521,98 @@ class OpenVPN:
         return records
 
 
+# ---------------------------------------------------------------- WireGuard
+#
+# WireGuard (UDP, any port - tshark finds it by its messages' shape), which
+# Suricata doesn't parse. A peer opens with a handshake initiation, the
+# other answers with a response (or, under load, a cookie reply first),
+# and the tunnel's data follows - a new handshake every two minutes while
+# it's in use, by either side. Everything after the initiation's ephemeral
+# key is encrypted, so one record per connection holds what shows: how far
+# it got, the handshakes started and answered, the data packets each way
+# and the keepalives among them. The shape tshark goes by is loose - any
+# UDP payload starting 04 00 00 00 at a multiple of 16 bytes passes as
+# data - so a connection is kept only with an initiation, or data
+# addressed to one receiver index more than once.
+
+_WG_STAGES = ('initiation only', 'handshake', 'established')
+
+
+class _WireGuardSession:
+    __slots__ = ('flow', 'first', 'body', 'initiators', 'senders', 'answered', 'receivers', 'stage')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'initiations': 0, 'handshakes': 0, 'data_to_server': 0, 'data_to_client': 0}
+        self.initiators = set()    # the addresses that sent an initiation
+        self.senders = set()       # the initiations' sender indexes
+        self.answered = set()      # the sender indexes a response answered
+        self.receivers = {}        # (data packet's sender, receiver index) -> packets
+        self.stage = -1            # nothing that counts yet
+
+
+class WireGuard:
+    """WireGuard - see the comment above."""
+    event_type = 'wireguard'
+    app_protos = ('wg',)
+    fields = ('wg.type', 'wg.sender', 'wg.receiver', 'wg.keepalive', 'wg.mac2', 'wg.static', 'wg.receiver_pubkey')
+
+    def __init__(self):
+        self.sessions = {}         # flow key -> _WireGuardSession
+
+    def feed(self, pkt, v):
+        kind = _int(_first(v['wg.type']))
+        if kind not in (1, 2, 3, 4):
+            return
+        session = self.sessions.get(pkt.flow.key)
+        if session is None:
+            session = self.sessions[pkt.flow.key] = _WireGuardSession(pkt.flow, pkt.when)
+        body = session.body
+        if kind == 1:
+            body['initiations'] += 1
+            session.initiators.add(pkt.src)
+            session.senders.add(_first(v['wg.sender']))
+            session.stage = max(session.stage, 0)
+            if v['wg.static']:
+                body.setdefault('initiator_key', v['wg.static'][0])
+            if v['wg.receiver_pubkey']:
+                body.setdefault('responder_key', v['wg.receiver_pubkey'][0])
+        elif kind == 2:
+            receiver = _first(v['wg.receiver'])
+            if receiver in session.senders and receiver not in session.answered:
+                session.answered.add(receiver)
+                body['handshakes'] += 1
+                session.stage = max(session.stage, 1)
+        elif kind == 3:
+            body['cookie_replies'] = body.get('cookie_replies', 0) + 1
+        else:
+            to_server = pkt.src == pkt.flow.client
+            body['data_to_server' if to_server else 'data_to_client'] += 1
+            if v['wg.keepalive']:
+                body['keepalives'] = body.get('keepalives', 0) + 1
+            index = (pkt.src, _first(v['wg.receiver']))
+            session.receivers[index] = session.receivers.get(index, 0) + 1
+        if kind in (1, 2) and _first(v['wg.mac2']).strip('0:'):
+            body['under_load'] = True
+
+    def finish(self):
+        records = []
+        for session in self.sessions.values():
+            body = dict(session.body)
+            data = body['data_to_server'] and body['data_to_client']
+            if session.stage >= 0:
+                body['stage'] = 'established' if data else _WG_STAGES[session.stage]
+            elif any(n > 1 for n in session.receivers.values()):
+                body['stage'] = 'established' if data else 'data only'    # began before the capture
+            else:
+                continue                   # a stray packet of the right shape
+            if len(session.initiators) > 1:
+                body['both_initiated'] = True
+            body['unanswered'] = body['initiations'] - body['handshakes']
+            records.append((session.flow, session.first, 'wireguard', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -4527,7 +4619,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

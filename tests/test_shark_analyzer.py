@@ -738,6 +738,106 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestWireGuard(unittest.TestCase):
+    """tests/protocol_fixtures.write_wireguard_pcap: one record per
+    WireGuard connection - with what Suricata 8.0.8 logged for the capture
+    (tests/data/wireguard_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_wireguard_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'wireguard.pcap')
+        write_wireguard_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = {r['src_port']: r['wireguard'] for r in cls.records if r['event_type'] == 'wireguard'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_established_tunnel_rekeyed_by_either_peer(self):
+        self.assertEqual(self.sessions[40700], {'stage': 'established', 'initiations': 2, 'handshakes': 2,
+                                                'unanswered': 0, 'both_initiated': True, 'data_to_server': 2,
+                                                'data_to_client': 2, 'keepalives': 1})
+
+    def test_a_peer_retrying_unanswered(self):
+        self.assertEqual(self.sessions[40800], {'stage': 'initiation only', 'initiations': 3, 'handshakes': 0,
+                                                'unanswered': 3, 'data_to_server': 0, 'data_to_client': 0})
+
+    def test_a_tunnel_up_before_the_capture_and_a_stray_packet(self):
+        self.assertEqual(self.sessions[40900]['stage'], 'established', 'data each way, each to one receiver index')
+        self.assertNotIn(41000, self.sessions, "one packet of data's shape isn't WireGuard")
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('wireguard_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (4, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'wireguard_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'wireguard.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('wireguard'), 3)
+        self.assertNotIn('conn_wg', counts, 'records, not a connection card - and none for the stray packet')
+
+
+class TestDecryptedWireGuard(unittest.TestCase):
+    """WireGuard that tshark decrypts (a pcapng carrying the keys) is a
+    tunnel: the packets inside are flows of their own, and each is a
+    message of the outer connection's record too - from the first pass's
+    lines (the combined pass) or the protocol pass's."""
+
+    OUTER = ('10.9.0.1', '10.9.0.2', 43462, 51820)
+
+    @classmethod
+    def _line(cls, fields, frame, reply, receiver):
+        src, dst, sport, dport = cls.OUTER
+        inner = ('10.10.0.2', '10.10.0.1')
+        if reply:
+            src, dst, sport, dport, inner = dst, src, dport, sport, inner[::-1]
+        a = shark_analyzer._AGGREGATOR
+        c = dict.fromkeys(fields, '')
+        c.update({'frame.time_epoch': str(1.0 + frame / 10), 'frame.len': '130', 'frame.number': str(frame),
+                  'frame.protocols': 'eth:ethertype:ip:udp:wg:ip:icmp:data', 'ip.src': a.join((src, inner[0])),
+                  'ip.dst': a.join((dst, inner[1])), 'ip.proto': a.join(('17', '1')), 'ip.len': a.join(('116', '84')),
+                  'udp.srcport': str(sport), 'udp.dstport': str(dport), 'udp.stream': '0', 'wg.type': '4',
+                  'wg.receiver': receiver})
+        return '\t'.join(c[f] for f in fields)
+
+    def _lines(self, fields):
+        return [self._line(fields, n, n % 2 == 0, '0xcd' if n % 2 == 0 else '0xab') for n in range(1, 5)]
+
+    def test_from_the_combined_pass(self):
+        from shark_protocols import WireGuard
+        records = list(shark_analyzer.iter_records(self._lines(shark_analyzer._combined_fields((WireGuard,))),
+                                                   combined=(WireGuard,)))
+        types = sorted(r['event_type'] for r in records)
+        self.assertEqual(types, ['flow', 'flow', 'tunnel', 'wireguard'])
+        wg = next(r for r in records if r['event_type'] == 'wireguard')
+        self.assertEqual((wg['src_ip'], wg['wireguard']['data_to_server'], wg['wireguard']['data_to_client']),
+                         ('10.9.0.1', 2, 2))
+        inner = next(r for r in records if r['event_type'] == 'flow' and r['src_ip'] == '10.10.0.2')
+        self.assertEqual(inner['app_proto'], 'icmp', 'the packets inside are their own flow')
+
+    def test_from_the_protocol_pass(self):
+        from shark_protocols import WireGuard
+        src, dst, sport, dport = self.OUTER
+        flow = shark_analyzer._Flow(('udp', 0), 'UDP', 4, src, dst, sport, dport, 1.0, 0)
+        index = {('UDP', frozenset(((src, sport), (dst, dport)))): [flow]}
+        fields = shark_analyzer._protocol_pass_fields([WireGuard])
+        handler = WireGuard()
+        feeds = [(handler, [fields.index(f) for f in WireGuard.fields])]
+        for line in self._lines(fields):
+            shark_analyzer._feed_protocols(line.split('\t'), index, feeds)
+        [(_, _, _, body)] = handler.finish()
+        self.assertEqual((body['data_to_server'], body['data_to_client']), (2, 2))
+
+
 class TestOpenVPN(unittest.TestCase):
     """tests/protocol_fixtures.write_openvpn_pcap: one record per OpenVPN
     connection - with what Suricata 8.0.8 logged for the capture

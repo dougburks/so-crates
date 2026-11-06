@@ -975,6 +975,53 @@ def write_openvpn_pcap(path):
     write_pcap(path, openvpn_packets())
 
 
+# ---------------------------------------------------------------- WireGuard
+#
+# CLIENT:40700 and WG_SERVER:51820 complete a handshake, send data each
+# way (a keepalive among it) and rekey - the server initiating this time.
+# WG_RETRIER:40800 sends three initiations that nothing answers. WG_MID's
+# tunnel was up before the capture started: data only, two packets each
+# way, each side to one receiver index. And WG_STRAY sends one packet that
+# merely has data's shape.
+
+WG_SERVER, WG_RETRIER, WG_MID, WG_STRAY = '198.51.100.95', '10.1.0.78', '10.1.0.79', '10.1.0.80'
+
+
+def _wg_initiation(sender):
+    return b'\x01\x00\x00\x00' + struct.pack('<I', sender) + bytes(range(32)) + b'\x11' * 48 + b'\x22' * 28 + \
+        b'\x33' * 16 + b'\x00' * 16
+
+
+def _wg_response(sender, receiver):
+    return b'\x02\x00\x00\x00' + struct.pack('<II', sender, receiver) + bytes(range(32, 64)) + b'\x44' * 16 + \
+        b'\x55' * 16 + b'\x00' * 16
+
+
+def _wg_data(receiver, counter, blocks=4):
+    return b'\x04\x00\x00\x00' + struct.pack('<IQ', receiver, counter) + b'\x66' * (16 * blocks)
+
+
+def wireguard_packets():
+    out = [(CLIENT, WG_SERVER, 40700, 51820, _wg_initiation(0x1111)),
+           (WG_SERVER, CLIENT, 51820, 40700, _wg_response(0x2222, 0x1111)),
+           (CLIENT, WG_SERVER, 40700, 51820, _wg_data(0x2222, 0)),
+           (WG_SERVER, CLIENT, 51820, 40700, _wg_data(0x1111, 0)),
+           (CLIENT, WG_SERVER, 40700, 51820, _wg_data(0x2222, 1, blocks=1)),      # a keepalive
+           (WG_SERVER, CLIENT, 51820, 40700, _wg_initiation(0x3333)),
+           (CLIENT, WG_SERVER, 40700, 51820, _wg_response(0x4444, 0x3333)),
+           (WG_SERVER, CLIENT, 51820, 40700, _wg_data(0x4444, 0))]
+    out += [(WG_RETRIER, WG_SERVER, 40800, 51820, _wg_initiation(0x5550 + i)) for i in range(3)]
+    for i in range(2):
+        out += [(WG_MID, WG_SERVER, 40900, 51820, _wg_data(0x6666, 100 + i)),
+                (WG_SERVER, WG_MID, 51820, 40900, _wg_data(0x7777, 200 + i))]
+    out.append((WG_STRAY, WG_SERVER, 41000, 44450, _wg_data(0x8888, 959158, blocks=8)))
+    return [_udp_packet(*p) for p in out]
+
+
+def write_wireguard_pcap(path):
+    write_pcap(path, wireguard_packets())
+
+
 # ---------------------------------------------------------------- PROFINET DCP
 #
 # An engineering station (PN_ENGINEERING) asks every PROFINET device to

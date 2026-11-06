@@ -39,6 +39,12 @@
   client started over, how the control channel is protected, the
   server's certificate from the TLS inside it, and the data packets each
   way. These were connection cards before
+- **WireGuard** - a record for each connection: how far it got, the
+  handshakes started and answered, and the data packets and keepalives
+  each way. A stray packet that only has WireGuard's shape no longer
+  shows up as a WireGuard connection. When a capture carries the
+  tunnel's keys, tshark decrypts it, and the packets inside become flows
+  of their own under a WireGuard tunnel record
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -46,8 +52,9 @@
   user or role created or granted, is high; a MongoDB server answering
   without a login, and any other MongoDB write or change, are medium. An
   rsh, rlogin or rexec login is high; one of their services answering a
-  probe is low. An OpenVPN tunnel that carried data is medium; a client
-  retrying a server that never answers is low
+  probe is low. An OpenVPN or WireGuard tunnel that carried data is
+  medium; an OpenVPN client or WireGuard peer retrying a server that
+  never answers is low
 
 ### Themes
 

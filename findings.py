@@ -309,6 +309,11 @@ RULES = (
                          ('-', _counted((b.get('data_to_server') or 0) + (b.get('data_to_client') or 0), 'data packet'))),
          "A VPN tunnel carried data. From inside a network it's a way around its monitoring and controls - "
          "check it's one you run."),
+    Rule('wireguard_tunnel', 'medium', 'wireguard', 'WireGuard tunnel',
+         f"{_j('wireguard', 'stage')} = 'established'",
+         lambda b: _counted((b.get('data_to_server') or 0) + (b.get('data_to_client') or 0), 'data packet'),
+         "A VPN tunnel carried data. From inside a network it's a way around its monitoring and controls - "
+         "check it's one you run."),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),
@@ -368,6 +373,12 @@ RULES = (
          lambda b: _counted(b.get('client_resets'), 'attempt'),
          "A client kept trying to open an OpenVPN session that nothing answered - a VPN configured to "
          "reach out, and blocked or gone. (A scanner's probe is one attempt, and isn't listed.)"),
+    Rule('wireguard_retries', 'low', 'wireguard', 'WireGuard peer retrying unanswered',
+         f"{_j('wireguard', 'stage')} = 'initiation only' AND {_j('wireguard', 'initiations')} >= 2",
+         lambda b: _counted(b.get('initiations'), 'attempt'),
+         "A peer kept trying to open a WireGuard tunnel that nothing answered - a VPN configured to reach "
+         "out, and blocked or gone, or a peer whose key the other end doesn't accept. (A scanner's probe is "
+         "one attempt, and isn't listed.)"),
     Rule('rsh_answering', 'low', 'rsh', 'rsh, rlogin or rexec service answering',
          f"{_j('rsh', 'probe')} IS NOT NULL AND {_j('rsh', 'result')} != 'no response'",
          lambda b: _join(b.get('service'), ('-', b.get('error') or b.get('result'))),
