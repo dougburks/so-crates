@@ -2294,7 +2294,7 @@
            it reads as a normal preview pane, not a boxed-off embedded page;
            no scrollbar (see the srcdoc's own overflow:hidden). Sticky so it
            stays visible while the grid below scrolls. */
-        .theme-preview-frame { display: block; position: sticky; top: 0; z-index: 1; width: calc(100% - 28px); height: 180px; margin: 0 14px 12px 14px; border: 1px solid var(--border-color); border-radius: 8px; }
+        .theme-preview-frame { display: block; position: sticky; top: 0; z-index: 1; width: calc(100% - 28px); height: 186px; margin: 0 14px 12px 14px; border: 1px solid var(--border-color); border-radius: 8px; }
         [data-theme="cga"] .app-header,
         [data-theme="cga"] .footer {
             background: #55ffff;

@@ -16,6 +16,10 @@
   Each has its own loading messages
 - **The Themes modal is wider** - six themes a row, so it still fits a
   1080p window without scrolling
+- **The Themes modal's preview matches today's layout** - stat cards in
+  their Triage, Protocol records and Connections sections, numbers in
+  their event types' colors, and a fun theme's corner brackets on the
+  active card
 
 ## 5.2.0
 

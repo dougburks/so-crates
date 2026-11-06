@@ -338,7 +338,7 @@
             safeStorageSet(localStorage, CYBERCHEF_THEME_SYNC_KEY, desired);
         }
 
-        // Real app markup/classes (.app-header, .stats-grid, .stat-card)
+        // Real app markup/classes (.app-header, .stats-group, .stat-card)
         // reusing the real stylesheet, rendered in an isolated iframe
         // document so previewing a theme never touches the real page's
         // document.documentElement. Loaded once via srcdoc (relative URLs
@@ -348,17 +348,33 @@
         // hover - cheap, and avoids booting a second full copy of the app
         // (which loading the real socrates.html in an iframe would mean:
         // re-running init(), restarting the OhMyDebn theme-sync poll, etc.
-        // just for a hover preview).
-        const THEME_PREVIEW_SRCDOC = `<!doctype html>
+        // just for a hover preview). The cards are a PCAP analysis's, in
+        // its sections (STAT_GROUPS), their numbers in the same per-type
+        // colors (COLORS.EVENT) - a function, not a constant, since both
+        // are declared further down this file.
+        function themePreviewSrcdoc() {
+            const card = (count, label, color, active) => `
+          <div class="stat-card${active ? ' tab-active' : ''}">
+            <div class="stat-number" style="color: ${color}">${count}</div>
+            <div class="stat-label">${label}</div>
+          </div>`;
+            const group = (index, cards) => `
+      <div class="stats-group" style="--cards: ${cards.length}">
+        <div class="stats-grid-heading"><span class="stats-grid-heading-toggle"><span aria-hidden="true">\u25be</span><span>${STAT_GROUPS[index].heading}</span></span></div>
+        <div class="stats-group-cards">${cards.join('')}
+        </div>
+      </div>`;
+            return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <link rel="stylesheet" href="static/socrates.css">
 <style>
   html, body { overflow: hidden; }
-  .app-header { position: static; border-bottom: none; }
-  .preview-container { padding: 12px 14px; }
-  .preview-stats-grid { grid-template-columns: repeat(3, 1fr); margin-bottom: 0; }
+  .app-header { position: static; border-bottom: none; padding: 8px 20px; }
+  .preview-container { padding: 10px 14px; }
+  .stats-grid { margin-bottom: 0; }
+  .stats-grid-heading, .stats-grid-heading-toggle { cursor: default; }
 </style>
 </head>
 <body>
@@ -373,23 +389,21 @@
     </div>
   </div>
   <div class="preview-container">
-    <div class="stats-grid preview-stats-grid">
-      <div class="stat-card tab-active">
-        <div class="stat-number">128</div>
-        <div class="stat-label">Alerts</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-number">4,502</div>
-        <div class="stat-label">Flows</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-number">37</div>
-        <div class="stat-label">DNS</div>
-      </div>
+    <div class="stats-grid stats-grid-grouped">${group(0, [
+        card('12', 'Network Alerts', COLORS.EVENT.alert, true),
+        card('4,872', 'All Events', 'var(--text-bright)')
+    ])}${group(1, [
+        card('386', 'DNS Queries', COLORS.EVENT.dns),
+        card('94', 'HTTP', COLORS.EVENT.http),
+        card('211', 'TLS', COLORS.EVENT.tls)
+    ])}${group(2, [
+        card('1,503', 'Flows', COLORS.EVENT.flow)
+    ])}
     </div>
   </div>
 </body>
 </html>`;
+        }
 
         let themePreviewFrameReady = false;
 
@@ -409,6 +423,9 @@
             const frameDoc = frame && frame.contentDocument;
             if (frameDoc && frameDoc.documentElement) {
                 frameDoc.documentElement.setAttribute('data-theme', themeName);
+                // the active card's corner brackets, as updateFunThemeClass
+                // gives the real page
+                frameDoc.documentElement.classList.toggle('fun-theme', !!THEMED_LOADING_PHRASES[themeName]);
             }
             updatePreviewingLabel(themeName);
         }
@@ -2234,7 +2251,7 @@
                     themePreviewFrameReady = true;
                     previewTheme(menuBaseTheme);
                 }, { once: true });
-                frame.srcdoc = THEME_PREVIEW_SRCDOC;
+                frame.srcdoc = themePreviewSrcdoc();
             } else {
                 previewTheme(menuBaseTheme);
             }

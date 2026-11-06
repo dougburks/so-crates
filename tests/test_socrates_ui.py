@@ -2247,20 +2247,47 @@ class TestThemeAndMenu(unittest.TestCase):
     def test_theme_preview_srcdoc_uses_real_app_classes(self):
         """The preview must render real app markup/classes reusing the real
         stylesheet, not an abstract from-scratch mockup - so it can never
-        look or feel out of sync with the actual app's design."""
-        self.assertIn('THEME_PREVIEW_SRCDOC', JS_CONTENT,
-                      'THEME_PREVIEW_SRCDOC constant must exist')
-        srcdoc = JS_CONTENT.split('const THEME_PREVIEW_SRCDOC = `')[1].split('`;')[0]
+        look or feel out of sync with the actual app's design: the cards in
+        their sections, their numbers in the real per-type colors."""
+        from tests.jsdom_helper import js_statements
+        srcdoc = js_statements('window.__jsdom_result = themePreviewSrcdoc();')
         self.assertIn('href="static/socrates.css"', srcdoc,
                       'Preview document must link the real stylesheet, not duplicate styles')
         self.assertIn('class="app-header"', srcdoc,
                       'Preview must reuse the real .app-header class')
-        self.assertIn('class="stats-grid', srcdoc,
-                      'Preview must reuse the real .stats-grid class')
-        self.assertIn('class="stat-card"', srcdoc,
-                      'Preview must reuse the real .stat-card class')
+        self.assertIn('class="stats-grid stats-grid-grouped"', srcdoc,
+                      'Preview must reuse the real grouped .stats-grid')
+        self.assertEqual(srcdoc.count('class="stats-group"'), 3,
+                         'Preview must show the three sections (STAT_GROUPS)')
+        for heading in ('Triage', 'Protocol records', 'Connections'):
+            self.assertIn(f'<span>{heading}</span>', srcdoc,
+                          f'Preview must label the {heading} section from STAT_GROUPS')
+        self.assertIn('class="stat-card tab-active"', srcdoc,
+                      'Preview must show an active card, as the real page does')
         self.assertIn('class="stat-number"', srcdoc,
                       'Preview must reuse the real .stat-number class')
+        event_colors = JS_CONTENT.split('const COLORS = {')[1].split('EVENT: {')[1].split('}')[0]
+        for event_type in ('alert', 'dns', 'http', 'tls', 'flow'):
+            color = re.search(rf"^\s*{event_type}: '(#[0-9a-fA-F]+)'", event_colors, re.MULTILINE).group(1)
+            self.assertIn(f'color: {color}', srcdoc,
+                          f'Preview must color the {event_type} card with COLORS.EVENT.{event_type}')
+
+    def test_theme_preview_gets_fun_theme_class(self):
+        """The real page's <html> carries .fun-theme for a fun theme (the
+        active card's corner brackets) - previewing one must too, and
+        previewing any other must take it off."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var frame = document.getElementById('themePreviewFrame');
+            frame.srcdoc = '';
+            var doc = frame.contentDocument;
+            previewTheme('thermal');
+            var fun = doc.documentElement.classList.contains('fun-theme');
+            previewTheme('nord');
+            window.__jsdom_result = { fun: fun, notFun: doc.documentElement.classList.contains('fun-theme') };
+        ''')
+        self.assertTrue(result['fun'], 'previewing a fun theme must add .fun-theme to the preview document')
+        self.assertFalse(result['notFun'], 'previewing a non-fun theme must remove .fun-theme from the preview document')
 
     def test_theme_preview_frame_css_exists(self):
         self.assertIn('.theme-preview-frame {', CSS_CONTENT,
