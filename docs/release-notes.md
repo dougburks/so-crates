@@ -34,6 +34,11 @@
   accepted it - or, for a connection that opens with something else, the
   scanner's probe and the service's answer. These were connection cards
   before
+- **OpenVPN** - a record for each connection: how far it got (from a
+  client's unanswered resets to an established tunnel), how often the
+  client started over, how the control channel is protected, the
+  server's certificate from the TLS inside it, and the data packets each
+  way. These were connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -41,7 +46,8 @@
   user or role created or granted, is high; a MongoDB server answering
   without a login, and any other MongoDB write or change, are medium. An
   rsh, rlogin or rexec login is high; one of their services answering a
-  probe is low
+  probe is low. An OpenVPN tunnel that carried data is medium; a client
+  retrying a server that never answers is low
 
 ### Themes
 

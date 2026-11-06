@@ -937,6 +937,44 @@ def write_rsh_pcap(path):
     write_pcap(path, rsh_packets())
 
 
+# ---------------------------------------------------------------- OpenVPN
+#
+# A client (CLIENT:40500) opens an OpenVPN session over UDP with
+# OPENVPN_SERVER: the hard resets, a TLS 1.2 handshake inside the control
+# channel (the server's certificate is the fixtures' self-signed
+# DTLS_CERTIFICATE), then data both ways, the last under a renegotiated
+# key. Another host (OPENVPN_RETRIER:40600) sends three hard resets, with
+# new session IDs, that nothing answers.
+
+OPENVPN_SERVER, OPENVPN_RETRIER = '198.51.100.94', '10.1.0.77'
+
+
+def _openvpn_control(opcode, session, packet_id, payload=b'', acks=(), remote=b''):
+    ack = bytes([len(acks)]) + b''.join(struct.pack('!I', a) for a in acks) + (remote if acks else b'')
+    return bytes([opcode << 3]) + session + ack + struct.pack('!I', packet_id) + payload
+
+
+def openvpn_packets():
+    client, server = bytes.fromhex('1122334455667788'), bytes.fromhex('a1a2a3a4a5a6a7a8')
+    out = [
+        (CLIENT, OPENVPN_SERVER, 40500, 1194, _openvpn_control(7, client, 0)),
+        (OPENVPN_SERVER, CLIENT, 1194, 40500, _openvpn_control(8, server, 0, acks=(0,), remote=client)),
+        (CLIENT, OPENVPN_SERVER, 40500, 1194, _openvpn_control(4, client, 1, _tls12_client_hello('vpn.example'),
+                                                               acks=(0,), remote=server)),
+        (OPENVPN_SERVER, CLIENT, 1194, 40500, _openvpn_control(4, server, 1, _tls12_server_flight(), acks=(1,),
+                                                               remote=client)),
+    ]
+    data = lambda key, n: bytes([9 << 3 | key]) + b'\x00\x00\x01' + bytes(range(n))
+    out += [(CLIENT, OPENVPN_SERVER, 40500, 1194, data(0, 60)), (OPENVPN_SERVER, CLIENT, 1194, 40500, data(0, 80)),
+            (CLIENT, OPENVPN_SERVER, 40500, 1194, data(1, 60)), (OPENVPN_SERVER, CLIENT, 1194, 40500, data(1, 80))]
+    out += [(OPENVPN_RETRIER, OPENVPN_SERVER, 40600, 1194, _openvpn_control(7, bytes([i]) * 8, 0)) for i in range(1, 4)]
+    return [_udp_packet(*p) for p in out]
+
+
+def write_openvpn_pcap(path):
+    write_pcap(path, openvpn_packets())
+
+
 # ---------------------------------------------------------------- PROFINET DCP
 #
 # An engineering station (PN_ENGINEERING) asks every PROFINET device to

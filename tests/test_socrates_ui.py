@@ -22740,13 +22740,13 @@ class TestTsharkUI(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements("""
             window.__jsdom_result = {
-                labels: [eventTypeLabel('conn_ftp-data'), eventTypeLabel('conn_openvpn'), eventTypeLabel('dns')],
+                labels: [eventTypeLabel('conn_ftp-data'), eventTypeLabel('conn_memcache'), eventTypeLabel('dns')],
                 order: sortEventTypes(['conn_s7comm', 'tls', 'conn_ftp', 'alert', 'dns']),
                 columns: getColumnsForType('conn_s7comm'),
                 flowColumns: getColumnsForType('flow'),
             };
         """)
-        self.assertEqual(result['labels'], ['FTP Data', 'OPENVPN', 'DNS Queries'], "a known type's label, else its name in capitals")
+        self.assertEqual(result['labels'], ['FTP Data', 'MEMCACHE', 'DNS Queries'], "a known type's label, else its name in capitals")
         self.assertEqual(result['order'], ['alert', 'dns', 'tls', 'conn_ftp', 'conn_s7comm'], 'after every record type')
         self.assertIn('App Proto', result['columns'])
         self.assertNotIn('State', result['columns'])
@@ -23263,6 +23263,9 @@ class TestTsharkUI(unittest.TestCase):
         'mms': {'event_type': 'mms', 'mms': {'initiate': 'accepted', 'vendor': 'Fixture Vendor', 'model': 'Fixture Relay',
                                              'revision': '1.2', 'domains': ['IED1LD0', 'IED1CTRL'],
                                              'services': {'read': 1, 'write': 2}, 'errors': 0}},
+        'openvpn': {'event_type': 'openvpn', 'openvpn': {'stage': 'established', 'version': 'V2', 'control_protection': 'tls-auth',
+                                                        'client_resets': 1, 'data_to_server': 2, 'data_to_client': 3,
+                                                        'certificate': {'subject': 'CN=vpn.example', 'issuerdn': 'CN=CA'}}},
         'rsh': {'event_type': 'rsh', 'rsh': {'service': 'rexec', 'user': 'operator', 'password': 's3cret',
                                              'command': 'shutdown -r now', 'result': 'refused', 'error': 'Login incorrect.'}},
         'mongodb': {'event_type': 'mongodb', 'mongodb': {'commands': {'isMaster': 1, 'listDatabases': 1}, 'errors': 0,
@@ -23333,6 +23336,7 @@ class TestTsharkUI(unittest.TestCase):
         'opcua': ['opc.tcp://10.1.0.48:4840/fixture', 'None', 'Fixture Client', 'user1', 's3cret', 'Good'],
         'opcua_action': ['Call', 'ns=1;i=62541', 'Hello', 'BadNodeIdUnknown'],
         'mms': ['accepted', 'IED1LD0, IED1CTRL', 'Fixture Vendor', 'Fixture Relay'],
+        'openvpn': ['established', 'V2', 'tls-auth', 'CN=vpn.example', '1', '2', '3'],
         'rsh': ['rexec', 'operator', '', 'shutdown -r now', 's3cret', 'refused'],
         'mongodb': ['PyMongo 4.6.3', 'alice', 'failed', 'admin, shop', '6.0.5', 'yes'],
         'mongodb_action': ['insert', 'READ_ME', 'README', '1', 'ok'],
@@ -23416,7 +23420,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 

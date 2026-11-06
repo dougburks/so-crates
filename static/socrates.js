@@ -2478,6 +2478,7 @@
                 ssdp: '#7e57c2',
                 telnet: '#ffa726',
                 rsh: '#ff8a65',
+                openvpn: '#5c6bc0',
                 iec104: '#ef5350',
                 bacnet: '#ab47bc',
                 opcua: '#29b6f6',
@@ -4933,6 +4934,31 @@
             return html;
         }
 
+        // tshark's OpenVPN records (shark_protocols.OpenVPN): one per connection.
+        function renderOpenvpnDetails(e) {
+            const o = e.openvpn || {};
+            let html = htmlSection('OpenVPN Details', COLORS.EVENT.openvpn);
+            html += htmlRowText('Stage', o.stage);
+            html += htmlRowText('Version', o.version);
+            html += htmlRowText('Control Protection', o.control_protection);
+            html += htmlRowText('Client Resets', o.client_resets !== undefined ? o.client_resets.toLocaleString() : '');
+            if (o.client_sessions) html += htmlRowText('Client Sessions', o.client_sessions.toLocaleString());
+            html += htmlRowText('SNI', o.sni, 'mono');
+            const cert = o.certificate || {};
+            html += htmlRowText('Subject', cert.subject, 'mono');
+            html += htmlRowText('Issuer', cert.issuerdn, 'mono');
+            html += htmlRowText('Valid', cert.notbefore ? `${cert.notbefore} to ${cert.notafter || ''}` : '');
+            html += htmlRowText('Serial', cert.serial, 'mono');
+            html += htmlRowText('Fingerprint', cert.fingerprint, 'mono');
+            html += htmlRowText('Client Certificate', (o.client_certificate || {}).subject, 'mono');
+            html += htmlRowText('Cipher Suite', o.cipher_suite);
+            html += htmlRowText('JA4', o.ja4, 'mono');
+            html += htmlRowText('Data Packets', `${(o.data_to_server || 0).toLocaleString()} to server, ${(o.data_to_client || 0).toLocaleString()} to client`);
+            if (o.data_keys) html += htmlRowText('Data Keys', `${o.data_keys} (renegotiated)`);
+            if (o.soft_resets) html += htmlRowText('Soft Resets', o.soft_resets.toLocaleString());
+            return html;
+        }
+
         // tshark's SSDP records (shark_protocols.SSDP).
         function renderSsdpDetails(e) {
             const sp = e.ssdp || {};
@@ -5306,6 +5332,7 @@
             ssdp: renderSsdpDetails,
             telnet: renderTelnetDetails,
             rsh: renderRshDetails,
+            openvpn: renderOpenvpnDetails,
             iec104: renderIec104Details,
             bacnet: renderBacnetDetails,
             opcua: renderOpcuaDetails,
@@ -8445,6 +8472,7 @@
             ssdp: 'SSDP',
             telnet: 'Telnet',
             rsh: 'Remote Shell',
+            openvpn: 'OpenVPN',
             iec104: 'IEC 104',
             bacnet: 'BACnet',
             opcua: 'OPC UA',
@@ -9610,6 +9638,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Object', 'Control', 'Value', 'Result'];
                 case 'pn_dcp':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Query', 'Changes', 'Station Name', 'IP', 'Result', 'Count'];
+                case 'openvpn':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Stage', 'Version', 'Protection', 'Subject', 'Resets', 'Data Pkts →', 'Data Pkts ←'];
                 case 'rsh':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'User', 'Local User', 'Command', 'Password', 'Result'];
                 case 'mongodb':
@@ -10100,6 +10130,7 @@
                 case 'mongodb':
                 case 'mongodb_action':
                 case 'rsh':
+                case 'openvpn':
                 case 'goose':
                 case 'browser':
                 case 'lldp':
@@ -12833,6 +12864,12 @@
                 case 'Driver': return e.mongodb?.driver || '';
                 // rsh, rlogin, rexec: a connection's
                 case 'Local User': return e.rsh?.local_user || '';
+                // OpenVPN: a connection's
+                case 'Stage': return e.openvpn?.stage || '';
+                case 'Protection': return e.openvpn?.control_protection || '';
+                case 'Resets': return e.openvpn?.client_resets !== undefined ? String(e.openvpn.client_resets) : '';
+                case 'Data Pkts →': return e.openvpn?.data_to_server !== undefined ? String(e.openvpn.data_to_server) : '';
+                case 'Data Pkts ←': return e.openvpn?.data_to_client !== undefined ? String(e.openvpn.data_to_client) : '';
                 case 'Databases': return (e.mongodb?.databases || []).join(', ');
                 case 'Database': return e.mongodb_action?.database || '';
                 case 'Collection': return e.mongodb_action?.collection || '';
@@ -12914,6 +12951,7 @@
                 case 'Version': {
                     if (e.event_type === 'ntp') return e.ntp?.version !== undefined ? String(e.ntp.version) : '';
                     if (e.dtls) return e.dtls.version || '';
+                    if (e.openvpn) return e.openvpn.version || '';
                     if (e.rpc) return e.rpc.version !== undefined ? String(e.rpc.version) : '';
                     if (e.socks) return e.socks.version || '';
                     if (e.slp) return e.slp.version !== undefined ? String(e.slp.version) : '';
@@ -12943,6 +12981,7 @@
                 case 'Subject': {
                     if (e.event_type === 'email') return e.email?.subject || '';
                     if (e.dtls) return (e.dtls.subject || '').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
+                    if (e.openvpn) return (e.openvpn.certificate?.subject || '').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
                     if (e.tls_failure) return (e.tls_failure.subject || '').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
                     return (e.tls?.subject || '-').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
                 }

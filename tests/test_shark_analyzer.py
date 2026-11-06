@@ -738,6 +738,58 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestOpenVPN(unittest.TestCase):
+    """tests/protocol_fixtures.write_openvpn_pcap: one record per OpenVPN
+    connection - with what Suricata 8.0.8 logged for the capture
+    (tests/data/openvpn_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_openvpn_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'openvpn.pcap')
+        write_openvpn_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = {r['src_port']: r['openvpn'] for r in cls.records if r['event_type'] == 'openvpn'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_established_tunnel(self):
+        s = self.sessions[40500]
+        self.assertEqual({k: s.get(k) for k in ('stage', 'version', 'control_protection', 'client_resets', 'sni',
+                                                'cipher_suite', 'data_to_server', 'data_to_client', 'data_keys')},
+                         {'stage': 'established', 'version': 'V2', 'control_protection': 'none', 'client_resets': 1,
+                          'sni': 'vpn.example', 'cipher_suite': 'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
+                          'data_to_server': 2, 'data_to_client': 2, 'data_keys': 2})
+        self.assertEqual((s['certificate']['subject'], s['certificate']['issuerdn']),
+                         ('C=US, O=Fixture Ltd, CN=dtls.example', 'C=US, O=Fixture Ltd, CN=dtls.example'),
+                         "the server's certificate, from the TLS inside the control channel")
+        self.assertNotIn('client_certificate', s)
+
+    def test_a_client_retrying_unanswered(self):
+        self.assertEqual(self.sessions[40600], {'stage': 'client reset only', 'version': 'V2', 'client_resets': 3,
+                                                'client_sessions': 3, 'data_to_server': 0, 'data_to_client': 0})
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('openvpn_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['named_by_tshark'], report['differences']), (2, 2, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'openvpn_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'openvpn.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('openvpn'), 2)
+        self.assertNotIn('conn_openvpn', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestRShell(unittest.TestCase):
     """tests/protocol_fixtures.write_rsh_pcap: one record per rsh, rlogin
     or rexec connection - with what Suricata 8.0.8 logged for the capture
@@ -2873,10 +2925,10 @@ class TestMergeRows(unittest.TestCase):
         self.assertEqual(len(list(shark_analyzer.merge_rows(rows, self.SURICATA))), 2)
 
     def test_flows_become_connection_rows_only_for_protocols_with_nothing_else(self):
-        self.assertEqual(self._kept([_row('flow', app='openvpn'), _row('flow', app='wol'),
+        self.assertEqual(self._kept([_row('flow', app='memcache'), _row('flow', app='wol'),
                                      _row('flow', app='telnet'), _row('flow', app='http'), _row('flow', app='arp'),
                                      _row('flow', app='s7comm'), _row('flow', app='syslog'), _row('flow', app='')]),
-                         [('conn_openvpn', 'openvpn'), ('conn_wol', 'wol')],
+                         [('conn_memcache', 'memcache'), ('conn_wol', 'wol')],
                          "telnet, http and arp are Suricata's; s7comm and syslog have records; '' is no protocol")
 
     def test_nothing_on_a_flow_suricata_gave_a_protocol(self):

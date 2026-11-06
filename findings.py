@@ -303,6 +303,12 @@ RULES = (
          f"NOT {_in('mongodb_action', 'command', ['drop', 'dropDatabase', 'dropAllUsersFromDatabase', 'shutdown'] + list(_MONGO_ACCOUNT))}",
          lambda b: _join(b.get('command'), '.'.join(filter(None, (b.get('database'), b.get('collection')))), ('-', b.get('result'))),
          'Documents inserted, updated or deleted, or a collection, index or setting changed.'),
+    Rule('openvpn_tunnel', 'medium', 'openvpn', 'OpenVPN tunnel',
+         f"{_j('openvpn', 'stage')} = 'established'",
+         lambda b: _join(('to', (b.get('certificate') or {}).get('subject') or b.get('sni')),
+                         ('-', _counted((b.get('data_to_server') or 0) + (b.get('data_to_client') or 0), 'data packet'))),
+         "A VPN tunnel carried data. From inside a network it's a way around its monitoring and controls - "
+         "check it's one you run."),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),
@@ -357,6 +363,11 @@ RULES = (
          lambda b: f"{_counted(b['responses'], 'device')} answered" if b.get('responses') else 'no answer',
          "A DCP Identify All lists every PROFINET device on the segment, with its name, type and address - "
          "routine from an engineering station, a survey from anywhere else."),
+    Rule('openvpn_retries', 'low', 'openvpn', 'OpenVPN client retrying unanswered',
+         f"{_j('openvpn', 'stage')} = 'client reset only' AND {_j('openvpn', 'client_resets')} >= 2",
+         lambda b: _counted(b.get('client_resets'), 'attempt'),
+         "A client kept trying to open an OpenVPN session that nothing answered - a VPN configured to "
+         "reach out, and blocked or gone. (A scanner's probe is one attempt, and isn't listed.)"),
     Rule('rsh_answering', 'low', 'rsh', 'rsh, rlogin or rexec service answering',
          f"{_j('rsh', 'probe')} IS NOT NULL AND {_j('rsh', 'result')} != 'no response'",
          lambda b: _join(b.get('service'), ('-', b.get('error') or b.get('result'))),

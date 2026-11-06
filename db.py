@@ -1698,6 +1698,15 @@ AGGREGATION_JSON_PATHS = {
         'Repeats': ['$.goose.repeats'],
         'Anomaly': ['$.goose.anomaly'],
     },
+    'openvpn': {
+        'Stage': ['$.openvpn.stage'],
+        'Version': ['$.openvpn.version'],
+        'Protection': ['$.openvpn.control_protection'],
+        'Subject': ['$.openvpn.certificate.subject'],
+        'Resets': ['$.openvpn.client_resets'],
+        'Data Pkts →': ['$.openvpn.data_to_server'],
+        'Data Pkts ←': ['$.openvpn.data_to_client'],
+    },
     'rsh': {
         'Service': ['$.rsh.service'],
         'User': ['$.rsh.user'],

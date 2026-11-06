@@ -2409,6 +2409,118 @@ class RShell:
         return records
 
 
+# ---------------------------------------------------------------- OpenVPN
+#
+# OpenVPN (UDP or TCP 1194), which Suricata doesn't parse. A client opens
+# with a hard reset (each retry is another, with a new session ID), the
+# server answers with its own, TLS runs inside the control channel - the
+# server's certificate readable, unless tls-crypt wraps it - and then the
+# tunnel's data flows, its keys renegotiated now and then. One record per
+# connection: how far it got, how often the client started over, how the
+# control channel is protected (tls-auth's HMAC, tls-crypt), the TLS
+# handshake's certificates and cipher suite, and the data packets each
+# way. tshark recognizes OpenVPN on port 1194 only.
+
+_OPENVPN_OPCODES = {1: 'P_CONTROL_HARD_RESET_CLIENT_V1', 2: 'P_CONTROL_HARD_RESET_SERVER_V1',
+                    3: 'P_CONTROL_SOFT_RESET_V1', 4: 'P_CONTROL_V1', 5: 'P_ACK_V1', 6: 'P_DATA_V1',
+                    7: 'P_CONTROL_HARD_RESET_CLIENT_V2', 8: 'P_CONTROL_HARD_RESET_SERVER_V2', 9: 'P_DATA_V2',
+                    10: 'P_CONTROL_HARD_RESET_CLIENT_V3', 11: 'P_CONTROL_WKC_V1'}
+_OPENVPN_CLIENT_RESETS, _OPENVPN_SERVER_RESETS = {1, 7, 10}, {2, 8}
+_OPENVPN_DATA = {6, 9}
+_OPENVPN_STAGES = ('client reset only', 'server answered', 'TLS handshake', 'established')
+
+
+class _OpenVPNSession:
+    __slots__ = ('flow', 'first', 'client', 'body', 'sessions', 'keys', 'stage')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.client = None         # the address that sent the hard reset
+        self.body = {'client_resets': 0, 'data_to_server': 0, 'data_to_client': 0}
+        self.sessions = set()      # the client's session IDs
+        self.keys = set()          # key IDs the data used
+        self.stage = 0
+
+
+class OpenVPN:
+    """OpenVPN - see the comment above."""
+    event_type = 'openvpn'
+    app_protos = ('openvpn',)
+    fields = ('openvpn.opcode', 'openvpn.keyid', 'openvpn.sessionid', 'openvpn.hmac', 'openvpn.wkc_len',
+              'openvpn.peerid', 'tls.handshake.type', 'tls.handshake.certificate', 'vals(tls.handshake.ciphersuite)',
+              'tls.handshake.ja4', 'tls.handshake.extensions_server_name')
+
+    def __init__(self):
+        self.sessions = {}         # flow key -> _OpenVPNSession
+
+    def feed(self, pkt, v):
+        opcodes = [_int(x) for x in v['openvpn.opcode']]
+        if not opcodes:
+            return
+        session = self.sessions.get(pkt.flow.key)
+        if session is None:
+            session = self.sessions[pkt.flow.key] = _OpenVPNSession(pkt.flow, pkt.when)
+        body = session.body
+        for i, opcode in enumerate(opcodes):
+            if opcode in _OPENVPN_CLIENT_RESETS:
+                session.client = pkt.src
+                body['client_resets'] += 1
+                body['version'] = 'V3 (tls-crypt-v2)' if opcode == 10 else 'V2' if opcode == 7 else 'V1'
+                if i < len(v['openvpn.sessionid']):
+                    session.sessions.add(v['openvpn.sessionid'][i])
+            elif opcode in _OPENVPN_SERVER_RESETS:
+                session.stage = max(session.stage, 1)
+            elif opcode in _OPENVPN_DATA:
+                to_server = session.client is None or pkt.src == session.client
+                body['data_to_server' if to_server else 'data_to_client'] += 1
+                if i < len(v['openvpn.keyid']):
+                    session.keys.add(v['openvpn.keyid'][i])
+                if body['data_to_server'] and body['data_to_client']:
+                    session.stage = 3
+            elif opcode == 3:
+                body['soft_resets'] = body.get('soft_resets', 0) + 1
+        if v['openvpn.hmac']:
+            body['control_protection'] = 'tls-auth'
+        if v['openvpn.wkc_len'] or body.get('version', '').startswith('V3'):
+            body['control_protection'] = 'tls-crypt-v2'
+        self._tls(session, pkt, v)
+
+    @staticmethod
+    def _tls(session, pkt, v):
+        body = session.body
+        if v['tls.handshake.type']:
+            session.stage = max(session.stage, 2)
+        from_client = session.client is not None and pkt.src == session.client
+        for hexbytes in v['tls.handshake.certificate'][:1]:
+            key = 'client_certificate' if from_client else 'certificate'
+            if key not in body:
+                cert = _x509(hexbytes)
+                if cert:
+                    body[key] = {k: cert[k] for k in ('subject', 'issuerdn', 'notbefore', 'notafter', 'serial',
+                                                     'fingerprint') if k in cert}
+        if v['vals(tls.handshake.ciphersuite)'] and not from_client and '2' in v['tls.handshake.type']:
+            body['cipher_suite'] = v['vals(tls.handshake.ciphersuite)'][0]
+        if from_client and v['tls.handshake.ja4']:
+            body.setdefault('ja4', v['tls.handshake.ja4'][0])
+        if from_client and v['tls.handshake.extensions_server_name']:
+            body.setdefault('sni', v['tls.handshake.extensions_server_name'][0])
+
+    def finish(self):
+        records = []
+        for session in self.sessions.values():
+            body = dict(session.body)
+            body['stage'] = _OPENVPN_STAGES[session.stage]
+            if len(session.sessions) > 1:
+                body['client_sessions'] = len(session.sessions)
+            if len(session.keys) > 1:
+                body['data_keys'] = len(session.keys)
+            body.setdefault('control_protection', 'none' if session.stage >= 1 else '')
+            if not body['control_protection']:
+                del body['control_protection']
+            records.append((session.flow, session.first, 'openvpn', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -4415,7 +4527,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).
