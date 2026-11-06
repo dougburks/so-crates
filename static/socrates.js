@@ -2480,6 +2480,7 @@
                 iec104: '#ef5350',
                 bacnet: '#ab47bc',
                 opcua: '#29b6f6',
+                mms: '#5c6bc0',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -2500,6 +2501,7 @@
                 tunnel: '#8d6e63',
                 xdmcp: '#78909c',
                 opcua_action: '#ff7043',
+                mms_action: '#ef5350',
                 bacnet_property: '#5c6bc0',
                 bacnet_device: '#8d6e63',
                 iec104_point: '#26a69a',
@@ -4706,6 +4708,34 @@
             return html;
         }
 
+        // tshark's MMS records (shark_protocols.MMS): a connection's
+        // association, and a change (write, control, program, domain...).
+        function renderMmsDetails(e) {
+            const m = e.mms || {};
+            let html = htmlSection('MMS Details', COLORS.EVENT.mms);
+            html += htmlRowText('Initiate', m.initiate);
+            html += htmlRowText('Vendor', m.vendor);
+            html += htmlRowText('Model', m.model);
+            html += htmlRowText('Revision', m.revision);
+            html += htmlRowText('Domains', (m.domains || []).join(', '), 'mono');
+            html += htmlRowText('Services', Object.entries(m.services || {}).map(([s, n]) => `${s} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Reports', Object.entries(m.reports || {}).map(([s, n]) => `${s} ${n.toLocaleString()}`).join(', '));
+            if (m.errors) html += htmlRowText('Errors', `${m.errors.toLocaleString()} (last: ${m.last_error || ''})`);
+            if (m.concluded) html += htmlRowText('Concluded', 'yes');
+            return html;
+        }
+
+        function renderMmsActionDetails(e) {
+            const a = e.mms_action || {};
+            let html = htmlSection('MMS Action Details', COLORS.EVENT.mms_action);
+            html += htmlRowText('Service', a.service);
+            html += htmlRowText('Control', a.control);
+            html += htmlRowText('Object', a.object, 'mono');
+            html += htmlRowText('Value', a.value !== undefined ? String(a.value) : '', 'mono');
+            html += htmlRowText('Result', a.result);
+            return html;
+        }
+
         // tshark's BACnet records (shark_protocols.BACnet): an action with
         // its reply, a read/notification summary, a device.
         function renderBacnetDetails(e) {
@@ -5172,6 +5202,7 @@
             iec104: renderIec104Details,
             bacnet: renderBacnetDetails,
             opcua: renderOpcuaDetails,
+            mms: renderMmsDetails,
             goose: renderGooseDetails,
             browser: renderBrowserDetails,
             dhcpv6: renderDhcpv6Details,
@@ -5192,6 +5223,7 @@
             lldp: renderNeighborDetails,
             cdp: renderNeighborDetails,
             opcua_action: renderOpcuaActionDetails,
+            mms_action: renderMmsActionDetails,
             bacnet_property: renderBacnetPropertyDetails,
             bacnet_device: renderBacnetDeviceDetails,
             iec104_point: renderIec104PointDetails,
@@ -8304,6 +8336,7 @@
             iec104: 'IEC 104',
             bacnet: 'BACnet',
             opcua: 'OPC UA',
+            mms: 'MMS',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -8324,6 +8357,7 @@
             lldp: 'LLDP',
             cdp: 'CDP',
             opcua_action: 'OPC UA Actions',
+            mms_action: 'MMS Actions',
             bacnet_property: 'BACnet Properties',
             bacnet_device: 'BACnet Devices',
             iec104_point: 'IEC 104 Points',
@@ -9454,6 +9488,10 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Endpoint', 'Security', 'Application', 'User', 'Password', 'Activation'];
                 case 'opcua_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Node', 'Value', 'Result'];
+                case 'mms':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Initiate', 'Domains', 'Vendor', 'Model'];
+                case 'mms_action':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Object', 'Control', 'Value', 'Result'];
                 case 'bacnet_property':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Object', 'Property', 'Count', 'Errors', 'Last Value'];
                 case 'bacnet_device':
@@ -9929,6 +9967,8 @@
                 case 'bacnet_device':
                 case 'opcua':
                 case 'opcua_action':
+                case 'mms':
+                case 'mms_action':
                 case 'goose':
                 case 'browser':
                 case 'lldp':
@@ -12593,15 +12633,15 @@
                 case 'Station': { const r = e.iec104 || e.iec104_point; return r?.station !== undefined ? String(r.station) : ''; }
                 case 'IOA': { const r = e.iec104 || e.iec104_point; return r?.ioa !== undefined ? String(r.ioa) : ''; }
                 case 'Value': {
-                    const r = e.iec104 || e.bacnet || e.opcua_action;
+                    const r = e.iec104 || e.bacnet || e.opcua_action || e.mms_action;
                     if (r?.value !== undefined) return String(r.value);
                     return e.opcua_action?.arguments ? e.opcua_action.arguments.join(', ') : '';
                 }
-                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
+                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
                 case 'Updates': return e.iec104_point?.updates !== undefined ? String(e.iec104_point.updates) : '';
                 case 'Last Value': { const r = e.iec104_point || e.bacnet_property; return r?.last_value !== undefined ? String(r.last_value) : ''; }
                 // BACnet: an action's, a read/notification summary's, a device's
-                case 'Object': return e.bacnet?.object || e.bacnet_property?.object || '';
+                case 'Object': return e.bacnet?.object || e.bacnet_property?.object || e.mms_action?.object || '';
                 case 'Property': return e.bacnet?.property || e.bacnet_property?.property || '';
                 case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp; return r?.count !== undefined ? String(r.count) : ''; }
                 // LLDP and CDP: a neighbor's announcements
@@ -12628,6 +12668,7 @@
                 case 'Device': return e.bacnet_device?.device !== undefined ? String(e.bacnet_device.device) : '';
                 case 'Vendor': {
                     if (e.l2tp) return e.l2tp.client_vendor || '';
+                    if (e.mms) return e.mms.vendor || '';
                     const d = e.bacnet_device;
                     return d?.vendor || (d?.vendor_id !== undefined ? String(d.vendor_id) : '');
                 }
@@ -12645,6 +12686,11 @@
                 case 'Application': return e.opcua?.client_application || '';
                 case 'Activation': return e.opcua?.activation || '';
                 case 'Node': return e.opcua_action?.node || '';
+                // MMS: a connection's, an action's
+                case 'Initiate': return e.mms?.initiate || '';
+                case 'Domains': return (e.mms?.domains || []).join(', ');
+                case 'Model': return e.mms?.model || '';
+                case 'Control': return e.mms_action?.control || '';
                 case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || '';
                 case 'Login': return e.telnet?.login || '';
                 case 'Area': return e.s7comm?.items?.[0]?.area || '';
@@ -12849,6 +12895,7 @@
                     if (e.event_type === 'bacnet') return e.bacnet?.service || '';
                     if (e.event_type === 'bacnet_property') return e.bacnet_property?.service || '';
                     if (e.event_type === 'opcua_action') return e.opcua_action?.service || '';
+                    if (e.event_type === 'mms_action') return e.mms_action?.service || '';
                     return e.krb5?.sname || '';
                 }
                 // The name alone, as the server aggregates it - the <suffix> is

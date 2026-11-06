@@ -82,6 +82,9 @@ def _list(values, limit=3):
 _IEC104_CONTROL = ('Single command', 'Double command', 'Regulating step command', 'Set point (normalized)',
                    'Set point (scaled)', 'Set point (float)', 'Bitstring command', 'Reset process',
                    'Parameter activation')
+# MMS services that run, stop or reload what a relay or controller executes
+_MMS_PROGRAM = ('start', 'stop', 'resume', 'reset', 'kill', 'createProgramInvocation', 'deleteProgramInvocation',
+                'initiateDownloadSequence', 'requestDomainDownload', 'loadDomainContent', 'deleteDomain')
 # The alerts a TLS endpoint sends when it refuses the other's certificate
 # (tshark's names)
 _TLS_CERT_ALERTS = ('Bad Certificate', 'Unsupported Certificate', 'Certificate Revoked', 'Certificate Expired',
@@ -228,6 +231,11 @@ RULES = (
          lambda b: b.get('anomaly', ''),
          "A protection relay's state number should only go up by one - a jump or reset is what a "
          "forged or replayed message looks like."),
+    Rule('mms_control', 'high', 'mms_action', 'MMS control command or program change',
+         f"({_j('mms_action', 'control')} IS NOT NULL OR {_in('mms_action', 'service', list(_MMS_PROGRAM))})",
+         lambda b: _join(b.get('control') or b.get('service'), b.get('object'), ('-', b.get('result'))),
+         'An IEC 61850 operate, select or cancel - switching a breaker or other controllable equipment - '
+         'or a program started, stopped or killed, or a domain downloaded, on a relay or controller.'),
     Rule('slp_registration', 'high', 'slp', 'SLP accepts registrations',
          f"{_j('slp', 'function')} = 'Service Registration' AND {_j('slp', 'status')} = 'OK'",
          lambda b: _join(b.get('url'), f"({b['length']} bytes)" if b.get('length') else ''),
@@ -255,6 +263,10 @@ RULES = (
          '1',
          lambda b: _join(b.get('service'), b.get('node'), ('-', b.get('result'))),
          'A client changed a node, called a method, or added or deleted nodes.'),
+    Rule('mms_change', 'medium', 'mms_action', 'MMS write or definition change',
+         f"({_j('mms_action', 'control')} IS NULL AND NOT {_in('mms_action', 'service', list(_MMS_PROGRAM))})",
+         lambda b: _join(b.get('service'), b.get('object'), ('-', b.get('result'))),
+         'A client wrote a variable, or defined or deleted variables, lists, events or journals, on an MMS server.'),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),

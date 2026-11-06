@@ -23260,6 +23260,12 @@ class TestTsharkUI(unittest.TestCase):
                                                   'services': {'Write': 1}, 'errors': 0}},
         'opcua_action': {'event_type': 'opcua_action', 'opcua_action': {'service': 'Call', 'node': 'ns=1;i=62541', 'object': 'i=85',
                                                                         'arguments': ['Hello'], 'result': 'BadNodeIdUnknown'}},
+        'mms': {'event_type': 'mms', 'mms': {'initiate': 'accepted', 'vendor': 'Fixture Vendor', 'model': 'Fixture Relay',
+                                             'revision': '1.2', 'domains': ['IED1LD0', 'IED1CTRL'],
+                                             'services': {'read': 1, 'write': 2}, 'errors': 0}},
+        'mms_action': {'event_type': 'mms_action', 'mms_action': {'service': 'write', 'object': 'IED1LD0/XCBR1$CO$Pos$SBOw',
+                                                                  'control': 'select', 'value': '1, 0',
+                                                                  'result': 'object-access-denied'}},
         'bacnet': {'event_type': 'bacnet', 'bacnet': {'service': 'reinitializeDevice', 'kind': 'confirmed', 'state': 'warmstart',
                                                       'password': 'filister', 'result': 'error: services: password-failure'}},
         'bacnet_property': {'event_type': 'bacnet_property', 'bacnet_property': {
@@ -23311,6 +23317,8 @@ class TestTsharkUI(unittest.TestCase):
         'goose': ['IED1LD0/LLN0$GO$gcb1', 'IED1LD0/LLN0$Trips', '10', '0', 'stNum skipped 7'],
         'opcua': ['opc.tcp://10.1.0.48:4840/fixture', 'None', 'Fixture Client', 'user1', 's3cret', 'Good'],
         'opcua_action': ['Call', 'ns=1;i=62541', 'Hello', 'BadNodeIdUnknown'],
+        'mms': ['accepted', 'IED1LD0, IED1CTRL', 'Fixture Vendor', 'Fixture Relay'],
+        'mms_action': ['write', 'IED1LD0/XCBR1$CO$Pos$SBOw', 'select', '1, 0', 'object-access-denied'],
         'bacnet': ['reinitializeDevice', '', '', '', 'filister', 'error: services: password-failure'],
         'bacnet_property': ['readProperty', 'analog-value,1', 'present-value', '2', '1', '72.5'],
         'bacnet_device': ['1047', 'Acuity Brands Lighting, Inc.', '2'],
@@ -23346,7 +23354,7 @@ class TestTsharkUI(unittest.TestCase):
                 self.assertEqual(r['cells'][6:6 + len(expected)], expected)
                 # one record per point, so its section is a point's
                 section = {'iec104_point': 'IEC 104 Point', 'bacnet_property': 'BACnet Property',
-                           'bacnet_device': 'BACnet Device', 'opcua_action': 'OPC UA Action',
+                           'bacnet_device': 'BACnet Device', 'opcua_action': 'OPC UA Action', 'mms_action': 'MMS Action',
                            'tls_failure': 'TLS Failure'}.get(t, r['label'])
                 self.assertIn(f'{section} Details', r['detail'])
 
@@ -23387,7 +23395,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 

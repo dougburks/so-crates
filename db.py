@@ -1698,6 +1698,19 @@ AGGREGATION_JSON_PATHS = {
         'Repeats': ['$.goose.repeats'],
         'Anomaly': ['$.goose.anomaly'],
     },
+    'mms': {
+        'Initiate': ['$.mms.initiate'],
+        'Domains': ['$.mms.domains'],
+        'Vendor': ['$.mms.vendor'],
+        'Model': ['$.mms.model'],
+    },
+    'mms_action': {
+        'Service': ['$.mms_action.service'],
+        'Object': ['$.mms_action.object'],
+        'Control': ['$.mms_action.control'],
+        'Value': ['$.mms_action.value'],
+        'Result': ['$.mms_action.result'],
+    },
     'opcua': {
         'Endpoint': ['$.opcua.endpoint'],
         'Security': ['$.opcua.security_policy'],
@@ -1857,7 +1870,7 @@ AGGREGATION_CAST_TEXT = {
 # json_extract (filealerts.tags is a JSON array, not a scalar).
 AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
-    ('ftp', 'Completion Code'), ('ftp', 'Reply'),
+    ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
 }
 
 

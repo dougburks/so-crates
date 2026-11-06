@@ -692,6 +692,91 @@ def write_opcua_pcap(path):
     write_pcap(path, opcua_packets())
 
 
+# ---------------------------------------------------------------- MMS
+#
+# A SCADA client (CLIENT:49152) and a relay (MMS_SERVER:102). The OSI
+# connection (COTP connect, session connect carrying the presentation and
+# ACSE association with MMS initiate, and its accept) is a real ICCP
+# client's and server's, from ITI's IEC 61850 samples - tshark decodes MMS
+# only after seeing which presentation context carries it. Then: a read of
+# IED1LD0/LLN0$ST$Mod$stVal (1), Identify (Fixture Vendor, Fixture Relay,
+# 1.2), a write to XCBR1$CO$Pos$Oper (an operate, success), a write to
+# XCBR1$CO$Pos$SBOw (a select, refused object-access-denied), a stop of
+# program Fixture_App refused (vmd-state: 2), an information report, and
+# conclude.
+
+MMS_SERVER = '10.1.0.102'
+
+
+def _ber_tlv(tag, value):
+    """BER: a tag (one byte, or bytes for a high tag number) and length."""
+    n = len(value)
+    length = bytes([n]) if n < 128 else bytes([0x80 | ((n.bit_length() + 7) // 8)]) + n.to_bytes((n.bit_length() + 7) // 8, 'big')
+    return (tag if isinstance(tag, bytes) else bytes([tag])) + length + value
+
+
+def _mms_tpkt(mms):
+    """An MMS PDU in a COTP data TPDU, session give-tokens and data SPDUs,
+    and presentation user data (context 3, MMS)."""
+    pdv = _ber_tlv(0x61, _ber_tlv(0x30, b'\x02\x01\x03' + _ber_tlv(0xa0, mms)))
+    payload = b'\x02\xf0\x80' + b'\x01\x00\x01\x00' + pdv
+    return struct.pack('!BBH', 3, 0, 4 + len(payload)) + payload
+
+
+def _mms_name(domain, item):
+    return _ber_tlv(0xa1, _ber_tlv(0x1a, domain.encode()) + _ber_tlv(0x1a, item.encode()))
+
+
+def _mms_variable(domain, item):
+    return _ber_tlv(0xa0, _ber_tlv(0x30, _ber_tlv(0xa0, _mms_name(domain, item))))
+
+
+def _mms_request(invoke, service):
+    return _ber_tlv(0xa0, b'\x02\x01' + bytes([invoke]) + service)
+
+
+def _mms_response(invoke, service):
+    return _ber_tlv(0xa1, b'\x02\x01' + bytes([invoke]) + service)
+
+
+def mms_packets():
+    cr = bytes.fromhex('0300001611e00000b00100c0010ac1020001c2020002')
+    cc = bytes.fromhex('0300000e09d0b001180200c0010a')
+    associate = bytes.fromhex(
+        '030000c502f0800dbc0506130100160102140200023302000134020002c1a63181a3a003800101a2819b800207808104000000018204'
+        '00000002a423300f0201010604520100013004060251013010020103060528ca220201300406025101880206006160305e020101a059'
+        '605780020780a107060528ca220101a20406022902a303020102a60406022901a703020101be32283006025101020103a027a8258002'
+        '7d00810114820114830104a416800101810305fb00820c036e1d000000000064000198')
+    accept = bytes.fromhex(
+        '0300009e02f0800e95050613010016010214020002c187318184a003800101a27d80020780830400000002a512300780010081025101'
+        '300780010081025101615d305b020101a056615480020780a107060528ca220101a203020100a305a103020100a40406022902a50302'
+        '0102be2e282c020103a027a92580027d00810114820114830104a416800101810305fb00820c036e1d000000000064000198')
+    read = _mms_request(1, _ber_tlv(0xa4, _ber_tlv(0xa1, _mms_variable('IED1LD0', 'LLN0$ST$Mod$stVal'))))
+    read_response = _mms_response(1, _ber_tlv(0xa4, _ber_tlv(0xa1, b'\x85\x01\x01')))
+    identify = _mms_request(2, b'\x82\x00')
+    identify_response = _mms_response(2, _ber_tlv(0xa2, _ber_tlv(0x80, b'Fixture Vendor') + _ber_tlv(0x81, b'Fixture Relay')
+                                                  + _ber_tlv(0x82, b'1.2')))
+    operate_value = _ber_tlv(0xa0, _ber_tlv(0xa2, b'\x83\x01\xff' + b'\x85\x01\x00'))
+    operate = _mms_request(3, _ber_tlv(0xa5, _mms_variable('IED1LD0', 'XCBR1$CO$Pos$Oper') + operate_value))
+    operate_response = _mms_response(3, _ber_tlv(0xa5, b'\x81\x00'))
+    select = _mms_request(4, _ber_tlv(0xa5, _mms_variable('IED1LD0', 'XCBR1$CO$Pos$SBOw') + operate_value))
+    select_response = _mms_response(4, _ber_tlv(0xa5, b'\x80\x01\x03'))
+    stop = _mms_request(5, _ber_tlv(b'\xbf\x29', _ber_tlv(0x80, b'Fixture_App')))
+    stop_error = _ber_tlv(0xa2, b'\x80\x01\x05' + _ber_tlv(0xa2, _ber_tlv(0xa0, b'\x80\x01\x02')))
+    report = _ber_tlv(0xa3, _ber_tlv(0xa0, _ber_tlv(0xa1, _mms_name('IED1LD0', 'LLN0$dsTrips'))
+                                     + _ber_tlv(0xa0, b'\x85\x01\x07')))
+    segments = [(True, cr), (False, cc), (True, associate), (False, accept)] + [
+        (client, _mms_tpkt(pdu)) for client, pdu in (
+            (True, read), (False, read_response), (True, identify), (False, identify_response),
+            (True, operate), (False, operate_response), (True, select), (False, select_response),
+            (True, stop), (False, stop_error), (False, report), (True, b'\x8b\x00'), (False, b'\x8c\x00'))]
+    return tcp_segments(CLIENT, MMS_SERVER, 49152, 102, segments)
+
+
+def write_mms_pcap(path):
+    write_pcap(path, mms_packets())
+
+
 # ---------------------------------------------------------------- GOOSE
 #
 # One relay (GOOSE_PUBLISHER) publishing control block LD0/LLN0$GO$gcb1:

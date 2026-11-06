@@ -3513,6 +3513,286 @@ class OPCUA:
         return records + self.actions
 
 
+# ---------------------------------------------------------------- MMS
+#
+# MMS (ISO 9506), the client/server protocol IEC 61850 substations use
+# between SCADA and protective relays and bay controllers, over the OSI
+# session and presentation layers on TCP port 102. Its messages are
+# nested ASN.1, so it's read from the structured pass's JSON trees.
+
+# ConfirmedServiceRequest/Response's choice numbers
+_MMS_SERVICES = (
+    'status', 'getNameList', 'identify', 'rename', 'read', 'write', 'getVariableAccessAttributes',
+    'defineNamedVariable', 'defineScatteredAccess', 'getScatteredAccessAttributes', 'deleteVariableAccess',
+    'defineNamedVariableList', 'getNamedVariableListAttributes', 'deleteNamedVariableList', 'defineNamedType',
+    'getNamedTypeAttributes', 'deleteNamedType', 'input', 'output', 'takeControl', 'relinquishControl',
+    'defineSemaphore', 'deleteSemaphore', 'reportSemaphoreStatus', 'reportPoolSemaphoreStatus',
+    'reportSemaphoreEntryStatus', 'initiateDownloadSequence', 'downloadSegment', 'terminateDownloadSequence',
+    'initiateUploadSequence', 'uploadSegment', 'terminateUploadSequence', 'requestDomainDownload',
+    'requestDomainUpload', 'loadDomainContent', 'storeDomainContent', 'deleteDomain', 'getDomainAttributes',
+    'createProgramInvocation', 'deleteProgramInvocation', 'start', 'stop', 'resume', 'reset', 'kill',
+    'getProgramInvocationAttributes', 'obtainFile', 'defineEventCondition', 'deleteEventCondition',
+    'getEventConditionAttributes', 'reportEventConditionStatus', 'alterEventConditionMonitoring', 'triggerEvent',
+    'defineEventAction', 'deleteEventAction', 'getEventActionAttributes', 'reportEventActionStatus',
+    'defineEventEnrollment', 'deleteEventEnrollment', 'alterEventEnrollment', 'reportEventEnrollmentStatus',
+    'getEventEnrollmentAttributes', 'acknowledgeEventNotification', 'getAlarmSummary',
+    'getAlarmEnrollmentSummary', 'readJournal', 'writeJournal', 'initializeJournal', 'reportJournalStatus',
+    'createJournal', 'deleteJournal', 'getCapabilityList', 'fileOpen', 'fileRead', 'fileClose', 'fileRename',
+    'fileDelete', 'fileDirectory')
+_MMS_UNCONFIRMED = ('informationReport', 'unsolicitedStatus', 'eventNotification')
+# Services that change the server - everything else reads or browses
+_MMS_CHANGES = frozenset((
+    'rename', 'write', 'defineNamedVariable', 'defineScatteredAccess', 'deleteVariableAccess',
+    'defineNamedVariableList', 'deleteNamedVariableList', 'defineNamedType', 'deleteNamedType', 'output',
+    'takeControl', 'relinquishControl', 'defineSemaphore', 'deleteSemaphore', 'initiateDownloadSequence',
+    'terminateDownloadSequence', 'requestDomainDownload', 'loadDomainContent', 'deleteDomain',
+    'createProgramInvocation', 'deleteProgramInvocation', 'start', 'stop', 'resume', 'reset', 'kill',
+    'obtainFile', 'defineEventCondition', 'deleteEventCondition', 'alterEventConditionMonitoring',
+    'triggerEvent', 'defineEventAction', 'deleteEventAction', 'defineEventEnrollment', 'deleteEventEnrollment',
+    'alterEventEnrollment', 'acknowledgeEventNotification', 'writeJournal', 'initializeJournal',
+    'createJournal', 'deleteJournal', 'fileRename', 'fileDelete'))
+# ServiceError's errorClass choice numbers
+_MMS_ERROR_CLASSES = ('vmd-state', 'application-reference', 'definition', 'resource', 'service', 'service-preempt',
+                      'time-resolution', 'access', 'initiate', 'conclude', 'cancel', 'file', 'others')
+# DataAccessError values, a read's or write's per-item failure
+_MMS_ACCESS_ERRORS = ('object-invalidated', 'hardware-fault', 'temporarily-unavailable', 'object-access-denied',
+                      'object-undefined', 'invalid-address', 'type-unsupported', 'type-inconsistent',
+                      'object-attribute-inconsistent', 'object-access-unsupported', 'object-non-existent',
+                      'object-value-invalid')
+
+
+def _mms_name(table, value):
+    """A choice number's name from one of the tables above, or the number."""
+    number = _int(value)
+    return table[number] if number is not None and 0 <= number < len(table) else str(value)
+
+
+def _mms_find(tree, key):
+    """Every value of a key anywhere under a subtree, in order."""
+    found = []
+    if isinstance(tree, dict):
+        for name, value in tree.items():
+            if name == key:
+                found.extend(value if isinstance(value, list) else [value])
+            else:
+                found.extend(_mms_find(value, key))
+    elif isinstance(tree, list):
+        for item in tree:
+            found.extend(_mms_find(item, key))
+    return found
+
+
+def _mms_object_names(tree):
+    """The object names under a subtree, as MMS writes them: 'domain/item'
+    for a domain-specific name (an IEC 61850 logical device's
+    'IED1LD0/XCBR1$CO$Pos'), the bare name for a VMD-specific one."""
+    names = []
+    if isinstance(tree, dict):
+        for name, value in tree.items():
+            if name == 'mms.domain_specific_element':
+                for element in value if isinstance(value, list) else [value]:
+                    if isinstance(element, dict) and element.get('mms.itemId') is not None:
+                        domain = element.get('mms.domainId')
+                        names.append(f'{domain}/{element["mms.itemId"]}' if domain else element['mms.itemId'])
+            elif name in ('mms.vmd_specific', 'mms.aa_specific'):
+                names.extend(v for v in (value if isinstance(value, list) else [value]) if isinstance(v, str))
+            else:
+                names.extend(_mms_object_names(value))
+    elif isinstance(tree, list):
+        for item in tree:
+            names.extend(_mms_object_names(item))
+    return names
+
+
+_MMS_MAX_VALUES = 10
+# tshark names a value by its IEC 61850 meaning where it can guess one
+# ('mms.iec61850.ctlval') - but these are a timestamp's quality flags,
+# not values of their own
+_MMS_TIME_QUALITY = frozenset(('mms.iec61850.timeaccuracy', 'mms.iec61850.leapsecondknown',
+                               'mms.iec61850.clocknotsynchronized', 'mms.iec61850.clockfailure'))
+
+
+def _mms_data(tree):
+    """A Data subtree's values, flattened in order ('1, 0, 2024-...'),
+    the first few of a structure or array - or None for none."""
+    values = [str(v) for k, v in _flatten(tree).items() for v in v
+              if k.startswith(('mms.data', 'mms.integer', 'mms.unsigned', 'mms.boolean', 'mms.floating',
+                               'mms.utc_time', 'mms.binary-time', 'mms.visible', 'mms.octet', 'mms.mMSString',
+                               'mms.bcd', 'mms.generalized', 'mms.iec61850.'))
+              and k not in _MMS_TIME_QUALITY]
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    return ', '.join(values[:_MMS_MAX_VALUES]) + (' ...' if len(values) > _MMS_MAX_VALUES else '')
+
+
+def _mms_error(tree):
+    """A ServiceError subtree's class and code ('access: 2'), or None."""
+    error = _child(tree, 'mms.serviceError_element') if isinstance(tree, dict) else None
+    if not isinstance(error, dict):
+        return None
+    kind = _mms_name(_MMS_ERROR_CLASSES, error.get('mms.errorClass'))
+    codes = [v for v in _dict(error.get('mms.errorClass_tree')).values() if isinstance(v, str)]
+    return f'{kind}: {codes[0]}' if codes else kind
+
+
+_MMS_MAX_DOMAINS = 20
+_MMS_MAX_ACTIONS_PER_REQUEST = 100
+# IEC 61850 control model: a write to a controllable object's Oper, SBO/SBOw
+# or Cancel attribute ('LD0/XCBR1$CO$Pos$Oper') is a control command
+_MMS_CONTROLS = {'Oper': 'operate', 'SBO': 'select', 'SBOw': 'select', 'Cancel': 'cancel'}
+_MMS_IDENTIFIERS = ('mms.programInvocationName', 'mms.deleteProgramInvocation', 'mms.domainName', 'mms.deleteDomain',
+                    'mms.FileName_item', 'mms.fileName_item')
+
+
+class _MMSAssociation:
+    __slots__ = ('flow', 'first', 'body', 'domains', 'waiting')
+
+    def __init__(self, flow, first):
+        self.flow, self.first = flow, first
+        self.body = {'services': {}, 'errors': 0}
+        self.domains = {}      # logical device -> None, in first-seen order
+        self.waiting = {}      # invoke id -> (service, [action bodies])
+
+
+class MMS:
+    """MMS - see the comment above. One 'mms' record per connection: whether
+    it was initiated, how many of each service the client called, the
+    logical devices (domains) it touched, the server's vendor, model and
+    revision if Identify asked, the reports the server sent, and errors."""
+    event_type = 'mms'
+    app_protos = ('mms',)
+    tshark_protocols = ('tpkt', 'cotp', 'ses', 'pres', 'acse', 'mms')
+    layers = ('mms',)
+    display_filter = 'mms'
+
+    def __init__(self):
+        self.associations = {}     # flow key -> _MMSAssociation
+        self.actions = []
+
+    def feed_json(self, pkt, layers):
+        association = self.associations.get(pkt.flow.key)
+        if association is None:
+            association = self.associations[pkt.flow.key] = _MMSAssociation(pkt.flow, pkt.when)
+        for pdu in _pdus(layers.get('mms')):
+            if isinstance(pdu, dict):
+                for kind, tree in pdu.items():
+                    self._pdu(pkt, association, kind, tree)
+
+    def _pdu(self, pkt, association, kind, tree):
+        body = association.body
+        if kind == 'mms.initiate_RequestPDU_element':
+            body.setdefault('initiate', 'no response')
+        elif kind == 'mms.initiate_ResponsePDU_element':
+            body['initiate'] = 'accepted'
+        elif kind == 'mms.initiate_ErrorPDU_element':
+            body['initiate'] = _mms_error({'mms.serviceError_element': tree}) or 'rejected'
+            body['errors'] += 1
+        elif kind == 'mms.conclude_RequestPDU_element':
+            body['concluded'] = True
+        elif kind == 'mms.confirmed_RequestPDU_element' and isinstance(tree, dict):
+            self._request(pkt, association, tree)
+        elif kind == 'mms.confirmed_ResponsePDU_element' and isinstance(tree, dict):
+            self._response(association, tree)
+        elif kind == 'mms.confirmed_ErrorPDU_element' and isinstance(tree, dict):
+            self._failed(association, tree.get('mms.invokeID'), _mms_error(tree) or 'error')
+        elif kind == 'mms.unconfirmed_PDU_element' and isinstance(tree, dict):
+            service = _mms_name(_MMS_UNCONFIRMED, tree.get('mms.unconfirmedService'))
+            reports = body.setdefault('reports', {})
+            reports[service] = reports.get(service, 0) + 1
+        elif kind in ('mms.rejectPDU_element', 'mms.reject_PDU_element'):
+            body['errors'] += 1
+            body['last_error'] = 'reject'
+
+    def _domains(self, association, tree):
+        for name in _mms_object_names(tree):
+            if '/' in name and len(association.domains) < _MMS_MAX_DOMAINS:
+                association.domains.setdefault(name.split('/', 1)[0], None)
+
+    def _request(self, pkt, association, tree):
+        body = association.body
+        service = _mms_name(_MMS_SERVICES, tree.get('mms.confirmedServiceRequest'))
+        body['services'][service] = body['services'].get(service, 0) + 1
+        request = tree.get('mms.confirmedServiceRequest_tree')
+        self._domains(association, request)
+        actions = self._changes(pkt, service, request) if service in _MMS_CHANGES else []
+        invoke = tree.get('mms.invokeID')
+        if invoke is not None:
+            association.waiting[invoke] = (service, actions)
+            if len(association.waiting) > 256:
+                association.waiting.pop(next(iter(association.waiting)))
+
+    def _changes(self, pkt, service, request):
+        """'mms_action' records for a request that changes the server: one
+        per object it names (a write's variables, with the value written),
+        or one for the request when it names none."""
+        names = _mms_object_names(request)[:_MMS_MAX_ACTIONS_PER_REQUEST]
+        if not names:
+            # a program, domain or file is named by a plain identifier
+            names = [v for key in _MMS_IDENTIFIERS for v in _mms_find(request, key) if isinstance(v, str)][:1]
+        values = []
+        if service == 'write':
+            data = _mms_find(request, 'mms.listOfData_tree')
+            items = _mms_find(data[0], 'mms.Data_tree') if data else []
+            values = [_mms_data(item) for item in items]
+        actions = []
+        for i, name in enumerate(names or [None]):
+            action = {'service': service, 'result': 'no response'}
+            if name:
+                action['object'] = name
+                control = _MMS_CONTROLS.get(name.rsplit('$', 1)[-1]) if service == 'write' else None
+                if control:
+                    action['control'] = control
+            if i < len(values) and values[i] is not None:
+                action['value'] = values[i]
+            elif len(names) == 1 and len(values) > 1:
+                action['value'] = ', '.join(v for v in values if v is not None)
+            self.actions.append((pkt.flow, pkt.when, 'mms_action', action))
+            actions.append(action)
+        return actions
+
+    def _response(self, association, tree):
+        waiting = association.waiting.pop(tree.get('mms.invokeID'), None)
+        service = waiting[0] if waiting else _mms_name(_MMS_SERVICES, tree.get('mms.confirmedServiceResponse'))
+        response = tree.get('mms.confirmedServiceResponse_tree')
+        if waiting and waiting[1]:
+            # a write's response lists each item's success or failure
+            failures = []
+            if service == 'write' and isinstance(response, dict):
+                for item in _mms_find(response, 'mms.Write_Response_item_tree') or [response]:
+                    failure = _dict(item).get('mms.failure')
+                    failures.append(_mms_name(_MMS_ACCESS_ERRORS, failure) if failure is not None else None)
+            for i, action in enumerate(waiting[1]):
+                action['result'] = (failures[i] if i < len(failures) else None) or 'success'
+        if service == 'identify':
+            for key, field in (('vendor', 'mms.vendorName'), ('model', 'mms.modelName'), ('revision', 'mms.revision')):
+                found = _mms_find(response, field)
+                if found:
+                    association.body[key] = found[0]
+        if service == 'getNameList':
+            self._domains(association, response)
+
+    def _failed(self, association, invoke, error):
+        body = association.body
+        waiting = association.waiting.pop(invoke, None)
+        for action in waiting[1] if waiting else ():
+            action['result'] = error
+        body['errors'] += 1
+        body['last_error'] = f'{waiting[0]}: {error}' if waiting else error
+
+    def finish(self):
+        records = []
+        for association in self.associations.values():
+            body = association.body
+            if association.domains:
+                body['domains'] = list(association.domains)
+            # a lone response, its request before the capture, says nothing
+            if body['services'] or len(body) > 2:
+                records.append((association.flow, association.first, 'mms', body))
+        return records + self.actions
+
+
 # ---------------------------------------------------------------- structured protocols
 #
 # Protocols whose messages nest - an OPC UA write's node ids beside its
@@ -3558,7 +3838,7 @@ PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, 
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).
-STRUCTURED_PROTOCOLS = (OPCUA,)
+STRUCTURED_PROTOCOLS = (OPCUA, MMS)
 # Flow application protocols with transaction records here - every other
 # one gets a connection tab (db.CONNECTION_TYPE_PREFIX) instead.
 RECORDED_APP_PROTOS = frozenset(p for proto in PROTOCOLS + STRUCTURED_PROTOCOLS for p in proto.app_protos)

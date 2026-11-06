@@ -2,6 +2,20 @@
 
 ## 5.3.0
 
+### Protocols from tshark
+
+- **MMS** (IEC 61850 substations, ICCP links) - a record for each
+  connection: whether it was accepted, the logical devices touched, the
+  server's vendor, model and revision when the client asked, each
+  service's count, and the reports the server sent. And a record for each
+  change: a variable written (with the value), a program started,
+  stopped or killed, a domain downloaded, with its own result. A write to
+  a breaker's or other controllable object's Oper, SBOw or Cancel is
+  named as an operate, select or cancel. MMS connections were a
+  connection card before
+- **Findings** - an MMS control command, program change or domain
+  download is high; any other MMS write or definition change is medium
+
 ### Themes
 
 - **Four new themes from Omarchy** - Jade Horse, Last Horizon and

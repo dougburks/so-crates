@@ -672,6 +672,72 @@ class TestOPCUA(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestMMS(unittest.TestCase):
+    """tests/protocol_fixtures.write_mms_pcap, read by the structured pass:
+    the connection's association, and its changes with their own results -
+    with what Suricata 8.0.8 logged for the capture
+    (tests/data/mms_fixture.eve.json): a flow it gives no protocol, since
+    it doesn't parse MMS."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_mms_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'mms.pcap')
+        write_mms_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.associations = [r['mms'] for r in cls.records if r['event_type'] == 'mms']
+        cls.actions = [r['mms_action'] for r in cls.records if r['event_type'] == 'mms_action']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_the_association(self):
+        self.assertEqual(len(self.associations), 1)
+        m = self.associations[0]
+        self.assertEqual({k: m.get(k) for k in ('initiate', 'vendor', 'model', 'revision', 'domains', 'reports',
+                                                'concluded')},
+                         {'initiate': 'accepted', 'vendor': 'Fixture Vendor', 'model': 'Fixture Relay',
+                          'revision': '1.2', 'domains': ['IED1LD0'], 'reports': {'informationReport': 1},
+                          'concluded': True})
+        self.assertEqual(m['services'], {'read': 1, 'identify': 1, 'write': 2, 'stop': 1})
+        self.assertEqual((m['errors'], m['last_error']), (1, 'stop: vmd-state: 2'))
+
+    def test_changes_with_their_own_results(self):
+        self.assertEqual(self.actions, [
+            {'service': 'write', 'object': 'IED1LD0/XCBR1$CO$Pos$Oper', 'control': 'operate', 'value': '1, 0',
+             'result': 'success'},
+            {'service': 'write', 'object': 'IED1LD0/XCBR1$CO$Pos$SBOw', 'control': 'select', 'value': '1, 0',
+             'result': 'object-access-denied'},
+            {'service': 'stop', 'object': 'Fixture_App', 'result': 'vmd-state: 2'},
+        ], "the select's one item was refused; the stop was answered with an error PDU")
+
+    def test_names_and_values(self):
+        from shark_protocols import _mms_data, _mms_name, _MMS_SERVICES, _MMS_CHANGES
+        self.assertEqual([_mms_name(_MMS_SERVICES, n) for n in ('4', '5', '44', '99')], ['read', 'write', 'kill', '99'])
+        self.assertTrue(_MMS_CHANGES <= set(_MMS_SERVICES))
+        self.assertEqual(_mms_data({'mms.utc_time': 'Jan  1, 2024', 'mms.iec61850.clockfailure': '0'}), 'Jan  1, 2024',
+                         "a timestamp's quality flags aren't values")
+
+    def test_the_flow_matches_suricatas_and_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('mms_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['named_by_tshark'], report['differences']), (1, 1, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'mms_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'mms.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('mms'), counts.get('mms_action')), (1, 3))
+        self.assertNotIn('conn_mms', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestGOOSE(unittest.TestCase):
     """tests/protocol_fixtures.write_goose_pcap: one record per state
     change, repeats counted, with what Suricata 8.0.7 logged for the
