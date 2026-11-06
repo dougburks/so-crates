@@ -738,6 +738,59 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestRakNet(unittest.TestCase):
+    """tests/protocol_fixtures.write_raknet_pcap: one record per RakNet
+    flow - with what Suricata 8.0.8 logged for the capture
+    (tests/data/raknet_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_raknet_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'raknet.pcap')
+        write_raknet_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.flows = {r['src_port']: r['raknet'] for r in cls.records if r['event_type'] == 'raknet'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_game_server_and_a_connection(self):
+        from tests.protocol_fixtures import RAKNET_ADVERTISEMENT
+        f = self.flows[41980]
+        self.assertEqual({k: f.get(k) for k in ('edition', 'motd', 'game_version', 'protocol', 'players', 'max_players',
+                                                'level', 'gamemode', 'advertisement', 'answered', 'connected', 'mtu',
+                                                'protocol_version', 'client_guid', 'server_guid', 'datagrams_to_server',
+                                                'datagrams_to_client')},
+                         {'edition': 'MCPE', 'motd': 'Lab Server', 'game_version': '1.21.20', 'protocol': 712, 'players': 3,
+                          'max_players': 10, 'level': 'Bedrock level', 'gamemode': 'Survival',
+                          'advertisement': RAKNET_ADVERTISEMENT, 'answered': True, 'connected': True, 'mtu': 1464,
+                          'protocol_version': 11, 'client_guid': '1122334455667788', 'server_guid': 'a1a2a3a4a5a6a7a8',
+                          'datagrams_to_server': 2, 'datagrams_to_client': 2})
+
+    def test_a_scanner_and_random_bytes(self):
+        self.assertEqual(self.flows[41990], {'messages': {'Unconnected Ping': 1}, 'answered': False,
+                                             'client_guid': '0000000000000000'})
+        self.assertNotIn(58787, self.flows, "random bytes to 19132 lack RakNet's magic")
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('raknet_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (3, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'raknet_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'raknet.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('raknet'), 2)
+        self.assertNotIn('conn_raknet', counts, 'records, not a connection card')
+
+
 class TestFINS(unittest.TestCase):
     """tests/protocol_fixtures.write_fins_pcap: one record per Omron FINS
     connection or exchange and per command that changes or controls the

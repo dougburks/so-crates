@@ -2490,6 +2490,7 @@
                 memcache: '#26a69a',
                 fins: '#29b6f6',
                 hart_ip: '#9ccc65',
+                raknet: '#8d6e63',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -4891,6 +4892,29 @@
             return html;
         }
 
+        // tshark's RakNet records (shark_protocols.RakNet): one per flow.
+        function renderRaknetDetails(e) {
+            const r = e.raknet || {};
+            let html = htmlSection('RakNet Details', COLORS.EVENT.raknet);
+            html += htmlRowText('Messages', Object.entries(r.messages || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Answered', r.answered ? 'yes' : 'no');
+            html += htmlRowText('Connected', r.connected ? 'yes' : '');
+            html += htmlRowText('Edition', r.edition);
+            html += htmlRowText('MOTD', r.motd);
+            html += htmlRowText('Level', r.level);
+            html += htmlRowText('Game Mode', r.gamemode);
+            html += htmlRowText('Game Version', r.game_version);
+            html += htmlRowText('Game Protocol', r.protocol !== undefined ? String(r.protocol) : '');
+            html += htmlRowText('Players', r.players !== undefined ? `${r.players} of ${r.max_players ?? '?'}` : '');
+            html += htmlRowText('Advertisement', r.advertisement, 'mono');
+            html += htmlRowText('RakNet Protocol', r.protocol_version !== undefined ? String(r.protocol_version) : '');
+            html += htmlRowText('MTU', r.mtu !== undefined ? String(r.mtu) : '');
+            html += htmlRowText('Client GUID', r.client_guid, 'mono');
+            html += htmlRowText('Server GUID', r.server_guid, 'mono');
+            if (r.datagrams_to_server || r.datagrams_to_client) html += htmlRowText('Datagrams', `${(r.datagrams_to_server || 0).toLocaleString()} to server, ${(r.datagrams_to_client || 0).toLocaleString()} to client`);
+            return html;
+        }
+
         // tshark's memcached records (shark_protocols.Memcache): one per
         // connection or UDP exchange.
         function renderMemcacheDetails(e) {
@@ -5525,6 +5549,7 @@
             mongodb_action: renderMongodbActionDetails,
             tns: renderTnsDetails,
             memcache: renderMemcacheDetails,
+            raknet: renderRaknetDetails,
             fins: renderFinsDetails,
             fins_action: renderFinsActionDetails,
             hart_ip: renderHartIpDetails,
@@ -8652,6 +8677,7 @@
             memcache: 'memcached',
             fins: 'Omron FINS',
             hart_ip: 'HART-IP',
+            raknet: 'RakNet',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -9832,6 +9858,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Host Type', 'Session', 'Commands', 'Tags', 'Answered'];
                 case 'hart_ip_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Device', 'Data', 'Result'];
+                case 'raknet':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Messages', 'Edition', 'MOTD', 'Game Version', 'Players', 'Connected', 'Answered'];
                 case 'memcache':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Keys', 'Server Version', 'Answered', 'Req Bytes', 'Resp Bytes', 'Amplification'];
                 case 'tns':
@@ -10328,6 +10356,7 @@
                 case 'fins_action':
                 case 'hart_ip':
                 case 'hart_ip_action':
+                case 'raknet':
                 case 'rsh':
                 case 'openvpn':
                 case 'wireguard':
@@ -13174,7 +13203,13 @@
                 case 'Returns to Sender': return e.tunnel?.returns_to_sender ? 'yes' : '';
                 // XDMCP: a login manager's answer, and the display that asked
                 case 'Server Status': return e.xdmcp?.server_status || '';
-                case 'Messages': return (e.xdmcp?.messages || []).join(', ');
+                case 'Messages': return e.raknet ? Object.keys(e.raknet.messages || {}).join(', ') : (e.xdmcp?.messages || []).join(', ');
+                // RakNet: a flow's
+                case 'Edition': return e.raknet?.edition || '';
+                case 'MOTD': return e.raknet?.motd || '';
+                case 'Game Version': return e.raknet?.game_version || '';
+                case 'Players': return e.raknet?.players !== undefined ? String(e.raknet.players) : '';
+                case 'Connected': return e.raknet ? (e.raknet.connected ? 'yes' : 'no') : '';
                 case 'Display Address': return (e.xdmcp?.display_addresses || [])[0] || '';
                 case 'Authorization': return (e.xdmcp?.authorization_names || []).join(', ');
                 case 'Version': {
@@ -13378,7 +13413,7 @@
                 case 'Event': return e.anomaly?.event || '';
                 case 'Layer': return e.anomaly?.layer || '';
                 case 'Answered': {
-                    const r = e.mongodb || e.memcache || e.fins || e.hart_ip;
+                    const r = e.mongodb || e.memcache || e.fins || e.hart_ip || e.raknet;
                     return r ? (r.answered ? 'yes' : 'no') : e.shark?.answered || '';
                 }
                 case 'App Proto': return e.event_type === 'anomaly' ? (e.anomaly?.app_proto || '') : (e.app_proto || '');

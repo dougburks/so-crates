@@ -3452,6 +3452,109 @@ class HARTIP:
         return records
 
 
+# ---------------------------------------------------------------- RakNet
+#
+# RakNet (UDP, 19132 and others), the transport of Minecraft Bedrock and
+# other games, which Suricata doesn't parse. A client pings for servers
+# (an Unconnected Ping) and a server's pong advertises it - for Bedrock,
+# its edition, MOTD, version, players and world; then the client opens a
+# connection (MTU discovery, then the connection request and replies).
+# One record per flow: the messages, the GUIDs, the MTU, whether a
+# connection opened, the server's advertisement, and the connected
+# datagrams each way. Its offline messages carry a 16-byte magic, which a
+# record needs: tshark names any packet to port 19132 RakNet, and random
+# bytes reach it too. Scanners ping it across the internet, looking for
+# game servers to list or to use as reflectors.
+
+_RAKNET_MAGIC = bytes.fromhex('00ffff00fefefefefdfdfdfd12345678')
+_RAKNET_OFFLINE = {0x01: 'Unconnected Ping', 0x02: 'Unconnected Ping (open connections)', 0x05: 'Open Connection Request 1',
+                   0x06: 'Open Connection Reply 1', 0x07: 'Open Connection Request 2', 0x08: 'Open Connection Reply 2',
+                   0x11: 'Out Of Band Internal', 0x12: 'Connection Attempt Failed', 0x14: 'No Free Incoming Connections',
+                   0x17: 'Connection Banned', 0x19: 'Incompatible Protocol Version', 0x1a: 'IP Recently Connected',
+                   0x1c: 'Unconnected Pong'}
+_RAKNET_REPLIES = frozenset({0x06, 0x08, 0x12, 0x14, 0x17, 0x19, 0x1a, 0x1c})
+_RAKNET_ADVERTISEMENT = ('edition', 'motd', 'protocol', 'game_version', 'players', 'max_players', 'server_unique_id',
+                         'level', 'gamemode')
+
+
+class _RakNetFlow:
+    __slots__ = ('flow', 'first', 'body', 'known')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'messages': {}, 'answered': False}
+        self.known = False        # an offline message with RakNet's magic seen
+
+
+class RakNet:
+    """RakNet - see the comment above."""
+    event_type = 'raknet'
+    app_protos = ('raknet', 'mcpe')
+    fields = ('@raknet', 'raknet.packet.is_for_connected')
+
+    def __init__(self):
+        self.flows = {}           # flow key -> _RakNetFlow
+
+    def feed(self, pkt, v):
+        data = _hex(_first(v['@raknet']))
+        flow = self.flows.get(pkt.flow.key)
+        if flow is None:
+            flow = self.flows[pkt.flow.key] = _RakNetFlow(pkt.flow, pkt.when)
+        body = flow.body
+        from_client = pkt.src == pkt.flow.client
+        if not data:
+            # (a datagram carrying a message tshark decodes as RakNet again:
+            # the field's bytes are ambiguous, so it comes back empty)
+            if flow.known and _first(v['raknet.packet.is_for_connected']) in ('1', 'True'):
+                key = 'datagrams_to_server' if from_client else 'datagrams_to_client'
+                body[key] = body.get(key, 0) + 1
+            return
+        kind = data[0]
+        magic = data.find(_RAKNET_MAGIC)
+        if kind in _RAKNET_OFFLINE and 0 < magic <= 25:
+            flow.known = True
+            name = _RAKNET_OFFLINE[kind]
+            body['messages'][name] = body['messages'].get(name, 0) + 1
+            self._offline(body, kind, data, magic)
+            if kind in _RAKNET_REPLIES:
+                body['answered'] = True
+        elif flow.known and kind & 0x80:     # a connected datagram, ACK or NAK
+            key = 'datagrams_to_server' if from_client else 'datagrams_to_client'
+            body[key] = body.get(key, 0) + 1
+
+    @staticmethod
+    def _offline(body, kind, data, magic):
+        after = data[magic + 16:]
+        if kind in (0x01, 0x02) and len(after) >= 8:
+            body.setdefault('client_guid', after[:8].hex())
+        elif kind == 0x1c and magic == 17 and len(after) >= 2:
+            body.setdefault('server_guid', data[9:17].hex())
+            length = struct.unpack('!H', after[:2])[0]
+            text = after[2:2 + length].decode('utf-8', 'replace')
+            if text:
+                body['advertisement'] = text[:300]
+                parts = text.split(';')
+                for key, value in zip(_RAKNET_ADVERTISEMENT, parts):
+                    if value:
+                        body[key] = _int(value, value) if key in ('players', 'max_players', 'protocol') else value[:120]
+        elif kind == 0x05 and after:
+            body.setdefault('protocol_version', after[0])
+            body.setdefault('mtu', len(data) + 28)          # (padded to the MTU tried, with IP and UDP headers)
+        elif kind in (0x06, 0x08) and len(after) >= 8:
+            body.setdefault('server_guid', after[:8].hex())
+            if kind == 0x06 and len(after) >= 11:
+                body['mtu'] = struct.unpack('!H', after[9:11])[0]
+            if kind == 0x08:
+                body['connected'] = True
+        elif kind == 0x07 and len(after) >= 10:
+            body.setdefault('client_guid', after[-8:].hex())
+        elif kind == 0x19 and magic == 2:
+            body['protocol_version'] = data[1]
+
+    def finish(self):
+        return [(f.flow, f.first, 'raknet', dict(f.body)) for f in self.flows.values() if f.known]
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -5458,7 +5561,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

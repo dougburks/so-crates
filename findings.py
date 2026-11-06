@@ -470,6 +470,13 @@ RULES = (
          lambda b: _join(b.get('host_type'), ('-', _list(b.get('tags', ())))),
          "A HART-IP gateway or instrument accepted a session - HART-IP 1 has no login, so anyone who reaches "
          "it can read its devices and write to them."),
+    Rule('raknet_server', 'low', 'raknet', 'RakNet game server answering',
+         f"{_j('raknet', 'answered')} = 1 AND ({_j('raknet', 'advertisement')} IS NOT NULL OR {_j('raknet', 'connected')} = 1)",
+         lambda b: _join(b.get('edition'), b.get('motd'), b.get('game_version'),
+                         ('-', f"{b['players']} of {b.get('max_players', '?')} players" if 'players' in b else None),
+                         'connected' if b.get('connected') else None),
+         'A game server - Minecraft Bedrock, or another on RakNet - answered: one that has no place on a work '
+         "network, or one that's on the internet and being listed, or used as a reflector."),
     Rule('tns_login_failed', 'low', 'tns', 'Oracle login failed',
          f"{_j('tns', 'login')} = 'failed'",
          lambda b: _join(b.get('db_user'), ('-', b.get('login_error'))),

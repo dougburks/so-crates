@@ -1037,6 +1037,44 @@ def write_hart_ip_pcap(path):
     write_pcap(path, hart_ip_packets())
 
 
+# ---------------------------------------------------------------- RakNet
+#
+# A Minecraft Bedrock client (CLIENT:41980) pings RAKNET_SERVER:19132,
+# whose pong advertises it (Lab Server, 1.21.20, 3 of 10 players), then
+# opens a connection (MTU 1464) and exchanges datagrams. RAKNET_SCANNER's
+# ping gets no answer, and RAKNET_NOISE sends random bytes to the port.
+
+RAKNET_SERVER, RAKNET_SCANNER, RAKNET_NOISE = '10.1.0.92', '10.1.0.93', '10.1.0.94'
+_RAKNET_MAGIC = bytes.fromhex('00ffff00fefefefefdfdfdfd12345678')
+RAKNET_ADVERTISEMENT = 'MCPE;Lab Server;712;1.21.20;3;10;13253860892328930865;Bedrock level;Survival;1;19132;19133;'
+
+
+def raknet_packets():
+    client_guid, server_guid = bytes.fromhex('1122334455667788'), bytes.fromhex('a1a2a3a4a5a6a7a8')
+    ad = RAKNET_ADVERTISEMENT.encode()
+    address = lambda ip, port: b'\x04' + bytes(255 - int(x) for x in ip.split('.')) + struct.pack('!H', port)
+    exchange = [
+        (True, b'\x01' + struct.pack('!Q', 1000) + _RAKNET_MAGIC + client_guid),
+        (False, b'\x1c' + struct.pack('!Q', 1000) + server_guid + _RAKNET_MAGIC + struct.pack('!H', len(ad)) + ad),
+        (True, b'\x05' + _RAKNET_MAGIC + b'\x0b' + b'\x00' * (1464 - 28 - 18)),
+        (False, b'\x06' + _RAKNET_MAGIC + server_guid + b'\x00' + struct.pack('!H', 1464)),
+        (True, b'\x07' + _RAKNET_MAGIC + address(RAKNET_SERVER, 19132) + struct.pack('!H', 1464) + client_guid),
+        (False, b'\x08' + _RAKNET_MAGIC + server_guid + address(CLIENT, 41980) + struct.pack('!H', 1464) + b'\x00'),
+        (True, b'\x84\x00\x00\x00\x40\x00\x90\x00\x00\x00\x09' + client_guid),
+        (False, b'\xc0\x00\x01\x01\x00\x00\x00'),
+        (False, b'\x84\x00\x00\x00\x40\x00\x90\x00\x00\x00\x10' + server_guid),
+        (True, b'\xc0\x00\x01\x01\x00\x00\x00')]
+    out = [(CLIENT, RAKNET_SERVER, 41980, 19132, p) if to_server else (RAKNET_SERVER, CLIENT, 19132, 41980, p)
+           for to_server, p in exchange]
+    out.append((RAKNET_SCANNER, RAKNET_SERVER, 41990, 19132, b'\x01' + struct.pack('!Q', 0) + _RAKNET_MAGIC + bytes(8)))
+    out.append((RAKNET_NOISE, RAKNET_SERVER, 58787, 19132, bytes.fromhex('1cdd94e7c286f93e25c4415a76e1a16dd1afc9ce37cb')))
+    return [_udp_packet(*p) for p in out]
+
+
+def write_raknet_pcap(path):
+    write_pcap(path, raknet_packets())
+
+
 # ---------------------------------------------------------------- memcached
 #
 # Shaped on a capture of memcached 1.6.38. CLIENT:41600 uses the text

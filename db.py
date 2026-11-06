@@ -1761,6 +1761,15 @@ AGGREGATION_JSON_PATHS = {
         'Data': ['$.hart_ip_action.data'],
         'Result': ['$.hart_ip_action.result'],
     },
+    'raknet': {
+        'Messages': ['$.raknet.messages'],
+        'Edition': ['$.raknet.edition'],
+        'MOTD': ['$.raknet.motd'],
+        'Game Version': ['$.raknet.game_version'],
+        'Players': ['$.raknet.players'],
+        'Connected': ['$.raknet.connected'],
+        'Answered': ['$.raknet.answered'],
+    },
     'memcache': {
         'Commands': ['$.memcache.commands'],
         'Keys': ['$.memcache.keys'],
@@ -1944,6 +1953,8 @@ AGGREGATION_VALUE_TRANSFORMS = {
     ('memcache', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('fins', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('hart_ip', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('raknet', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('raknet', 'Connected'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
     ('alert', 'Severity'): lambda expr: f"'Sev ' || COALESCE({expr}, 0)",
     # Classifies signature_id into the curated ruleset it most likely came
     # from - see suricata_sid_ranges.py for how SURICATA_SID_RANGES was
@@ -1994,7 +2005,7 @@ AGGREGATION_ARRAY_JOIN_COLUMNS = {
 }
 # Object-valued columns shown as their keys, joined the same way (a count
 # per name: memcached's commands)
-AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands')}
+AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages')}
 
 
 def _aggregation_expr(event_type, label, paths, prefix=''):

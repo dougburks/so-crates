@@ -23278,6 +23278,9 @@ class TestTsharkUI(unittest.TestCase):
         'hart_ip_action': {'event_type': 'hart_ip_action', 'hart_ip_action': {'command': 'Perform Device Reset', 'number': 42,
                                                                               'device': '264e0000d2', 'data': '',
                                                                               'result': 'access restricted'}},
+        'raknet': {'event_type': 'raknet', 'raknet': {'messages': {'Unconnected Ping': 1, 'Unconnected Pong': 1},
+                                                      'edition': 'MCPE', 'motd': 'Lab Server', 'game_version': '1.21.20',
+                                                      'players': 3, 'max_players': 10, 'answered': True}},
         'memcache': {'event_type': 'memcache', 'memcache': {'commands': {'stats': 1, 'get': 2}, 'keys': ['blob'],
                                                            'version': '1.6.38', 'answered': True, 'request_bytes': 33,
                                                            'response_bytes': 62609, 'amplification': 1897.2}},
@@ -23365,6 +23368,7 @@ class TestTsharkUI(unittest.TestCase):
         'fins_action': ['Memory Area Write', 'DM : Word contents', '0x0064', '', 'ffff', 'ok'],
         'hart_ip': ['primary master', 'accepted', 'Session Initiate, Read Primary Variable', 'PT-101', 'yes'],
         'hart_ip_action': ['Perform Device Reset', '264e0000d2', '', 'access restricted'],
+        'raknet': ['Unconnected Ping, Unconnected Pong', 'MCPE', 'Lab Server', '1.21.20', '3', 'no', 'yes'],
         'memcache': ['stats, get', 'blob', '1.6.38', 'yes', '33', '62609', '1897.2'],
         'tns': ['FIXDB', 'sys', 'mallory', 'sqlplus@attacker', 'accepted', 'succeeded', '7'],
         'tns_statement': ['sys', 'GRANT', 'grant dba to backdoor', 'ok', '2'],
@@ -23452,7 +23456,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'raknet', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 

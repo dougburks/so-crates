@@ -69,6 +69,11 @@
   variable; and one for each command that changes or commands a device -
   its tag, range or units written, its loop current fixed, a reset - with
   the answer. These were connection cards before
+- **RakNet** - a record for each flow: the pings, pongs and connection
+  messages, whether the server answered and a connection opened, and the
+  server's advertisement - for Minecraft Bedrock, its MOTD, version and
+  players. Random bytes sent to its port no longer show up as RakNet.
+  These were connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -88,7 +93,7 @@
   forced, and a HART device's output, range or calibration changed, are
   high; any other FINS write and any other HART configuration write are
   medium; an Omron PLC identified by a Controller Data Read, and a
-  HART-IP session accepted, are low
+  HART-IP session accepted, are low; so is a RakNet game server answering
 
 ### Themes
 
