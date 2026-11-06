@@ -738,6 +738,65 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestPNDCP(unittest.TestCase):
+    """tests/protocol_fixtures.write_pn_dcp_pcap: PROFINET DCP's actions and
+    the devices that described themselves - with what Suricata 8.0.8 logged
+    for the capture (tests/data/pn_dcp_fixture.eve.json) - only 'Ethertype
+    unknown' decoder alerts, since it doesn't decode PROFINET."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_pn_dcp_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'pn_dcp.pcap')
+        write_pn_dcp_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.actions = [r for r in cls.records if r['event_type'] == 'pn_dcp']
+        cls.devices = [r['pn_device'] for r in cls.records if r['event_type'] == 'pn_device']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_identify_queries_fold_their_repeats(self):
+        from tests.protocol_fixtures import PN_ENGINEERING, PN_CONTROLLER
+        queries = {r['src_ip']: r['pn_dcp'] for r in self.actions if r['pn_dcp']['service'] == 'Identify'}
+        self.assertEqual(queries, {
+            PN_ENGINEERING: {'service': 'Identify', 'query': 'all', 'count': 1, 'responses': 1},
+            PN_CONTROLLER: {'service': 'Identify', 'query': 'plc-line2', 'count': 2, 'responses': 0}})
+
+    def test_sets_with_their_results(self):
+        from tests.protocol_fixtures import PN_ENGINEERING, PN_DEVICE
+        sets = [r for r in self.actions if r['pn_dcp']['service'] == 'Set']
+        self.assertEqual([r['pn_dcp'] for r in sets], [
+            {'service': 'Set', 'changes': ['IP address'], 'ip': '10.9.9.9', 'subnet_mask': '255.255.255.0',
+             'gateway': '10.9.9.1', 'permanent': True, 'result': 'ok'},
+            {'service': 'Set', 'changes': ['reset to factory'], 'result': 'not possible (in operation)'}])
+        self.assertEqual({(r['src_ip'], r['dest_ip']) for r in sets}, {(PN_ENGINEERING, PN_DEVICE)},
+                         'from the station that sent them, though the device spoke first on that conversation')
+
+    def test_the_device(self):
+        from tests.protocol_fixtures import PN_DEVICE
+        self.assertEqual(self.devices, [{
+            'mac': PN_DEVICE, 'count': 1, 'last_seen': self.devices[0]['last_seen'], 'station_name': 'plc-line1',
+            'device_type': 'S7-1500', 'vendor_id': '0x002a', 'device_id': '0x010e', 'ip': '192.168.0.20',
+            'subnet_mask': '255.255.255.0', 'gateway': '192.168.0.1', 'role': 'IO controller'}])
+
+    def test_the_merge_adds_the_records(self):
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'pn_dcp_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'pn_dcp.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('pn_dcp'), counts.get('pn_device')), (4, 1))
+        self.assertNotIn('conn_pn_dcp', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestGOOSE(unittest.TestCase):
     """tests/protocol_fixtures.write_goose_pcap: one record per state
     change, repeats counted, with what Suricata 8.0.7 logged for the
@@ -2190,7 +2249,9 @@ class TestFlowOrientation(unittest.TestCase):
                  ({'ftp__request__command': 'USER'}, False), ({'s7comm__header__rosctr': '3'}, True),
                  ({'s7comm__header__rosctr': '1'}, False), ({'s7comm__header__rosctr': '7'}, None),
                  ({'tls__handshake__type': '2'}, True), ({'tls__handshake__type': '1\x1f16'}, False),   # the first of a packet's handshakes
-                 ({'tls__handshake__type': '11'}, None), ({'ip__src': '10.0.0.1'}, None), ({}, None)]
+                 ({'tls__handshake__type': '11'}, None), ({'pn_dcp__service_type': '0'}, False),
+                 ({'pn_dcp__service_type': '1'}, True), ({'pn_dcp__service_type': '5'}, True),   # 'not supported'
+                 ({'ip__src': '10.0.0.1'}, None), ({}, None)]
         for values, expected in cases:
             with self.subTest(values=values):
                 self.assertIs(shark_analyzer._is_reply(cols(**values)), expected)

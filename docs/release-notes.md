@@ -13,8 +13,16 @@
   a breaker's or other controllable object's Oper, SBOw or Cancel is
   named as an operate, select or cancel. MMS connections were a
   connection card before
+- **PROFINET DCP** - a record for each action: an Identify query (every
+  device, or one station name) with its repeats and answers, and each Set
+  or Get with its result - what was set (IP address, station name, a
+  factory reset, a signal) and to what. And a record for each device
+  that described itself: its station name, type, vendor and device IDs,
+  role and IP address. These were connection cards before
 - **Findings** - an MMS control command, program change or domain
-  download is high; any other MMS write or definition change is medium
+  download is high; any other MMS write or definition change is medium.
+  A PROFINET device renamed, readdressed or reset is high; a DCP Identify
+  of every device is low
 
 ### Themes
 

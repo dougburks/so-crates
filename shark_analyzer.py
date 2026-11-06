@@ -67,7 +67,7 @@ SHARK_ARTIFACTS = (SHARK_DB, SHARK_DB + '-wal', SHARK_DB + '-shm', SHARK_DB + '.
 # change here or in shark_protocols changes what a run produces: a
 # shark.db stamped with an older version is rebuilt the next time its
 # status is asked for, so existing analyses pick up the change.
-SHARK_FORMAT_VERSION = 39
+SHARK_FORMAT_VERSION = 40
 
 # The fields every packet is read for, one per column of tshark's
 # tab-separated output, in this order - then each of shark_protocols'
@@ -94,7 +94,8 @@ _FIELDS = (
 # The fields _is_reply reads to orient a flow by its first request or
 # reply - requested whether or not any protocol here keeps records of them.
 _ORIENTATION_FIELDS = ('dns.flags.response', 'nbns.flags.response', 'http.response.code', 'http.request.method',
-                       'ftp.response.code', 'ftp.request.command', 's7comm.header.rosctr', 'tls.handshake.type')
+                       'ftp.response.code', 'ftp.request.command', 's7comm.header.rosctr', 'tls.handshake.type',
+                       'pn_dcp.service_type')
 # The alerts a TLS connection's ends sent while they could still be read
 # (_TLSFailures) - TLS is most of a capture's connections, too many to
 # read again in the protocol pass for one field.
@@ -271,8 +272,10 @@ def _is_reply(cols):
     """Whether a packet is a server's reply (True), a client's request
     (False), or can't say (None), from the protocols that mark it:
     DNS/mDNS/LLMNR and NBNS's response flag, an HTTP/SSDP or FTP response
-    vs request, an S7comm ack vs job, a TLS server vs client hello.
-    Modbus marks neither."""
+    vs request, an S7comm ack vs job, a TLS server vs client hello, a
+    PROFINET DCP response vs request (a device's answer to an Identify is
+    often the first frame between it and the station that asked, by
+    multicast). Modbus marks neither."""
     for field in ('dns.flags.response', 'nbns.flags.response'):
         flag = _flag(_first_value(cols, field))
         if flag is not None:
@@ -286,6 +289,9 @@ def _is_reply(cols):
     rosctr = _first_value(cols, 's7comm.header.rosctr')
     if rosctr in ('1', '2', '3'):
         return rosctr != '1'
+    dcp = _first_value(cols, 'pn_dcp.service_type')
+    if dcp:
+        return dcp != '0'
     return {'1': False, '2': True}.get(_first_value(cols, 'tls.handshake.type'))
 
 

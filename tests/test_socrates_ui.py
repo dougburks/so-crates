@@ -23263,6 +23263,12 @@ class TestTsharkUI(unittest.TestCase):
         'mms': {'event_type': 'mms', 'mms': {'initiate': 'accepted', 'vendor': 'Fixture Vendor', 'model': 'Fixture Relay',
                                              'revision': '1.2', 'domains': ['IED1LD0', 'IED1CTRL'],
                                              'services': {'read': 1, 'write': 2}, 'errors': 0}},
+        'pn_dcp': {'event_type': 'pn_dcp', 'pn_dcp': {'service': 'Set', 'changes': ['IP address'], 'ip': '10.9.9.9',
+                                                      'subnet_mask': '255.255.255.0', 'permanent': True, 'result': 'ok'}},
+        'pn_device': {'event_type': 'pn_device', 'pn_device': {'mac': '00:0e:8c:00:00:02', 'station_name': 'plc-line1',
+                                                               'device_type': 'S7-1500', 'vendor_id': '0x002a',
+                                                               'device_id': '0x010e', 'role': 'IO controller',
+                                                               'ip': '192.168.0.20', 'count': 3}},
         'mms_action': {'event_type': 'mms_action', 'mms_action': {'service': 'write', 'object': 'IED1LD0/XCBR1$CO$Pos$SBOw',
                                                                   'control': 'select', 'value': '1, 0',
                                                                   'result': 'object-access-denied'}},
@@ -23318,6 +23324,8 @@ class TestTsharkUI(unittest.TestCase):
         'opcua': ['opc.tcp://10.1.0.48:4840/fixture', 'None', 'Fixture Client', 'user1', 's3cret', 'Good'],
         'opcua_action': ['Call', 'ns=1;i=62541', 'Hello', 'BadNodeIdUnknown'],
         'mms': ['accepted', 'IED1LD0, IED1CTRL', 'Fixture Vendor', 'Fixture Relay'],
+        'pn_dcp': ['Set', '', 'IP address', '', '10.9.9.9', 'ok', ''],
+        'pn_device': ['plc-line1', 'S7-1500', '0x002a', '0x010e', 'IO controller', '192.168.0.20', '3'],
         'mms_action': ['write', 'IED1LD0/XCBR1$CO$Pos$SBOw', 'select', '1, 0', 'object-access-denied'],
         'bacnet': ['reinitializeDevice', '', '', '', 'filister', 'error: services: password-failure'],
         'bacnet_property': ['readProperty', 'analog-value,1', 'present-value', '2', '1', '72.5'],
@@ -23355,6 +23363,7 @@ class TestTsharkUI(unittest.TestCase):
                 # one record per point, so its section is a point's
                 section = {'iec104_point': 'IEC 104 Point', 'bacnet_property': 'BACnet Property',
                            'bacnet_device': 'BACnet Device', 'opcua_action': 'OPC UA Action', 'mms_action': 'MMS Action',
+                           'pn_dcp': 'PROFINET DCP', 'pn_device': 'PROFINET Device',
                            'tls_failure': 'TLS Failure'}.get(t, r['label'])
                 self.assertIn(f'{section} Details', r['detail'])
 
@@ -23395,7 +23404,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 

@@ -812,6 +812,51 @@ def write_goose_pcap(path):
     write_pcap(path, goose_packets())
 
 
+# ---------------------------------------------------------------- PROFINET DCP
+#
+# An engineering station (PN_ENGINEERING) asks every PROFINET device to
+# identify itself, and one PLC (PN_DEVICE) answers: plc-line1, an S7-1500
+# (Siemens, vendor 0x002a), an IO controller at 192.168.0.20. The station
+# then readdresses it permanently to 10.9.9.9 (ok), and tells it to reset
+# to factory (refused - in operation). Another controller (PN_CONTROLLER)
+# looks for plc-line2 twice, unanswered.
+
+PN_ENGINEERING, PN_DEVICE, PN_CONTROLLER = '00:1b:1b:00:00:01', '00:0e:8c:00:00:02', '00:1b:1b:00:00:03'
+_PN_MULTICAST = '01:0e:cf:00:00:00'
+
+
+def _pn_block(option, suboption, data):
+    block = struct.pack('!BBH', option, suboption, len(data)) + data
+    return block + (b'\x00' if len(data) % 2 else b'')
+
+
+def _pn_dcp(src, dst, frame_id, service, kind, xid, blocks, delay=0):
+    data = b''.join(blocks)
+    dcp = struct.pack('!HBBIHH', frame_id, service, kind, xid, delay, len(data)) + data
+    frame = bytes.fromhex(dst.replace(':', '')) + bytes.fromhex(src.replace(':', '')) + b'\x88\x92' + dcp
+    return frame + b'\x00' * max(0, 60 - len(frame))
+
+
+def pn_dcp_packets():
+    ip = lambda info, addresses: _pn_block(1, 2, struct.pack('!H', info) + b''.join(socket.inet_aton(a) for a in addresses))
+    identify = _pn_dcp(PN_ENGINEERING, _PN_MULTICAST, 0xfefe, 5, 0, 1, [_pn_block(0xff, 0xff, b'')], delay=1)
+    answer = _pn_dcp(PN_DEVICE, PN_ENGINEERING, 0xfeff, 5, 1, 1, [
+        _pn_block(2, 2, b'\x00\x00plc-line1'), _pn_block(2, 1, b'\x00\x00S7-1500'),
+        _pn_block(2, 3, b'\x00\x00' + struct.pack('!HH', 0x002a, 0x010e)), _pn_block(2, 4, b'\x00\x00\x02\x00'),
+        ip(1, ('192.168.0.20', '255.255.255.0', '192.168.0.1'))])
+    readdress = _pn_dcp(PN_ENGINEERING, PN_DEVICE, 0xfefd, 4, 0, 2, [ip(1, ('10.9.9.9', '255.255.255.0', '10.9.9.1'))])
+    readdressed = _pn_dcp(PN_DEVICE, PN_ENGINEERING, 0xfefd, 4, 1, 2, [_pn_block(5, 4, b'\x01\x02\x00')])
+    reset = _pn_dcp(PN_ENGINEERING, PN_DEVICE, 0xfefd, 4, 0, 3, [_pn_block(5, 6, b'\x00\x02')])
+    refused = _pn_dcp(PN_DEVICE, PN_ENGINEERING, 0xfefd, 4, 1, 3, [_pn_block(5, 4, b'\x05\x06\x06')])
+    lookup = [_pn_dcp(PN_CONTROLLER, _PN_MULTICAST, 0xfefe, 5, 0, 0x100 + i, [_pn_block(2, 2, b'plc-line2')], delay=1)
+              for i in range(2)]
+    return [identify, answer, readdress, readdressed, reset, refused] + lookup
+
+
+def write_pn_dcp_pcap(path):
+    write_pcap(path, pn_dcp_packets())
+
+
 # ---------------------------------------------------------------- Windows Browser
 #
 # NetBIOS datagrams to UDP 138 in workgroup/domain FIXTUREDOM: a workstation

@@ -1698,6 +1698,24 @@ AGGREGATION_JSON_PATHS = {
         'Repeats': ['$.goose.repeats'],
         'Anomaly': ['$.goose.anomaly'],
     },
+    'pn_dcp': {
+        'Service': ['$.pn_dcp.service'],
+        'Query': ['$.pn_dcp.query'],
+        'Changes': ['$.pn_dcp.changes'],
+        'Station Name': ['$.pn_dcp.station_name'],
+        'IP': ['$.pn_dcp.ip'],
+        'Result': ['$.pn_dcp.result'],
+        'Count': ['$.pn_dcp.count'],
+    },
+    'pn_device': {
+        'Station Name': ['$.pn_device.station_name'],
+        'Device Type': ['$.pn_device.device_type'],
+        'Vendor ID': ['$.pn_device.vendor_id'],
+        'Device ID': ['$.pn_device.device_id'],
+        'Role': ['$.pn_device.role'],
+        'IP': ['$.pn_device.ip'],
+        'Count': ['$.pn_device.count'],
+    },
     'mms': {
         'Initiate': ['$.mms.initiate'],
         'Domains': ['$.mms.domains'],
@@ -1871,6 +1889,7 @@ AGGREGATION_CAST_TEXT = {
 AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
+    ('pn_dcp', 'Changes'),
 }
 
 

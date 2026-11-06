@@ -2481,6 +2481,7 @@
                 bacnet: '#ab47bc',
                 opcua: '#29b6f6',
                 mms: '#5c6bc0',
+                pn_dcp: '#26c6da',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -2502,6 +2503,7 @@
                 xdmcp: '#78909c',
                 opcua_action: '#ff7043',
                 mms_action: '#ef5350',
+                pn_device: '#9ccc65',
                 bacnet_property: '#5c6bc0',
                 bacnet_device: '#8d6e63',
                 iec104_point: '#26a69a',
@@ -4736,6 +4738,43 @@
             return html;
         }
 
+        // tshark's PROFINET DCP records (shark_protocols.PNDCP): an action
+        // (an Identify query, a Set or Get), and a device describing itself.
+        function renderPnDcpDetails(e) {
+            const d = e.pn_dcp || {};
+            let html = htmlSection('PROFINET DCP Details', COLORS.EVENT.pn_dcp);
+            html += htmlRowText('Service', d.service);
+            html += htmlRowText('Query', d.query);
+            if (d.count !== undefined) html += htmlRowText('Count', d.count.toLocaleString());
+            if (d.responses !== undefined) html += htmlRowText('Responses', d.responses.toLocaleString());
+            html += htmlRowText('Changes', (d.changes || []).join(', '));
+            html += htmlRowText('Station Name', d.station_name, 'mono');
+            html += htmlRowText('IP', d.ip);
+            html += htmlRowText('Subnet Mask', d.subnet_mask);
+            html += htmlRowText('Gateway', d.gateway);
+            if (d.permanent !== undefined) html += htmlRowText('Permanent', d.permanent ? 'yes' : 'no (until restart)');
+            html += htmlRowText('Result', d.result);
+            return html;
+        }
+
+        function renderPnDeviceDetails(e) {
+            const d = e.pn_device || {};
+            let html = htmlSection('PROFINET Device Details', COLORS.EVENT.pn_device);
+            html += htmlRowText('Station Name', d.station_name, 'mono');
+            html += htmlRowText('Device Type', d.device_type);
+            html += htmlRowText('Alias', d.alias, 'mono');
+            html += htmlRowText('Vendor ID', d.vendor_id);
+            html += htmlRowText('Device ID', d.device_id);
+            html += htmlRowText('Role', d.role);
+            html += htmlRowText('MAC', d.mac, 'mono');
+            html += htmlRowText('IP', d.ip);
+            html += htmlRowText('Subnet Mask', d.subnet_mask);
+            html += htmlRowText('Gateway', d.gateway);
+            html += htmlRowText('Count', d.count !== undefined ? d.count.toLocaleString() : '');
+            html += htmlRowText('Last Seen', (d.last_seen || '').slice(0, 23).replace('T', ' '));
+            return html;
+        }
+
         // tshark's BACnet records (shark_protocols.BACnet): an action with
         // its reply, a read/notification summary, a device.
         function renderBacnetDetails(e) {
@@ -5203,6 +5242,7 @@
             bacnet: renderBacnetDetails,
             opcua: renderOpcuaDetails,
             mms: renderMmsDetails,
+            pn_dcp: renderPnDcpDetails,
             goose: renderGooseDetails,
             browser: renderBrowserDetails,
             dhcpv6: renderDhcpv6Details,
@@ -5224,6 +5264,7 @@
             cdp: renderNeighborDetails,
             opcua_action: renderOpcuaActionDetails,
             mms_action: renderMmsActionDetails,
+            pn_device: renderPnDeviceDetails,
             bacnet_property: renderBacnetPropertyDetails,
             bacnet_device: renderBacnetDeviceDetails,
             iec104_point: renderIec104PointDetails,
@@ -8337,6 +8378,7 @@
             bacnet: 'BACnet',
             opcua: 'OPC UA',
             mms: 'MMS',
+            pn_dcp: 'PROFINET DCP',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -8358,6 +8400,7 @@
             cdp: 'CDP',
             opcua_action: 'OPC UA Actions',
             mms_action: 'MMS Actions',
+            pn_device: 'PROFINET Devices',
             bacnet_property: 'BACnet Properties',
             bacnet_device: 'BACnet Devices',
             iec104_point: 'IEC 104 Points',
@@ -9492,6 +9535,10 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Initiate', 'Domains', 'Vendor', 'Model'];
                 case 'mms_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Object', 'Control', 'Value', 'Result'];
+                case 'pn_dcp':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Query', 'Changes', 'Station Name', 'IP', 'Result', 'Count'];
+                case 'pn_device':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Station Name', 'Device Type', 'Vendor ID', 'Device ID', 'Role', 'IP', 'Count'];
                 case 'bacnet_property':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Object', 'Property', 'Count', 'Errors', 'Last Value'];
                 case 'bacnet_device':
@@ -9969,6 +10016,8 @@
                 case 'opcua_action':
                 case 'mms':
                 case 'mms_action':
+                case 'pn_dcp':
+                case 'pn_device':
                 case 'goose':
                 case 'browser':
                 case 'lldp':
@@ -12637,17 +12686,17 @@
                     if (r?.value !== undefined) return String(r.value);
                     return e.opcua_action?.arguments ? e.opcua_action.arguments.join(', ') : '';
                 }
-                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
+                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
                 case 'Updates': return e.iec104_point?.updates !== undefined ? String(e.iec104_point.updates) : '';
                 case 'Last Value': { const r = e.iec104_point || e.bacnet_property; return r?.last_value !== undefined ? String(r.last_value) : ''; }
                 // BACnet: an action's, a read/notification summary's, a device's
                 case 'Object': return e.bacnet?.object || e.bacnet_property?.object || e.mms_action?.object || '';
                 case 'Property': return e.bacnet?.property || e.bacnet_property?.property || '';
-                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp; return r?.count !== undefined ? String(r.count) : ''; }
+                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp || e.pn_dcp || e.pn_device; return r?.count !== undefined ? String(r.count) : ''; }
                 // LLDP and CDP: a neighbor's announcements
                 case 'System Name': return e.lldp?.system_name || '';
                 case 'Chassis ID': return e.lldp?.chassis_id || '';
-                case 'Device ID': return e.cdp?.device_id || '';
+                case 'Device ID': return e.cdp?.device_id || e.pn_device?.device_id || '';
                 case 'Port ID': { const n = e.lldp || e.cdp; return n?.port_id || ''; }
                 case 'Platform': return e.cdp?.platform || '';
                 case 'Capabilities': { const n = e.lldp || e.cdp; return (n?.capabilities || []).join(', '); }
@@ -12691,6 +12740,13 @@
                 case 'Domains': return (e.mms?.domains || []).join(', ');
                 case 'Model': return e.mms?.model || '';
                 case 'Control': return e.mms_action?.control || '';
+                // PROFINET DCP: an action's, a device's
+                case 'Changes': return (e.pn_dcp?.changes || []).join(', ');
+                case 'Station Name': { const r = e.pn_dcp || e.pn_device; return r?.station_name || ''; }
+                case 'IP': { const r = e.pn_dcp || e.pn_device; return r?.ip || ''; }
+                case 'Device Type': return e.pn_device?.device_type || '';
+                case 'Vendor ID': return e.pn_device?.vendor_id || '';
+                case 'Role': return e.pn_device?.role || '';
                 case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || '';
                 case 'Login': return e.telnet?.login || '';
                 case 'Area': return e.s7comm?.items?.[0]?.area || '';
@@ -12834,6 +12890,7 @@
                 case 'Dest Addr': return e.dnp3?.dst !== undefined ? String(e.dnp3.dst) : (e.dnp3?.request?.dst !== undefined ? String(e.dnp3.request.dst) : '');
                 case 'Query': {
                     if (e.coap) return e.coap.query || '';
+                    if (e.event_type === 'pn_dcp') return e.pn_dcp?.query || '';
                     if (e.event_type === 'pgsql') return e.pgsql?.request?.simple_query || '';
                     if (e.event_type === 'mdns') return e.mdns?.queries?.[0]?.rrname || '';
                     if (e.event_type === 'llmnr') return e.llmnr?.queries?.[0]?.rrname || '';
@@ -12896,6 +12953,7 @@
                     if (e.event_type === 'bacnet_property') return e.bacnet_property?.service || '';
                     if (e.event_type === 'opcua_action') return e.opcua_action?.service || '';
                     if (e.event_type === 'mms_action') return e.mms_action?.service || '';
+                    if (e.event_type === 'pn_dcp') return e.pn_dcp?.service || '';
                     return e.krb5?.sname || '';
                 }
                 // The name alone, as the server aggregates it - the <suffix> is

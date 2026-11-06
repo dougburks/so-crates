@@ -3044,6 +3044,154 @@ class CDP(_Neighbors):
             body['duplex'] = 'full' if first('cdp.duplex') in ('1', 'True') else 'half'
 
 
+# ---------------------------------------------------------------- PROFINET DCP
+#
+# PROFINET's Discovery and Configuration Protocol, straight over Ethernet:
+# an engineering tool or IO controller finds devices (Identify - all of
+# them, or one by its station name), reads their settings (Get), and
+# assigns their station name and IP address (Set) - unauthenticated, so
+# anyone on the segment can rename a device, readdress it, reset it to
+# factory settings, or blink its LED (Signal). Two record types:
+# 'pn_dcp', one per action - an Identify query, folded with its repeats,
+# or a Set or Get with its result - and 'pn_device', one per device that
+# described itself (an Identify or Get response, or a Hello).
+
+_PN_DCP_SERVICES = {3: 'Get', 4: 'Set', 5: 'Identify', 6: 'Hello'}
+# Control block suboptions a Set can carry (1 and 2 bracket a
+# transaction, 4 is a response)
+_PN_DCP_CONTROLS = {3: 'signal', 5: 'reset factory settings', 6: 'reset to factory'}
+_PN_DCP_ERRORS = {1: 'option unsupported', 2: 'suboption unsupported', 3: 'suboption not set',
+                  4: 'resource error', 5: 'not possible (local reasons)', 6: 'not possible (in operation)'}
+_PN_DCP_ROLES = ((0x01, 'IO device'), (0x02, 'IO controller'), (0x04, 'IO multidevice'), (0x08, 'supervisor'))
+_PN_DCP_MAX_WAITING = 256
+
+
+def _pn_role(value):
+    bits = _int(value)
+    return ', '.join(name for bit, name in _PN_DCP_ROLES if bits & bit) if bits else ''
+
+
+class PNDCP:
+    """PROFINET DCP - see the comment above."""
+    event_type = 'pn_dcp'
+    app_protos = ('pn_dcp',)
+    fields = ('pn_dcp.service_id', 'pn_dcp.service_type', 'pn_dcp.xid', 'pn_dcp.suboption_all',
+              'pn_dcp.suboption_device_nameofstation', 'pn_dcp.suboption_device_devicevendorvalue',
+              'pn_dcp.suboption_device_aliasname', 'pn_dcp.suboption_vendor_id', 'pn_dcp.suboption_device_id',
+              'pn_dcp.suboption_device_role', 'pn_dcp.suboption_ip_ip', 'pn_dcp.suboption_ip_subnetmask',
+              'pn_dcp.suboption_ip_standard_gateway', 'pn_dcp.block_qualifier', 'pn_dcp.suboption_control',
+              'pn_dcp.suboption_dhcp', 'pn_dcp.block_error')
+
+    def __init__(self):
+        self.queries = {}      # (requester MAC, query) -> [flow, first seen, body]
+        self.devices = {}      # device MAC -> [flow, first seen, body]
+        self.actions = []      # (flow, when, body) of each Set and Get
+        self.waiting = {}      # (requester MAC, device MAC or None, xid) -> body
+
+    def feed(self, pkt, v):
+        def first(name):
+            return (v[name] or [''])[0]
+        service = _PN_DCP_SERVICES.get(_int(first('pn_dcp.service_id')))
+        kind = _int(first('pn_dcp.service_type'))
+        if service is None or kind is None:
+            return
+        xid = first('pn_dcp.xid')
+        if kind == 0:
+            if service == 'Hello':
+                self._device(pkt, pkt.src, v)
+            elif service == 'Identify':
+                self._identify(pkt, v, xid)
+            else:
+                self._request(pkt, service, v, xid)
+        else:
+            self._response(pkt, service, kind, v, xid)
+
+    def _identify(self, pkt, v, xid):
+        name = (v['pn_dcp.suboption_device_nameofstation'] or [''])[0]
+        alias = (v['pn_dcp.suboption_device_aliasname'] or [''])[0]
+        query = 'all' if v['pn_dcp.suboption_all'] else name or alias or 'by vendor or role'
+        key = (pkt.src, query)
+        entry = self.queries.get(key)
+        if entry is None:
+            entry = self.queries[key] = [pkt.flow, pkt.when, {'service': 'Identify', 'query': query,
+                                                              'count': 0, 'responses': 0}]
+        entry[2]['count'] += 1
+        self._wait((pkt.src, None, xid), entry[2])
+
+    def _request(self, pkt, service, v, xid):
+        body = {'service': service, 'result': 'no response'}
+        if service == 'Set':
+            changes = []
+            if v['pn_dcp.suboption_device_nameofstation']:
+                changes.append('station name')
+                body['station_name'] = v['pn_dcp.suboption_device_nameofstation'][0]
+            if v['pn_dcp.suboption_ip_ip']:
+                changes.append('IP address')
+                for key, field in (('ip', 'pn_dcp.suboption_ip_ip'), ('subnet_mask', 'pn_dcp.suboption_ip_subnetmask'),
+                                   ('gateway', 'pn_dcp.suboption_ip_standard_gateway')):
+                    if v[field]:
+                        body[key] = v[field][0]
+            if v['pn_dcp.suboption_dhcp']:
+                changes.append('DHCP')
+            changes += [_PN_DCP_CONTROLS[c] for c in (_int(x) for x in v['pn_dcp.suboption_control'])
+                        if c in _PN_DCP_CONTROLS]
+            if changes:
+                body['changes'] = list(dict.fromkeys(changes))
+            # a name or address set permanently (qualifier 1), or until the
+            # device restarts (0)
+            qualifier = _int((v['pn_dcp.block_qualifier'] or [''])[0])
+            if qualifier is not None and (v['pn_dcp.suboption_device_nameofstation'] or v['pn_dcp.suboption_ip_ip']):
+                body['permanent'] = bool(qualifier & 1)
+        self.actions.append((pkt.flow, pkt.when, body))
+        self._wait((pkt.src, pkt.dst, xid), body)
+
+    def _wait(self, key, body):
+        self.waiting[key] = body
+        if len(self.waiting) > _PN_DCP_MAX_WAITING:
+            self.waiting.pop(next(iter(self.waiting)))
+
+    def _response(self, pkt, service, kind, v, xid):
+        if service in ('Identify', 'Get'):
+            self._device(pkt, pkt.src, v)
+        body = self.waiting.get((pkt.dst, pkt.src, xid)) or self.waiting.get((pkt.dst, None, xid))
+        if body is None:
+            return
+        if service == 'Identify':
+            body['responses'] += 1
+            return
+        errors = [_PN_DCP_ERRORS.get(e, f'error {e}') for e in (_int(x) for x in v['pn_dcp.block_error']) if e]
+        body['result'] = ', '.join(dict.fromkeys(errors)) if errors else 'ok' if kind == 1 else 'not supported'
+
+    def _device(self, pkt, mac, v):
+        def first(name):
+            return (v[name] or [''])[0]
+        entry = self.devices.get(mac)
+        if entry is None:
+            entry = self.devices[mac] = [pkt.flow, pkt.when, {'mac': mac, 'count': 0}]
+        body = entry[2]
+        body['count'] += 1
+        body['last_seen'] = pkt.when
+        for key, field in (('station_name', 'pn_dcp.suboption_device_nameofstation'),
+                           ('device_type', 'pn_dcp.suboption_device_devicevendorvalue'),
+                           ('alias', 'pn_dcp.suboption_device_aliasname'),
+                           ('vendor_id', 'pn_dcp.suboption_vendor_id'), ('device_id', 'pn_dcp.suboption_device_id'),
+                           ('ip', 'pn_dcp.suboption_ip_ip'), ('subnet_mask', 'pn_dcp.suboption_ip_subnetmask'),
+                           ('gateway', 'pn_dcp.suboption_ip_standard_gateway')):
+            if first(field):
+                body[key] = first(field)
+        role = _pn_role(first('pn_dcp.suboption_device_role'))
+        if role:
+            body['role'] = role
+
+    def finish(self):
+        records = [(flow, when, 'pn_dcp', body) for flow, when, body in self.queries.values()]
+        records += [(flow, when, 'pn_dcp', body) for flow, when, body in self.actions]
+        for flow, when, body in self.devices.values():
+            body['last_seen'] = _iso_utc(body['last_seen'])
+            records.append((flow, when, 'pn_device', body))
+        return records
+
+
 # ---------------------------------------------------------------- GOOSE
 #
 # IEC 61850 GOOSE: a protection relay publishes its dataset's values by
@@ -3834,7 +3982,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

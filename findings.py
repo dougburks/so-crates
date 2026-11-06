@@ -236,6 +236,12 @@ RULES = (
          lambda b: _join(b.get('control') or b.get('service'), b.get('object'), ('-', b.get('result'))),
          'An IEC 61850 operate, select or cancel - switching a breaker or other controllable equipment - '
          'or a program started, stopped or killed, or a domain downloaded, on a relay or controller.'),
+    Rule('pn_dcp_set', 'high', 'pn_dcp', 'PROFINET device renamed, readdressed or reset',
+         f"{_j('pn_dcp', 'service')} = 'Set' AND "
+         + _has('pn_dcp', 'changes', ['station name', 'IP address', 'DHCP', 'reset factory settings', 'reset to factory']),
+         lambda b: _join(_list(b.get('changes', ())), ('to', b.get('station_name') or b.get('ip')), ('-', b.get('result'))),
+         "PROFINET DCP has no authentication: anyone on the segment can change a device's name or address, "
+         "or reset it, cutting it off from its controller."),
     Rule('slp_registration', 'high', 'slp', 'SLP accepts registrations',
          f"{_j('slp', 'function')} = 'Service Registration' AND {_j('slp', 'status')} = 'OK'",
          lambda b: _join(b.get('url'), f"({b['length']} bytes)" if b.get('length') else ''),
@@ -316,6 +322,11 @@ RULES = (
                          ('- certificate for', _list(b.get('subjectaltname')) or b.get('subject'))),
          "The client asked for one host and got a certificate for others - a server's default certificate, "
          "a shared host or CDN that doesn't serve that name, or someone in the middle answering for it."),
+    Rule('pn_dcp_identify_all', 'low', 'pn_dcp', 'PROFINET devices discovered',
+         f"{_j('pn_dcp', 'service')} = 'Identify' AND {_j('pn_dcp', 'query')} = 'all'",
+         lambda b: f"{_counted(b['responses'], 'device')} answered" if b.get('responses') else 'no answer',
+         "A DCP Identify All lists every PROFINET device on the segment, with its name, type and address - "
+         "routine from an engineering station, a survey from anywhere else."),
     Rule('rip_whole_table', 'low', 'rip', 'RIP routing table handed out',
          f"{_j('rip', 'whole_table')} = 1 AND {_j('rip', 'responses')} IS NOT NULL",
          lambda b: _counted(b.get('route_count'), 'route'),
