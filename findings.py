@@ -82,6 +82,11 @@ def _list(values, limit=3):
 _IEC104_CONTROL = ('Single command', 'Double command', 'Regulating step command', 'Set point (normalized)',
                    'Set point (scaled)', 'Set point (float)', 'Bitstring command', 'Reset process',
                    'Parameter activation')
+# MongoDB commands that create or empower a user or role, and the
+# handshake commands left out of a connection's detail line
+_MONGO_ACCOUNT = ('createUser', 'updateUser', 'grantRolesToUser', 'createRole', 'updateRole', 'grantPrivilegesToRole')
+_MONGO_QUIET = ('hello', 'ismaster', 'isMaster', 'buildinfo', 'buildInfo', 'ping', 'saslStart', 'saslContinue',
+                'endSessions', 'getnonce')
 # MMS services that run, stop or reload what a relay or controller executes
 _MMS_PROGRAM = ('start', 'stop', 'resume', 'reset', 'kill', 'createProgramInvocation', 'deleteProgramInvocation',
                 'initiateDownloadSequence', 'requestDomainDownload', 'loadDomainContent', 'deleteDomain')
@@ -236,6 +241,16 @@ RULES = (
          lambda b: _join(b.get('control') or b.get('service'), b.get('object'), ('-', b.get('result'))),
          'An IEC 61850 operate, select or cancel - switching a breaker or other controllable equipment - '
          'or a program started, stopped or killed, or a domain downloaded, on a relay or controller.'),
+    Rule('mongodb_destroy', 'high', 'mongodb_action', 'MongoDB database or collection dropped',
+         _in('mongodb_action', 'command', ['drop', 'dropDatabase', 'dropAllUsersFromDatabase', 'shutdown']),
+         lambda b: _join(b.get('command'), '.'.join(filter(None, (b.get('database'), b.get('collection')))), ('-', b.get('result'))),
+         'Data or users deleted wholesale, or the server shut down - what a ransom attack on an open '
+         'MongoDB server does before it leaves its note.'),
+    Rule('mongodb_user_change', 'high', 'mongodb_action', 'MongoDB user or role created or granted',
+         _in('mongodb_action', 'command', list(_MONGO_ACCOUNT)),
+         lambda b: _join(b.get('command'), b.get('user') or b.get('role'), _list(b.get('roles', ())),
+                         ('-', b.get('result'))),
+         'A user or role created, changed or given more rights - a way back in that outlasts the session.'),
     Rule('pn_dcp_set', 'high', 'pn_dcp', 'PROFINET device renamed, readdressed or reset',
          f"{_j('pn_dcp', 'service')} = 'Set' AND "
          + _has('pn_dcp', 'changes', ['station name', 'IP address', 'DHCP', 'reset factory settings', 'reset to factory']),
@@ -273,6 +288,15 @@ RULES = (
          f"({_j('mms_action', 'control')} IS NULL AND NOT {_in('mms_action', 'service', list(_MMS_PROGRAM))})",
          lambda b: _join(b.get('service'), b.get('object'), ('-', b.get('result'))),
          'A client wrote a variable, or defined or deleted variables, lists, events or journals, on an MMS server.'),
+    Rule('mongodb_unauthenticated', 'medium', 'mongodb', 'MongoDB answered without a login',
+         f"{_j('mongodb', 'unauthenticated')} = 1",
+         lambda b: _join(_list(c for c in b.get('commands', {}) if c not in _MONGO_QUIET), ('by', b.get('driver'))),
+         "The server answered more than a handshake on a connection that never logged in - it's open to "
+         "anyone who reaches it. (A connection that logged in before the capture started looks the same.)"),
+    Rule('mongodb_change', 'medium', 'mongodb_action', 'MongoDB write or change',
+         f"NOT {_in('mongodb_action', 'command', ['drop', 'dropDatabase', 'dropAllUsersFromDatabase', 'shutdown'] + list(_MONGO_ACCOUNT))}",
+         lambda b: _join(b.get('command'), '.'.join(filter(None, (b.get('database'), b.get('collection')))), ('-', b.get('result'))),
+         'Documents inserted, updated or deleted, or a collection, index or setting changed.'),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),

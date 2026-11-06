@@ -3941,6 +3941,282 @@ class MMS:
         return records + self.actions
 
 
+# ---------------------------------------------------------------- MongoDB
+#
+# MongoDB's wire protocol (TCP 27017), which Suricata doesn't parse: legacy
+# OP_QUERY commands (what most scanners still send - isMaster, buildinfo,
+# listDatabases) and their OP_REPLY, and OP_MSG, today's request and reply.
+# Its messages are BSON documents nested in documents, so it's read from
+# the structured pass's JSON trees.
+
+# Opcodes tshark names
+_MONGO_REPLY, _MONGO_UPDATE, _MONGO_INSERT, _MONGO_QUERY, _MONGO_DELETE = 1, 2001, 2002, 2004, 2006
+_MONGO_COMPRESSED, _MONGO_MSG = 2012, 2013
+# Commands that only say hello, log in or look at the connection itself
+_MONGO_HANDSHAKE = frozenset((
+    'hello', 'ismaster', 'isMaster', 'buildinfo', 'buildInfo', 'ping', 'getnonce', 'authenticate', 'saslStart',
+    'saslContinue', 'logout', 'whatsmyuri', 'endSessions', 'getLastError', 'getlasterror', 'saslSupportedMechs'))
+# Commands that change the server's data, users or state
+_MONGO_CHANGES = frozenset((
+    'insert', 'update', 'delete', 'findAndModify', 'findandmodify', 'drop', 'dropDatabase', 'create',
+    'createIndexes', 'dropIndexes', 'renameCollection', 'collMod', 'convertToCapped', 'createUser', 'updateUser',
+    'dropUser', 'dropAllUsersFromDatabase', 'grantRolesToUser', 'revokeRolesFromUser', 'createRole', 'updateRole',
+    'dropRole', 'grantPrivilegesToRole', 'shutdown', 'eval', '$eval', 'setParameter', 'applyOps', 'fsync',
+    'killOp', 'compact', 'repairDatabase', 'cloneCollection', 'copydb'))
+# Element names whose values are never kept - a login's or user's secrets
+_MONGO_SECRETS = frozenset(('pwd', 'password', 'passwd', 'key', 'nonce', 'payload', 'digestPassword'))
+_MONGO_MAX_DATABASES = 50
+_MONGO_PREVIEW = 200
+
+
+def _mongo_elements(doc):
+    """A BSON document's JSON tree as (name, value) pairs, in order: a
+    value is a string or number, or a subdocument's tree (an array is a
+    document too, its names '0', '1'...)."""
+    els = _dict(_dict(doc).get('mongo.elements'))
+    names, trees = els.get('mongo.element.name'), els.get('mongo.element.name_tree')
+    if names is None:
+        return []
+    if not isinstance(names, list):
+        names, trees = [names], [trees]
+    pairs = []
+    for name, tree in zip(names, trees if isinstance(trees, list) else [trees]):
+        tree = _dict(tree)
+        value = next((v for k, v in tree.items() if k.startswith('mongo.element.value.')
+                      and k != 'mongo.element.value.length'), None)
+        pairs.append((name, value if value is not None else tree.get('mongo.document')))
+    return pairs
+
+
+def _mongo_get(doc, name):
+    return next((v for n, v in _mongo_elements(doc) if n == name), None)
+
+
+def _mongo_documents(message):
+    """A message's documents: an OP_QUERY's query, an OP_MSG's body and
+    document sequences, an OP_REPLY's documents, a legacy write's."""
+    docs = []
+    for key in ('mongo.query', 'mongo.document', 'mongo.selector', 'mongo.update'):
+        value = message.get(key)
+        docs.extend(value if isinstance(value, list) else [value] if value is not None else [])
+    for section in _pdus(message.get('mongo.msg.sections.section')):
+        section = _dict(section)
+        if section.get('mongo.msg.sections.section.body') is not None:
+            docs.append(section['mongo.msg.sections.section.body'])
+        sequence = _dict(section.get('mongo.msg.sections.section.doc_sequence'))
+        docs.extend(_pdus(sequence.get('mongo.document')))
+    return [d for d in docs if isinstance(d, dict)]
+
+
+def _mongo_preview(doc, depth=0):
+    """A document as short text ('{note: READ ME, btc: 1Ab...}'), secrets
+    left out, cut at _MONGO_PREVIEW characters."""
+    parts = []
+    for name, value in _mongo_elements(doc):
+        if name in _MONGO_SECRETS:
+            continue
+        shown = ('{' + _mongo_preview(value, depth + 1) + '}' if depth < 2 else '{...}') if isinstance(value, dict) else value
+        parts.append(f'{name}: {shown}')
+    text = ', '.join(parts)
+    return text if depth or len(text) <= _MONGO_PREVIEW else text[:_MONGO_PREVIEW] + '...'
+
+
+def _mongo_sasl_user(mechanism, payload):
+    """The user a SASL login names - SCRAM's client-first message
+    ('n,,n=alice,r=...'), or PLAIN's authentication identity (never its
+    password)."""
+    try:
+        data = bytes.fromhex(str(payload).replace(':', ''))
+    except ValueError:
+        return None
+    if mechanism == 'PLAIN':
+        fields = data.split(b'\x00')
+        return fields[1].decode('utf-8', 'replace') if len(fields) == 3 else None
+    match = re.search(rb'(?:^|,)n=([^,]*)', data.split(b',,', 1)[-1])
+    return match.group(1).decode('utf-8', 'replace').replace('=2C', ',').replace('=3D', '=') if match else None
+
+
+class _MongoConnection:
+    __slots__ = ('flow', 'first', 'body', 'databases', 'waiting', 'mechanism', 'authenticated')
+
+    def __init__(self, flow, first):
+        self.flow, self.first = flow, first
+        self.body = {'commands': {}, 'errors': 0, 'answered': False}
+        self.databases = {}    # database -> None, in first-seen order
+        self.waiting = {}      # request id -> (command, [action bodies])
+        self.mechanism = None
+        self.authenticated = False
+
+
+class MongoDB:
+    """MongoDB - see the comment above. One 'mongodb' record per connection:
+    the client's driver, application and OS (from its hello), the login
+    (user and mechanism, never a password or key) and whether it worked,
+    how many of each command it sent, the databases it touched, what the
+    server answered (its version, the databases it listed), and errors."""
+    event_type = 'mongodb'
+    app_protos = ('mongo',)
+    tshark_protocols = ('mongo',)
+    layers = ('mongo',)
+    display_filter = 'mongo'
+
+    def __init__(self):
+        self.connections = {}      # flow key -> _MongoConnection
+        self.actions = []
+
+    def feed_json(self, pkt, layers):
+        connection = self.connections.get(pkt.flow.key)
+        if connection is None:
+            connection = self.connections[pkt.flow.key] = _MongoConnection(pkt.flow, pkt.when)
+        for message in _pdus(layers.get('mongo')):
+            if isinstance(message, dict):
+                self._message(pkt, connection, message)
+
+    def _message(self, pkt, connection, message):
+        body = connection.body
+        opcode = _int(message.get('mongo.opcode'))
+        if opcode == _MONGO_COMPRESSED:
+            body['compressed'] = body.get('compressed', 0) + 1
+            opcode = _int(message.get('mongo.compression.original_opcode'))
+        docs = _mongo_documents(message)
+        reply_to = _int(message.get('mongo.response_to')) or 0
+        if opcode == _MONGO_REPLY or (opcode == _MONGO_MSG and reply_to not in (0, 0xffffffff)):
+            body['answered'] = True
+            self._reply(connection, message.get('mongo.response_to'), docs[0] if docs else {})
+            return
+        namespace = message.get('mongo.full_collection_name') or ''
+        database, _, collection = namespace.partition('.')
+        if opcode in (_MONGO_QUERY, _MONGO_MSG) and docs and (opcode == _MONGO_MSG or collection == '$cmd'):
+            command, target = (_mongo_elements(docs[0]) or [(None, None)])[0]
+            database = _mongo_get(docs[0], '$db') or database
+            collection = target if isinstance(target, str) else ''
+        elif opcode == _MONGO_QUERY:
+            command = 'find'
+        else:
+            command = {_MONGO_INSERT: 'insert', _MONGO_UPDATE: 'update', _MONGO_DELETE: 'delete'}.get(opcode)
+        if not command:
+            return
+        body['commands'][command] = body['commands'].get(command, 0) + 1
+        if database and len(connection.databases) < _MONGO_MAX_DATABASES:
+            connection.databases.setdefault(database, None)
+        if docs:
+            self._login(connection, command, docs[0], database)
+            if command.lower() in ('hello', 'ismaster'):
+                self._client(body, _mongo_get(docs[0], 'client'))
+        actions = self._change(pkt, opcode, command, database, collection, docs) if command in _MONGO_CHANGES else []
+        request_id = message.get('mongo.request_id')
+        if request_id is not None:
+            connection.waiting[request_id] = (command, actions)
+            if len(connection.waiting) > 256:
+                connection.waiting.pop(next(iter(connection.waiting)))
+
+    def _change(self, pkt, opcode, command, database, collection, docs):
+        """A 'mongodb_action' record for a command that changes the server:
+        its database and collection (or the user or role it's about), how
+        many documents it carries, and a preview of the first - an
+        attacker's ransom note is usually the one document inserted."""
+        action = {'command': command, 'database': database, 'result': 'no response'}
+        if command in ('createUser', 'updateUser', 'dropUser', 'grantRolesToUser', 'revokeRolesFromUser',
+                       'createRole', 'updateRole', 'dropRole', 'grantPrivilegesToRole'):
+            action['user' if 'User' in command else 'role'] = collection
+            roles = _mongo_get(docs[0], 'roles') if docs else None
+            if isinstance(roles, dict):
+                action['roles'] = [r if not isinstance(r, dict) else _mongo_preview(r) for _, r in _mongo_elements(roles)][:10]
+        elif collection and command not in ('dropDatabase', 'shutdown', 'fsync', 'setParameter', 'killOp'):
+            action['collection'] = collection
+        if opcode == _MONGO_MSG or opcode == _MONGO_QUERY:
+            items = {'insert': 'documents', 'update': 'updates', 'delete': 'deletes'}.get(command)
+            listed = [v for _, v in _mongo_elements(_mongo_get(docs[0], items))] if items and docs else []
+            if items and not listed:
+                listed = docs[1:]      # OP_MSG's document sequence
+            if items:
+                action['count'] = len(listed)
+            if command == 'insert' and listed and isinstance(listed[0], dict):
+                action['document'] = _mongo_preview(listed[0])
+            elif command in ('update', 'delete') and listed and isinstance(listed[0], dict):
+                action['filter'] = _mongo_preview(_mongo_get(listed[0], 'q'))
+        elif opcode == _MONGO_INSERT:
+            action['count'] = len(docs)
+            if docs:
+                action['document'] = _mongo_preview(docs[0])
+        elif docs:
+            action['count'] = 1
+            action['filter'] = _mongo_preview(docs[0])
+        self.actions.append((pkt.flow, pkt.when, 'mongodb_action', action))
+        return [action]
+
+    @staticmethod
+    def _client(body, client):
+        if not isinstance(client, dict):
+            return
+        driver, app, os_ = (_mongo_get(client, k) for k in ('driver', 'application', 'os'))
+        if isinstance(driver, dict):
+            body['driver'] = ' '.join(str(v) for v in (_mongo_get(driver, 'name'), _mongo_get(driver, 'version')) if v)
+        if isinstance(app, dict) and _mongo_get(app, 'name'):
+            body['application'] = _mongo_get(app, 'name')
+        if isinstance(os_, dict):
+            body['os'] = ' '.join(str(v) for v in (_mongo_get(os_, 'name') or _mongo_get(os_, 'type'),
+                                                   _mongo_get(os_, 'version')) if v)
+        if _mongo_get(client, 'platform'):
+            body['platform'] = _mongo_get(client, 'platform')
+
+    def _login(self, connection, command, doc, database):
+        body = connection.body
+        if command == 'saslStart':
+            connection.mechanism = _mongo_get(doc, 'mechanism')
+            user = _mongo_sasl_user(connection.mechanism, _mongo_get(doc, 'payload'))
+        elif command == 'authenticate':
+            connection.mechanism = _mongo_get(doc, 'mechanism') or 'MONGODB-CR'
+            user = _mongo_get(doc, 'user')
+        else:
+            return
+        if connection.mechanism:
+            body['auth_mechanism'] = connection.mechanism
+        if user:
+            body['user'] = user
+        body['auth_database'] = database
+        body.setdefault('login', 'no response')
+
+    def _reply(self, connection, request_id, doc):
+        body = connection.body
+        waiting = connection.waiting.pop(request_id, None)
+        command, actions = waiting if waiting else ('', [])
+        ok = _mongo_get(doc, 'ok')
+        failed = ok is not None and str(ok) in ('0', '0.0', 'False', 'false')
+        error = _mongo_get(doc, 'errmsg') or _mongo_get(doc, '$err') or _mongo_get(doc, 'codeName')
+        if failed or (error and ok is None):
+            body['errors'] += 1
+            body['last_error'] = f'{command}: {error}' if command else str(error)
+        if command in ('saslStart', 'saslContinue', 'authenticate'):
+            if failed:
+                body['login'] = 'failed'
+            elif command == 'authenticate' or str(_mongo_get(doc, 'done')) in ('1', 'True', 'true'):
+                body['login'] = 'succeeded'
+                connection.authenticated = True
+        elif command.lower() == 'buildinfo' and _mongo_get(doc, 'version'):
+            body['server_version'] = _mongo_get(doc, 'version')
+        elif command == 'listDatabases' and not failed:
+            listed = _mongo_get(doc, 'databases')
+            names = [_mongo_get(d, 'name') for _, d in _mongo_elements(listed) if isinstance(d, dict)]
+            body['databases_listed'] = [n for n in names if n][:_MONGO_MAX_DATABASES]
+        if not failed and command and command not in _MONGO_HANDSHAKE and not connection.authenticated:
+            body['unauthenticated'] = True
+        for action in actions:
+            action['result'] = f'error: {error}' if failed else 'ok'
+            if not failed and _mongo_get(doc, 'n') is not None:
+                action['n'] = _int(_mongo_get(doc, 'n'), _mongo_get(doc, 'n'))
+
+    def finish(self):
+        records = []
+        for connection in self.connections.values():
+            body = connection.body
+            if connection.databases:
+                body['databases'] = list(connection.databases)
+            if body['commands'] or body['answered']:
+                records.append((connection.flow, connection.first, 'mongodb', body))
+        return records + self.actions
+
+
 # ---------------------------------------------------------------- structured protocols
 #
 # Protocols whose messages nest - an OPC UA write's node ids beside its
@@ -3986,7 +4262,7 @@ PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, 
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).
-STRUCTURED_PROTOCOLS = (OPCUA, MMS)
+STRUCTURED_PROTOCOLS = (OPCUA, MMS, MongoDB)
 # Flow application protocols with transaction records here - every other
 # one gets a connection tab (db.CONNECTION_TYPE_PREFIX) instead.
 RECORDED_APP_PROTOS = frozenset(p for proto in PROTOCOLS + STRUCTURED_PROTOCOLS for p in proto.app_protos)

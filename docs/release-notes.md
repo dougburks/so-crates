@@ -19,10 +19,21 @@
   factory reset, a signal) and to what. And a record for each device
   that described itself: its station name, type, vendor and device IDs,
   role and IP address. These were connection cards before
+- **MongoDB** - a record for each connection: the client's driver, OS
+  and platform, the login's user and mechanism and whether it worked
+  (never a password), each command's count, the databases touched, the
+  server's version and the databases it listed, and whether it answered
+  at all - most on an internet-facing sensor are scanners' probes. And a
+  record for each change - documents inserted, updated or deleted, a
+  collection or database dropped, a user or role created or granted -
+  with its result; an insert shows its first document, which is where a
+  ransom note turns up. These were connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
-  of every device is low
+  of every device is low. A MongoDB database or collection dropped, or a
+  user or role created or granted, is high; a MongoDB server answering
+  without a login, and any other MongoDB write or change, are medium
 
 ### Themes
 

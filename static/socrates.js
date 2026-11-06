@@ -2482,6 +2482,7 @@
                 opcua: '#29b6f6',
                 mms: '#5c6bc0',
                 pn_dcp: '#26c6da',
+                mongodb: '#66bb6a',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -2504,6 +2505,7 @@
                 opcua_action: '#ff7043',
                 mms_action: '#ef5350',
                 pn_device: '#9ccc65',
+                mongodb_action: '#ff7043',
                 bacnet_property: '#5c6bc0',
                 bacnet_device: '#8d6e63',
                 iec104_point: '#26a69a',
@@ -4775,6 +4777,47 @@
             return html;
         }
 
+        // tshark's MongoDB records (shark_protocols.MongoDB): a connection,
+        // and a change (insert, drop, a user created...).
+        function renderMongodbDetails(e) {
+            const m = e.mongodb || {};
+            let html = htmlSection('MongoDB Details', COLORS.EVENT.mongodb);
+            html += htmlRowText('Driver', m.driver);
+            html += htmlRowText('Application', m.application);
+            html += htmlRowText('OS', m.os);
+            html += htmlRowText('Platform', m.platform);
+            html += htmlRowText('User', m.user);
+            html += htmlRowText('Mechanism', m.auth_mechanism);
+            html += htmlRowText('Auth Database', m.auth_database);
+            html += htmlRowText('Login', m.login);
+            if (m.unauthenticated) html += htmlRowText('Unauthenticated', 'commands answered without a login');
+            html += htmlRowText('Commands', Object.entries(m.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Databases', (m.databases || []).join(', '), 'mono');
+            html += htmlRowText('Server Version', m.server_version);
+            html += htmlRowText('Databases Listed', (m.databases_listed || []).join(', '), 'mono');
+            html += htmlRowText('Answered', m.answered ? 'yes' : 'no');
+            if (m.compressed) html += htmlRowText('Compressed', `${m.compressed.toLocaleString()} messages`);
+            if (m.errors) html += htmlRowText('Errors', `${m.errors.toLocaleString()} (last: ${m.last_error || ''})`);
+            return html;
+        }
+
+        function renderMongodbActionDetails(e) {
+            const a = e.mongodb_action || {};
+            let html = htmlSection('MongoDB Action Details', COLORS.EVENT.mongodb_action);
+            html += htmlRowText('Command', a.command);
+            html += htmlRowText('Database', a.database, 'mono');
+            html += htmlRowText('Collection', a.collection, 'mono');
+            html += htmlRowText('User', a.user);
+            html += htmlRowText('Role', a.role);
+            if (a.roles) html += htmlRowText('Roles', a.roles.join('; '));
+            html += htmlRowText('Count', a.count !== undefined ? a.count.toLocaleString() : '');
+            html += htmlRowText('Document', a.document, 'mono');
+            html += htmlRowText('Filter', a.filter, 'mono');
+            html += htmlRowText('Result', a.result);
+            if (a.n !== undefined) html += htmlRowText('Affected', String(a.n));
+            return html;
+        }
+
         // tshark's BACnet records (shark_protocols.BACnet): an action with
         // its reply, a read/notification summary, a device.
         function renderBacnetDetails(e) {
@@ -5243,6 +5286,7 @@
             opcua: renderOpcuaDetails,
             mms: renderMmsDetails,
             pn_dcp: renderPnDcpDetails,
+            mongodb: renderMongodbDetails,
             goose: renderGooseDetails,
             browser: renderBrowserDetails,
             dhcpv6: renderDhcpv6Details,
@@ -5265,6 +5309,7 @@
             opcua_action: renderOpcuaActionDetails,
             mms_action: renderMmsActionDetails,
             pn_device: renderPnDeviceDetails,
+            mongodb_action: renderMongodbActionDetails,
             bacnet_property: renderBacnetPropertyDetails,
             bacnet_device: renderBacnetDeviceDetails,
             iec104_point: renderIec104PointDetails,
@@ -8379,6 +8424,7 @@
             opcua: 'OPC UA',
             mms: 'MMS',
             pn_dcp: 'PROFINET DCP',
+            mongodb: 'MongoDB',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -8401,6 +8447,7 @@
             opcua_action: 'OPC UA Actions',
             mms_action: 'MMS Actions',
             pn_device: 'PROFINET Devices',
+            mongodb_action: 'MongoDB Actions',
             bacnet_property: 'BACnet Properties',
             bacnet_device: 'BACnet Devices',
             iec104_point: 'IEC 104 Points',
@@ -9537,6 +9584,10 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Object', 'Control', 'Value', 'Result'];
                 case 'pn_dcp':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Query', 'Changes', 'Station Name', 'IP', 'Result', 'Count'];
+                case 'mongodb':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Driver', 'User', 'Login', 'Databases', 'Server Version', 'Answered'];
+                case 'mongodb_action':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Database', 'Collection', 'Count', 'Result'];
                 case 'pn_device':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Station Name', 'Device Type', 'Vendor ID', 'Device ID', 'Role', 'IP', 'Count'];
                 case 'bacnet_property':
@@ -10018,6 +10069,8 @@
                 case 'mms_action':
                 case 'pn_dcp':
                 case 'pn_device':
+                case 'mongodb':
+                case 'mongodb_action':
                 case 'goose':
                 case 'browser':
                 case 'lldp':
@@ -12686,13 +12739,13 @@
                     if (r?.value !== undefined) return String(r.value);
                     return e.opcua_action?.arguments ? e.opcua_action.arguments.join(', ') : '';
                 }
-                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
+                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
                 case 'Updates': return e.iec104_point?.updates !== undefined ? String(e.iec104_point.updates) : '';
                 case 'Last Value': { const r = e.iec104_point || e.bacnet_property; return r?.last_value !== undefined ? String(r.last_value) : ''; }
                 // BACnet: an action's, a read/notification summary's, a device's
                 case 'Object': return e.bacnet?.object || e.bacnet_property?.object || e.mms_action?.object || '';
                 case 'Property': return e.bacnet?.property || e.bacnet_property?.property || '';
-                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp || e.pn_dcp || e.pn_device; return r?.count !== undefined ? String(r.count) : ''; }
+                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp || e.pn_dcp || e.pn_device || e.mongodb_action; return r?.count !== undefined ? String(r.count) : ''; }
                 // LLDP and CDP: a neighbor's announcements
                 case 'System Name': return e.lldp?.system_name || '';
                 case 'Chassis ID': return e.lldp?.chassis_id || '';
@@ -12722,7 +12775,7 @@
                     return d?.vendor || (d?.vendor_id !== undefined ? String(d.vendor_id) : '');
                 }
                 case 'Announcements': return e.bacnet_device?.announcements !== undefined ? String(e.bacnet_device.announcements) : '';
-                case 'User': return e.telnet?.username || e.opcua?.username || e.socks?.user || e.radius?.user || e.stun?.username || '';
+                case 'User': return e.telnet?.username || e.opcua?.username || e.mongodb?.user || e.socks?.user || e.radius?.user || e.stun?.username || '';
                 // GOOSE: a state change's
                 case 'Control Block': return e.goose?.gocb_ref || '';
                 case 'Dataset': return e.goose?.dataset || '';
@@ -12747,8 +12800,13 @@
                 case 'Device Type': return e.pn_device?.device_type || '';
                 case 'Vendor ID': return e.pn_device?.vendor_id || '';
                 case 'Role': return e.pn_device?.role || '';
+                // MongoDB: a connection's, an action's
+                case 'Driver': return e.mongodb?.driver || '';
+                case 'Databases': return (e.mongodb?.databases || []).join(', ');
+                case 'Database': return e.mongodb_action?.database || '';
+                case 'Collection': return e.mongodb_action?.collection || '';
                 case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || '';
-                case 'Login': return e.telnet?.login || '';
+                case 'Login': return e.telnet?.login || e.mongodb?.login || '';
                 case 'Area': return e.s7comm?.items?.[0]?.area || '';
                 case 'Error': return e.s7comm?.response?.error_class || '';
                 case 'Host': return e.http?.hostname || e.syslog?.hostname || '';
@@ -12909,6 +12967,7 @@
                 }
                 case 'Command': {
                     if (e.rip) return e.rip.command || '';
+                    if (e.mongodb_action) return e.mongodb_action.command || '';
                     if (e.event_type === 'iec104') return e.iec104?.action || e.iec104?.type || '';
                     if (e.event_type === 'pgsql') return e.pgsql?.response?.command_completed || '';
                     if (e.event_type === 'enip') return e.enip?.request?.command || e.enip?.response?.command || '';
@@ -12940,6 +12999,7 @@
                     return e.ssh?.client?.software_version || '';
                 }
                 case 'Server Version': {
+                    if (e.mongodb) return e.mongodb.server_version || '';
                     if (e.event_type === 'rfb') {
                         const spv = e.rfb?.server_protocol_version;
                         return spv ? `${spv.major}.${spv.minor}` : '';
@@ -13010,7 +13070,7 @@
                 }
                 case 'Event': return e.anomaly?.event || '';
                 case 'Layer': return e.anomaly?.layer || '';
-                case 'Answered': return e.shark?.answered || '';
+                case 'Answered': return e.mongodb ? (e.mongodb.answered ? 'yes' : 'no') : e.shark?.answered || '';
                 case 'App Proto': return e.event_type === 'anomaly' ? (e.anomaly?.app_proto || '') : (e.app_proto || '');
                 case 'Stratum': return e.ntp?.stratum !== undefined ? String(e.ntp.stratum) : '';
                 case 'Reference ID': return e.ntp?.reference_id || '';

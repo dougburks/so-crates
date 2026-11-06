@@ -738,6 +738,77 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestMongoDB(unittest.TestCase):
+    """tests/protocol_fixtures.write_mongodb_pcap, read by the structured
+    pass: each connection, and the changes with their results - with what
+    Suricata 8.0.8 logged for the capture (tests/data/mongodb_fixture.eve.json):
+    flows it gives no protocol, since it doesn't parse MongoDB."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_mongodb_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'mongodb.pcap')
+        write_mongodb_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['mongodb'] for r in cls.records if r['event_type'] == 'mongodb'}
+        cls.actions = [r['mongodb_action'] for r in cls.records if r['event_type'] == 'mongodb_action']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_open_server(self):
+        c = self.connections[50000]
+        self.assertEqual({k: c.get(k) for k in ('driver', 'os', 'server_version', 'databases_listed', 'databases',
+                                                'answered', 'unauthenticated', 'errors')},
+                         {'driver': 'PyMongo 4.6.3', 'os': 'Linux 6.1.0', 'server_version': '6.0.5',
+                          'databases_listed': ['admin', 'shop'], 'databases': ['admin', 'shop', 'READ_ME_TO_RECOVER_YOUR_DATA'],
+                          'answered': True, 'unauthenticated': True, 'errors': 0})
+        self.assertEqual(c['commands'], {'isMaster': 1, 'buildInfo': 1, 'listDatabases': 1, 'dropDatabase': 1, 'insert': 1})
+
+    def test_a_refused_login_names_the_user_but_keeps_no_secret(self):
+        c = self.connections[50001]
+        self.assertEqual({k: c.get(k) for k in ('auth_mechanism', 'user', 'auth_database', 'login', 'errors')},
+                         {'auth_mechanism': 'SCRAM-SHA-256', 'user': 'alice', 'auth_database': 'admin',
+                          'login': 'failed', 'errors': 2})
+        self.assertNotIn('unauthenticated', c, 'nothing past the handshake was answered')
+        self.assertNotIn('hunter2', json.dumps(self.records), "createUser's pwd")
+        self.assertNotIn('proof', json.dumps(self.records), "the login's proof")
+
+    def test_changes_with_their_results(self):
+        self.assertEqual(self.actions, [
+            {'command': 'dropDatabase', 'database': 'shop', 'result': 'ok'},
+            {'command': 'insert', 'database': 'READ_ME_TO_RECOVER_YOUR_DATA', 'collection': 'README', 'count': 1,
+             'document': 'content: All your data is backed up. Send 0.01 BTC to 1AbcFixture to recover it., '
+                         'email: recover@example.net', 'result': 'ok', 'n': 1},
+            {'command': 'createUser', 'database': 'admin', 'user': 'backdoor', 'roles': ['role: root, db: admin'],
+             'result': 'error: command createUser requires authentication'},
+        ])
+
+    def test_a_sasl_user(self):
+        from shark_protocols import _mongo_sasl_user
+        self.assertEqual(_mongo_sasl_user('SCRAM-SHA-1', b'n,,n=a=2Cb,r=xyz'.hex()), 'a,b')
+        self.assertEqual(_mongo_sasl_user('PLAIN', b'\x00bob\x00secret'.hex()), 'bob', 'never the password')
+
+    def test_the_flows_match_suricatas_and_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('mongodb_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['named_by_tshark'], report['differences']), (2, 2, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'mongodb_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'mongodb.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('mongodb'), counts.get('mongodb_action')), (2, 3))
+        self.assertNotIn('conn_mongo', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestPNDCP(unittest.TestCase):
     """tests/protocol_fixtures.write_pn_dcp_pcap: PROFINET DCP's actions and
     the devices that described themselves - with what Suricata 8.0.8 logged

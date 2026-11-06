@@ -812,6 +812,104 @@ def write_goose_pcap(path):
     write_pcap(path, goose_packets())
 
 
+# ---------------------------------------------------------------- MongoDB
+#
+# An open MongoDB server (MONGO_SERVER:27017). One client (CLIENT:50000,
+# PyMongo) says isMaster by OP_QUERY, then by OP_MSG asks the version
+# (6.0.5), lists the databases (admin, shop), drops shop, and inserts a
+# ransom note into READ_ME_TO_RECOVER_YOUR_DATA.README - all answered ok,
+# with no login. Another (CLIENT:50001) tries SCRAM-SHA-256 as alice
+# (refused), then createUser backdoor with role root (refused, unauthorized).
+
+MONGO_SERVER = '10.1.0.27'
+
+
+def _bson(*elements):
+    body = b''
+    for name, value in elements:
+        key = name.encode() + b'\x00'
+        if isinstance(value, bool):
+            body += b'\x08' + key + (b'\x01' if value else b'\x00')
+        elif isinstance(value, int):
+            body += b'\x10' + key + struct.pack('<i', value)
+        elif isinstance(value, float):
+            body += b'\x01' + key + struct.pack('<d', value)
+        elif isinstance(value, str):
+            data = value.encode() + b'\x00'
+            body += b'\x02' + key + struct.pack('<i', len(data)) + data
+        elif isinstance(value, bytes):
+            body += b'\x05' + key + struct.pack('<iB', len(value), 0) + value
+        elif isinstance(value, list):
+            body += b'\x04' + key + _bson(*[(str(i), v) for i, v in enumerate(value)])
+        else:                          # a subdocument, as a tuple of pairs
+            body += b'\x03' + key + _bson(*value)
+    return struct.pack('<i', 4 + len(body) + 1) + body + b'\x00'
+
+
+def _mongo_message(opcode, request_id, response_to, payload):
+    return struct.pack('<iiii', 16 + len(payload), request_id, response_to, opcode) + payload
+
+
+def _mongo_query(request_id, namespace, doc):
+    return _mongo_message(2004, request_id, 0, struct.pack('<i', 0) + namespace.encode() + b'\x00'
+                          + struct.pack('<ii', 0, -1) + doc)
+
+
+def _mongo_reply(request_id, doc):
+    return _mongo_message(1, 1000 + request_id, request_id, struct.pack('<iqii', 0, 0, 0, 1) + doc)
+
+
+def _mongo_msg(request_id, response_to, doc, sequence=None):
+    sections = b'\x00' + doc
+    if sequence:
+        identifier, docs = sequence
+        data = identifier.encode() + b'\x00' + b''.join(docs)
+        sections += b'\x01' + struct.pack('<i', 4 + len(data)) + data
+    return _mongo_message(2013, request_id, response_to, struct.pack('<I', 0) + sections)
+
+
+def mongodb_packets():
+    ok = ('ok', 1.0)
+    client = (('driver', (('name', 'PyMongo'), ('version', '4.6.3'))),
+              ('os', (('type', 'Linux'), ('name', 'Linux'), ('version', '6.1.0'))), ('platform', 'CPython 3.11.2'))
+    note = _bson(('content', 'All your data is backed up. Send 0.01 BTC to 1AbcFixture to recover it.'),
+                 ('email', 'recover@example.net'))
+    attacker = [
+        (True, _mongo_query(1, 'admin.$cmd', _bson(('isMaster', 1), ('client', client)))),
+        (False, _mongo_reply(1, _bson(('ismaster', True), ('maxWireVersion', 17), ok))),
+        (True, _mongo_msg(2, 0, _bson(('buildInfo', 1), ('$db', 'admin')))),
+        (False, _mongo_msg(1002, 2, _bson(('version', '6.0.5'), ok))),
+        (True, _mongo_msg(3, 0, _bson(('listDatabases', 1), ('$db', 'admin')))),
+        (False, _mongo_msg(1003, 3, _bson(('databases', [(('name', 'admin'), ('sizeOnDisk', 40960)),
+                                                          (('name', 'shop'), ('sizeOnDisk', 81920))]), ok))),
+        (True, _mongo_msg(4, 0, _bson(('dropDatabase', 1), ('$db', 'shop')))),
+        (False, _mongo_msg(1004, 4, _bson(('dropped', 'shop'), ok))),
+        (True, _mongo_msg(5, 0, _bson(('insert', 'README'), ('$db', 'READ_ME_TO_RECOVER_YOUR_DATA')),
+                          sequence=('documents', [note]))),
+        (False, _mongo_msg(1005, 5, _bson(('n', 1), ok))),
+    ]
+    refused = ('ok', 0.0)
+    login = [
+        (True, _mongo_msg(6, 0, _bson(('saslStart', 1), ('mechanism', 'SCRAM-SHA-256'),
+                                      ('payload', b'n,,n=alice,r=fixturenonce'), ('$db', 'admin')))),
+        (False, _mongo_msg(1006, 6, _bson(('conversationId', 1), ('done', False), ('payload', b'r=fixturenonce1,s=c2FsdA==,i=15000'), ok))),
+        (True, _mongo_msg(7, 0, _bson(('saslContinue', 1), ('conversationId', 1), ('payload', b'c=biws,r=fixturenonce1,p=proof'),
+                                      ('$db', 'admin')))),
+        (False, _mongo_msg(1007, 7, _bson(refused, ('errmsg', 'Authentication failed.'), ('code', 18),
+                                          ('codeName', 'AuthenticationFailed')))),
+        (True, _mongo_msg(8, 0, _bson(('createUser', 'backdoor'), ('pwd', 'hunter2'),
+                                      ('roles', [(('role', 'root'), ('db', 'admin'))]), ('$db', 'admin')))),
+        (False, _mongo_msg(1008, 8, _bson(refused, ('errmsg', 'command createUser requires authentication'), ('code', 13),
+                                          ('codeName', 'Unauthorized')))),
+    ]
+    return (tcp_segments(CLIENT, MONGO_SERVER, 50000, 27017, attacker)
+            + tcp_segments(CLIENT, MONGO_SERVER, 50001, 27017, login))
+
+
+def write_mongodb_pcap(path):
+    write_pcap(path, mongodb_packets())
+
+
 # ---------------------------------------------------------------- PROFINET DCP
 #
 # An engineering station (PN_ENGINEERING) asks every PROFINET device to

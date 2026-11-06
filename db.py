@@ -1698,6 +1698,21 @@ AGGREGATION_JSON_PATHS = {
         'Repeats': ['$.goose.repeats'],
         'Anomaly': ['$.goose.anomaly'],
     },
+    'mongodb': {
+        'Driver': ['$.mongodb.driver'],
+        'User': ['$.mongodb.user'],
+        'Login': ['$.mongodb.login'],
+        'Databases': ['$.mongodb.databases'],
+        'Server Version': ['$.mongodb.server_version'],
+        'Answered': ['$.mongodb.answered'],
+    },
+    'mongodb_action': {
+        'Command': ['$.mongodb_action.command'],
+        'Database': ['$.mongodb_action.database'],
+        'Collection': ['$.mongodb_action.collection'],
+        'Count': ['$.mongodb_action.count'],
+        'Result': ['$.mongodb_action.result'],
+    },
     'pn_dcp': {
         'Service': ['$.pn_dcp.service'],
         'Query': ['$.pn_dcp.query'],
@@ -1889,7 +1904,7 @@ AGGREGATION_CAST_TEXT = {
 AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
-    ('pn_dcp', 'Changes'),
+    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'),
 }
 
 
