@@ -1732,6 +1732,35 @@ AGGREGATION_JSON_PATHS = {
         'Server Version': ['$.mongodb.server_version'],
         'Answered': ['$.mongodb.answered'],
     },
+    'fins': {
+        'Commands': ['$.fins.commands'],
+        'Model': ['$.fins.model'],
+        'Version': ['$.fins.version'],
+        'Node': ['$.fins.node'],
+        'Answered': ['$.fins.answered'],
+        'Errors': ['$.fins.errors'],
+    },
+    'fins_action': {
+        'Command': ['$.fins_action.command'],
+        'Area': ['$.fins_action.area'],
+        'Address': ['$.fins_action.address'],
+        'Mode': ['$.fins_action.mode'],
+        'Data': ['$.fins_action.data'],
+        'Result': ['$.fins_action.result'],
+    },
+    'hart_ip': {
+        'Host Type': ['$.hart_ip.host_type'],
+        'Session': ['$.hart_ip.session'],
+        'Commands': ['$.hart_ip.commands'],
+        'Tags': ['$.hart_ip.tags'],
+        'Answered': ['$.hart_ip.answered'],
+    },
+    'hart_ip_action': {
+        'Command': ['$.hart_ip_action.command'],
+        'Device': ['$.hart_ip_action.device'],
+        'Data': ['$.hart_ip_action.data'],
+        'Result': ['$.hart_ip_action.result'],
+    },
     'memcache': {
         'Commands': ['$.memcache.commands'],
         'Keys': ['$.memcache.keys'],
@@ -1913,6 +1942,8 @@ AGGREGATION_VALUE_TRANSFORMS = {
     # true/false as extractValue() shows them
     ('mongodb', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('memcache', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('fins', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('hart_ip', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('alert', 'Severity'): lambda expr: f"'Sev ' || COALESCE({expr}, 0)",
     # Classifies signature_id into the curated ruleset it most likely came
     # from - see suricata_sid_ranges.py for how SURICATA_SID_RANGES was
@@ -1959,11 +1990,11 @@ AGGREGATION_CAST_TEXT = {
 AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
-    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'),
+    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'),
 }
 # Object-valued columns shown as their keys, joined the same way (a count
 # per name: memcached's commands)
-AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands')}
+AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands')}
 
 
 def _aggregation_expr(event_type, label, paths, prefix=''):

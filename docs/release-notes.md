@@ -58,6 +58,17 @@
   errors, and the bytes each way - over UDP, how many times the request
   came back amplified. Text and binary protocol both. These were
   connection cards before
+- **Omron FINS** - a record for each connection or exchange: the
+  commands, the PLC's model and version, its nodes and end codes; and one
+  for each command that changes or controls the PLC - memory and program
+  writes, run and stop, forced I/O, files - with what it wrote and the
+  answer. A program area's protection password, sent in the clear, is
+  shown. These were connection cards before
+- **HART-IP** - a record for each session: the host, the commands, and
+  each field device that answered - who made it, its tag and its primary
+  variable; and one for each command that changes or commands a device -
+  its tag, range or units written, its loop current fixed, a reset - with
+  the answer. These were connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -72,7 +83,12 @@
   write or change, and a command to the listener, are medium; a failed
   Oracle login, and a SID or service the listener doesn't know, are low.
   A memcached server answering over UDP (an amplifier), and memcached
-  flushed or shut down, are high; memcached stats answered is low
+  flushed or shut down, are high; memcached stats answered is low. An
+  Omron PLC put in run or stop mode, its program changed, or its I/O
+  forced, and a HART device's output, range or calibration changed, are
+  high; any other FINS write and any other HART configuration write are
+  medium; an Omron PLC identified by a Controller Data Read, and a
+  HART-IP session accepted, are low
 
 ### Themes
 

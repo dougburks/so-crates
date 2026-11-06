@@ -2488,6 +2488,8 @@
                 mongodb: '#66bb6a',
                 tns: '#ef6c00',
                 memcache: '#26a69a',
+                fins: '#29b6f6',
+                hart_ip: '#9ccc65',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -2512,6 +2514,8 @@
                 pn_device: '#9ccc65',
                 mongodb_action: '#ff7043',
                 tns_statement: '#ffb74d',
+                fins_action: '#ef5350',
+                hart_ip_action: '#ff7043',
                 bacnet_property: '#5c6bc0',
                 bacnet_device: '#8d6e63',
                 iec104_point: '#26a69a',
@@ -4824,6 +4828,69 @@
             return html;
         }
 
+        // tshark's Omron FINS records (shark_protocols.FINS): a connection,
+        // and each command that changes or controls the PLC.
+        function renderFinsDetails(e) {
+            const f = e.fins || {};
+            let html = htmlSection('Omron FINS Details', COLORS.EVENT.fins);
+            html += htmlRowText('Model', f.model);
+            html += htmlRowText('Version', f.version);
+            html += htmlRowText('Node', f.node !== undefined ? String(f.node) : '');
+            html += htmlRowText('Source Node', f.source_node !== undefined ? String(f.source_node) : '');
+            if (f.client_node !== undefined) html += htmlRowText('FINS/TCP Nodes', `client ${f.client_node}, server ${f.server_node ?? ''}`);
+            html += htmlRowText('Commands', Object.entries(f.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Answered', f.answered ? 'yes' : 'no');
+            html += htmlRowText('Errors', Object.entries(f.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            return html;
+        }
+
+        function renderFinsActionDetails(e) {
+            const a = e.fins_action || {};
+            let html = htmlSection('Omron FINS Action Details', COLORS.EVENT.fins_action);
+            html += htmlRowText('Command', a.code ? `${a.command} (${a.code})` : a.command);
+            html += htmlRowText('Area', a.area);
+            html += htmlRowText('Address', a.address, 'mono');
+            html += htmlRowText('Count', a.count !== undefined ? a.count.toLocaleString() : '');
+            html += htmlRowText('Mode', a.mode);
+            html += htmlRowText('Program', a.program, 'mono');
+            html += htmlRowText('Password', a.password, 'mono');
+            html += htmlRowText('Data', a.data, 'mono');
+            html += htmlRowText('Node', a.node !== undefined ? String(a.node) : '');
+            html += htmlRowText('Result', a.result);
+            return html;
+        }
+
+        // tshark's HART-IP records (shark_protocols.HARTIP): a session, and
+        // each command that changes or commands a field device.
+        function renderHartIpDetails(e) {
+            const h = e.hart_ip || {};
+            let html = htmlSection('HART-IP Details', COLORS.EVENT.hart_ip);
+            html += htmlRowText('Host Type', h.host_type);
+            html += htmlRowText('Session', h.moved_to_port ? `${h.session || ''} (continued on port ${h.moved_to_port})` : h.session);
+            html += htmlRowText('Commands', Object.entries(h.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Answered', h.answered ? 'yes' : 'no');
+            html += htmlRowText('Errors', Object.entries(h.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            for (const d of h.devices || []) {
+                const parts = [d.tag && `tag ${d.tag}`, d.manufacturer_id !== undefined && `manufacturer ${d.manufacturer_id}`,
+                               d.device_type && `type ${d.device_type}`, d.device_id && `ID ${d.device_id}`,
+                               d.device_revision !== undefined && `revision ${d.device_revision}`,
+                               d.pv !== undefined && `PV ${d.pv}`, d.loop_current !== undefined && `loop ${d.loop_current} mA`,
+                               d.descriptor && `descriptor ${d.descriptor}`, d.message && `message ${d.message}`].filter(Boolean);
+                html += htmlRowText(`Device ${d.address}`, parts.join(', '), 'mono');
+            }
+            return html;
+        }
+
+        function renderHartIpActionDetails(e) {
+            const a = e.hart_ip_action || {};
+            let html = htmlSection('HART-IP Action Details', COLORS.EVENT.hart_ip_action);
+            html += htmlRowText('Command', a.number !== undefined ? `${a.command} (${a.number})` : a.command);
+            html += htmlRowText('Device', a.device, 'mono');
+            html += htmlRowText('Data', a.data, 'mono');
+            html += htmlRowText('Result', a.result);
+            return html;
+        }
+
         // tshark's memcached records (shark_protocols.Memcache): one per
         // connection or UDP exchange.
         function renderMemcacheDetails(e) {
@@ -5458,6 +5525,10 @@
             mongodb_action: renderMongodbActionDetails,
             tns: renderTnsDetails,
             memcache: renderMemcacheDetails,
+            fins: renderFinsDetails,
+            fins_action: renderFinsActionDetails,
+            hart_ip: renderHartIpDetails,
+            hart_ip_action: renderHartIpActionDetails,
             tns_statement: renderTnsStatementDetails,
             bacnet_property: renderBacnetPropertyDetails,
             bacnet_device: renderBacnetDeviceDetails,
@@ -8579,6 +8650,8 @@
             mongodb: 'MongoDB',
             tns: 'Oracle TNS',
             memcache: 'memcached',
+            fins: 'Omron FINS',
+            hart_ip: 'HART-IP',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -8603,6 +8676,8 @@
             pn_device: 'PROFINET Devices',
             mongodb_action: 'MongoDB Actions',
             tns_statement: 'Oracle SQL',
+            fins_action: 'Omron FINS Actions',
+            hart_ip_action: 'HART-IP Actions',
             bacnet_property: 'BACnet Properties',
             bacnet_device: 'BACnet Devices',
             iec104_point: 'IEC 104 Points',
@@ -9749,6 +9824,14 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Driver', 'User', 'Login', 'Databases', 'Server Version', 'Answered'];
                 case 'mongodb_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Database', 'Collection', 'Count', 'Result'];
+                case 'fins':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Model', 'Version', 'Node', 'Answered', 'Errors'];
+                case 'fins_action':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Area', 'Address', 'Mode', 'Data', 'Result'];
+                case 'hart_ip':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Host Type', 'Session', 'Commands', 'Tags', 'Answered'];
+                case 'hart_ip_action':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Device', 'Data', 'Result'];
                 case 'memcache':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Keys', 'Server Version', 'Answered', 'Req Bytes', 'Resp Bytes', 'Amplification'];
                 case 'tns':
@@ -10241,6 +10324,10 @@
                 case 'tns':
                 case 'tns_statement':
                 case 'memcache':
+                case 'fins':
+                case 'fins_action':
+                case 'hart_ip':
+                case 'hart_ip_action':
                 case 'rsh':
                 case 'openvpn':
                 case 'wireguard':
@@ -12912,7 +12999,7 @@
                     if (r?.value !== undefined) return String(r.value);
                     return e.opcua_action?.arguments ? e.opcua_action.arguments.join(', ') : '';
                 }
-                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || e.tns?.result || e.tns_statement?.result || '';
+                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || e.tns?.result || e.tns_statement?.result || e.fins_action?.result || e.hart_ip_action?.result || '';
                 case 'Updates': return e.iec104_point?.updates !== undefined ? String(e.iec104_point.updates) : '';
                 case 'Last Value': { const r = e.iec104_point || e.bacnet_property; return r?.last_value !== undefined ? String(r.last_value) : ''; }
                 // BACnet: an action's, a read/notification summary's, a device's
@@ -12939,8 +13026,10 @@
                 case 'Workgroup': return e.browser?.destination_name || '';
                 case 'Windows': return e.browser?.os_version || '';
                 case 'Roles': return (e.browser?.roles || []).join(', ');
-                case 'Errors': return e.bacnet_property?.errors !== undefined ? String(e.bacnet_property.errors) : '';
-                case 'Device': return e.bacnet_device?.device !== undefined ? String(e.bacnet_device.device) : '';
+                case 'Errors': {
+                    if (e.fins) return Object.keys(e.fins.errors || {}).join(', ');
+                    return e.bacnet_property?.errors !== undefined ? String(e.bacnet_property.errors) : '';
+                }
                 case 'Vendor': {
                     if (e.l2tp) return e.l2tp.client_vendor || '';
                     if (e.mms) return e.mms.vendor || '';
@@ -12960,11 +13049,14 @@
                 case 'Security': return e.opcua?.security_policy || '';
                 case 'Application': return e.opcua?.client_application || '';
                 case 'Activation': return e.opcua?.activation || '';
-                case 'Node': return e.opcua_action?.node || '';
+                case 'Node': {
+                    if (e.fins) return e.fins.node !== undefined ? String(e.fins.node) : '';
+                    return e.opcua_action?.node || '';
+                }
                 // MMS: a connection's, an action's
                 case 'Initiate': return e.mms?.initiate || '';
                 case 'Domains': return (e.mms?.domains || []).join(', ');
-                case 'Model': return e.mms?.model || '';
+                case 'Model': return e.mms?.model || e.fins?.model || '';
                 case 'Control': return e.mms_action?.control || '';
                 // PROFINET DCP: an action's, a device's
                 case 'Changes': return (e.pn_dcp?.changes || []).join(', ');
@@ -12994,7 +13086,15 @@
                 case 'OS User': return e.tns?.os_user || e.tns?.client_user || '';
                 case 'Statements': return e.tns?.statements !== undefined ? String(e.tns.statements) : '';
                 // memcached: a connection's or UDP exchange's
-                case 'Commands': return Object.keys(e.memcache?.commands || {}).join(', ');
+                case 'Commands': return Object.keys((e.memcache || e.fins || e.hart_ip)?.commands || {}).join(', ');
+                // Omron FINS, HART-IP
+                case 'Data': return (e.fins_action || e.hart_ip_action)?.data || '';
+                case 'Host Type': return e.hart_ip?.host_type || '';
+                case 'Session': return e.hart_ip?.session || '';
+                case 'Device': {
+                    if (e.hart_ip_action) return e.hart_ip_action.device || '';
+                    return e.bacnet_device?.device !== undefined ? String(e.bacnet_device.device) : '';
+                }
                 case 'Keys': return (e.memcache?.keys || []).join(', ');
                 case 'Req Bytes': return e.memcache ? String(e.memcache.request_bytes || 0) : '';
                 case 'Resp Bytes': return e.memcache ? String(e.memcache.response_bytes || 0) : '';
@@ -13004,7 +13104,7 @@
                 case 'Collection': return e.mongodb_action?.collection || '';
                 case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || e.rsh?.password || '';
                 case 'Login': return e.telnet?.login || e.mongodb?.login || e.tns?.login || '';
-                case 'Area': return e.s7comm?.items?.[0]?.area || '';
+                case 'Area': return e.fins_action?.area || e.s7comm?.items?.[0]?.area || '';
                 case 'Error': return e.s7comm?.response?.error_class || '';
                 case 'Host': return e.http?.hostname || e.syslog?.hostname || '';
                 case 'URL': {
@@ -13081,6 +13181,7 @@
                     if (e.event_type === 'ntp') return e.ntp?.version !== undefined ? String(e.ntp.version) : '';
                     if (e.dtls) return e.dtls.version || '';
                     if (e.openvpn) return e.openvpn.version || '';
+                    if (e.fins) return e.fins.version || '';
                     if (e.rpc) return e.rpc.version !== undefined ? String(e.rpc.version) : '';
                     if (e.socks) return e.socks.version || '';
                     if (e.slp) return e.slp.version !== undefined ? String(e.slp.version) : '';
@@ -13127,7 +13228,7 @@
                 case 'Size': return e.fileinfo?.size !== undefined ? String(e.fileinfo.size) : '';
                 case 'SHA256': return e.fileinfo?.sha256 || '';
                 case 'Rule Name': return e.filealerts?.rule_name || '';
-                case 'Tags': return (e.filealerts?.tags || []).join(', ');
+                case 'Tags': return ((e.hart_ip || e.filealerts)?.tags || []).join(', ');
                 case 'Author': return e.filealerts?.author || '';
                 case 'Function': {
                     if (e.slp) return e.slp.function || '';
@@ -13165,6 +13266,8 @@
                     return e.dns?.rrname || e.dns?.queries?.[0]?.rrname || '';
                 }
                 case 'Command': {
+                    if (e.fins_action) return e.fins_action.command || '';
+                    if (e.hart_ip_action) return e.hart_ip_action.command || '';
                     if (e.rip) return e.rip.command || '';
                     if (e.mongodb_action) return e.mongodb_action.command || '';
                     if (e.rsh) return e.rsh.command || '';
@@ -13222,7 +13325,7 @@
                 // The name alone, as the server aggregates it - the <suffix> is
                 // in the detail panel, and Service says what it means.
                 case 'NetBIOS Name': return e.nbns?.name || e.browser?.source_name || '';
-                case 'Address': return e.nbns?.address || '';
+                case 'Address': return e.fins_action?.address || e.nbns?.address || '';
                 case 'Realm': return e.krb5?.realm || '';
                 case 'Error Code': return e.krb5?.error_code || '';
                 case 'SIP Method': return e.sip?.method || '';
@@ -13251,6 +13354,7 @@
                 case 'Packet': return e.tftp?.packet || '';
                 case 'File': return e.tftp?.file || '';
                 case 'Mode': {
+                    if (e.fins_action) return e.fins_action.mode || '';
                     if (e.event_type === 'ntp') return e.ntp?.mode !== undefined ? String(e.ntp.mode) : '';
                     return e.tftp?.mode || '';
                 }
@@ -13274,7 +13378,7 @@
                 case 'Event': return e.anomaly?.event || '';
                 case 'Layer': return e.anomaly?.layer || '';
                 case 'Answered': {
-                    const r = e.mongodb || e.memcache;
+                    const r = e.mongodb || e.memcache || e.fins || e.hart_ip;
                     return r ? (r.answered ? 'yes' : 'no') : e.shark?.answered || '';
                 }
                 case 'App Proto': return e.event_type === 'anomaly' ? (e.anomaly?.app_proto || '') : (e.app_proto || '');

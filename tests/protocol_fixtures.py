@@ -9,6 +9,7 @@ expected values never drift. Keep it deterministic: changing a single byte
 here means re-running Suricata over it to refresh those expectations.
 """
 import socket
+import functools
 import struct
 
 from tests.pcap_fixtures import _checksum, _tcp_packet, tcp_segments, write_pcap
@@ -935,6 +936,105 @@ def rsh_packets():
 
 def write_rsh_pcap(path):
     write_pcap(path, rsh_packets())
+
+
+# ---------------------------------------------------------------- Omron FINS
+#
+# FINS_STATION (node 10) and FINS_PLC (node 1), over UDP 9600: a Controller
+# Data Read (a CJ2M-CPU31, version 02.01), a DM read, a DM write, a switch
+# to MONITOR mode, a Stop the PLC refuses, and a Program Area Protect
+# Clear with the wrong password. Over FINS/TCP, CLIENT:41900 exchanges
+# node addresses and forces a CIO word. FINS_SCANNER's Controller Data
+# Read (source node 99, as internet scanners send it) gets no answer.
+
+FINS_STATION, FINS_PLC, FINS_SCANNER = '10.1.0.83', '10.1.0.84', '10.1.0.85'
+
+
+def _fins(command, sid, data=b'', response=None, dst=1, src=10):
+    if response is None:
+        header = bytes([0x80, 0, 2, 0, dst, 0, 0, src, 0, sid])
+        return header + struct.pack('!H', command) + data
+    return bytes([0xc0, 0, 2, 0, src, 0, 0, dst, 0, sid]) + struct.pack('!HH', command, response) + data
+
+
+def _fins_tcp(command, data):
+    return b'FINS' + struct.pack('!III', 8 + len(data), command, 0) + data
+
+
+def fins_packets():
+    model = b'CJ2M-CPU31'.ljust(20) + b'02.01'.ljust(20) + b'\x00' * 40 + bytes(12)
+    udp = [(_fins(0x0501, 1), _fins(0x0501, 1, model, 0)),
+           (_fins(0x0101, 2, b'\x82\x00\x64\x00\x00\x02'), _fins(0x0101, 2, b'\x12\x34\x56\x78', 0)),
+           (_fins(0x0102, 3, b'\x82\x00\x64\x00\x00\x02\xff\xff\x00\x01'), _fins(0x0102, 3, b'', 0)),
+           (_fins(0x0401, 4, b'\xff\xff\x02'), _fins(0x0401, 4, b'', 0)),
+           (_fins(0x0402, 5, b'\xff\xff'), _fins(0x0402, 5, b'', 0x2201)),
+           (_fins(0x0305, 6, b'\xff\xff\x00\x00\x00\x00\x00\xff\xff\xff\xff' + b'1234'), _fins(0x0305, 6, b'', 0x2602))]
+    packets = []
+    for request, reply in udp:
+        packets += [_udp_packet(FINS_STATION, FINS_PLC, 9600, 9600, request), _udp_packet(FINS_PLC, FINS_STATION, 9600, 9600, reply)]
+    packets.append(_udp_packet(FINS_SCANNER, FINS_PLC, 41950, 9600, _fins(0x0501, 0, src=99, dst=0)))
+    tcp = [(True, _fins_tcp(0, b'\x00\x00\x00\x00')), (False, _fins_tcp(1, b'\x00\x00\x00\x0b\x00\x00\x00\x01')),
+           (True, _fins_tcp(2, _fins(0x2301, 7, b'\x00\x01\x00\x01\xb0\x00\x0a\x00', src=11))),
+           (False, _fins_tcp(2, _fins(0x2301, 7, b'', 0, src=11)))]
+    return packets + tcp_segments(CLIENT, FINS_PLC, 41900, 9600, tcp)
+
+
+def write_fins_pcap(path):
+    write_pcap(path, fins_packets())
+
+
+# ---------------------------------------------------------------- HART-IP
+#
+# HART_HOST:41960 opens a TCP session with HART_GATEWAY as a primary
+# master and asks its device for its identity (by polling address 0: a
+# Rosemount-made type 0x264e, ID 0000d2), its tag (PT-101) and its PV;
+# writes its tag (to PT-1O1), puts its loop current at a fixed 20 mA and
+# asks for a device reset, which the device refuses (access restricted).
+# HART_SCANNER's UDP Session Initiate gets no answer, nor does a scanner's
+# text template that tshark takes for HART-IP.
+
+HART_HOST, HART_GATEWAY, HART_SCANNER = '10.1.0.86', '10.1.0.87', '10.1.0.88'
+_HART_LONG = bytes.fromhex('a64e0000d2')        # (the primary master bit set)
+
+
+def _hart_ip(kind, message, seq, body=b'', status=0):
+    return struct.pack('!BBBBHH', 1, kind, message, status, seq, 8 + len(body)) + body
+
+
+def _hart_frame(delimiter, address, command, data):
+    frame = bytes([delimiter]) + address + bytes([command, len(data)]) + data
+    return frame + bytes([functools.reduce(lambda a, b: a ^ b, frame)])
+
+
+def _hart_packed(text, length):
+    bits = ''.join(format(ord(c) & 0x3f, '06b') for c in text.ljust(length * 4 // 3))
+    return int(bits, 2).to_bytes(length, 'big')
+
+
+def hart_ip_packets():
+    identity = (b'\xfe\x26\x4e\x05\x07\x04\x01\x0e\x0c\x00\x00\xd2\x05\x02\x00\x02\xd0\x00\x26\x00\x26\x84')
+    request = lambda seq, command, data=b'', short=False: _hart_ip(0, 3, seq, _hart_frame(
+        0x02 if short else 0x82, b'\x80' if short else _HART_LONG, command, data))
+    reply = lambda seq, command, data=b'', code=0, short=False: _hart_ip(1, 3, seq, _hart_frame(
+        0x06 if short else 0x86, b'\x80' if short else _HART_LONG, command, bytes([code, 0]) + data))
+    tag = _hart_packed('PT-101', 6) + _hart_packed('PRESSURE', 12) + b'\x01\x0b\x7e'
+    session = [(True, _hart_ip(0, 0, 1, b'\x01\x00\x00\xea\x60')), (False, _hart_ip(1, 0, 1, b'\x01\x00\x00\xea\x60')),
+               (True, request(2, 0, short=True)), (False, reply(2, 0, identity, short=True)),
+               (True, request(3, 13)), (False, reply(3, 13, tag)),
+               (True, request(4, 1)), (False, reply(4, 1, b'\x0c' + struct.pack('!f', 4.25))),
+               (True, request(5, 18, _hart_packed('PT-1O1', 6) + _hart_packed('PRESSURE', 12) + b'\x01\x0b\x7e')),
+               (False, reply(5, 18, _hart_packed('PT-1O1', 6) + _hart_packed('PRESSURE', 12) + b'\x01\x0b\x7e')),
+               (True, request(6, 40, struct.pack('!f', 20.0))), (False, reply(6, 40, struct.pack('!f', 20.0))),
+               (True, request(7, 42)), (False, reply(7, 42, code=16)),
+               (True, _hart_ip(0, 1, 8)), (False, _hart_ip(1, 1, 8))]
+    return (tcp_segments(HART_HOST, HART_GATEWAY, 41960, 5094, session)
+            + [_udp_packet(HART_SCANNER, HART_GATEWAY, 41970, 5094, _hart_ip(0, 0, 1, b'\x01\x00\x00\xea\x60')),
+               _udp_packet(HART_SCANNER, HART_GATEWAY, 23318, 5094,
+                           bytes.fromhex('7b01001631333931313131313131327b7b2e69707d7d7b7b2e706f72747d7d7b'))])
+
+
+def write_hart_ip_pcap(path):
+    write_pcap(path, hart_ip_packets())
 
 
 # ---------------------------------------------------------------- memcached

@@ -738,6 +738,144 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestFINS(unittest.TestCase):
+    """tests/protocol_fixtures.write_fins_pcap: one record per Omron FINS
+    connection or exchange and per command that changes or controls the
+    PLC - with what Suricata 8.0.8 logged for the capture
+    (tests/data/fins_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_fins_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'fins.pcap')
+        write_fins_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['fins'] for r in cls.records if r['event_type'] == 'fins'}
+        cls.actions = {r['fins_action']['command']: r['fins_action'] for r in cls.records if r['event_type'] == 'fins_action'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_station_and_its_plc(self):
+        c = self.connections[9600]
+        self.assertEqual({k: c.get(k) for k in ('model', 'version', 'node', 'source_node', 'answered', 'errors')},
+                         {'model': 'CJ2M-CPU31', 'version': '02.01', 'node': 1, 'source_node': 10, 'answered': True,
+                          'errors': {'The mode is wrong (executing)': 1, 'An incorrect password has been specified': 1}})
+        self.assertEqual(c['commands']['Memory Area Read'], 1, 'reads are counted, not recorded')
+
+    def test_actions(self):
+        self.assertEqual(self.actions['Memory Area Write'],
+                         {'command': 'Memory Area Write', 'code': '0x0102', 'area': 'DM : Word contents', 'address': '0x0064',
+                          'count': 2, 'data': 'ffff0001', 'node': 1, 'result': 'ok'})
+        self.assertEqual((self.actions['Run']['mode'], self.actions['Run']['result']), ('MONITOR mode', 'ok'))
+        self.assertEqual(self.actions['Stop']['result'], 'The mode is wrong (executing)')
+        self.assertEqual((self.actions['Program Area Protect Clear']['password'], self.actions['Program Area Protect Clear']['result']),
+                         ('1234', 'An incorrect password has been specified'))
+        self.assertNotIn('Memory Area Read', self.actions)
+
+    def test_fins_tcp_and_a_scanner(self):
+        self.assertEqual({k: self.connections[41900].get(k) for k in ('client_node', 'server_node', 'commands')},
+                         {'client_node': 11, 'server_node': 1, 'commands': {'Forced Set/Reset': 1}})
+        self.assertEqual(self.actions['Forced Set/Reset']['result'], 'ok')
+        self.assertEqual({k: self.connections[41950].get(k) for k in ('answered', 'source_node')},
+                         {'answered': False, 'source_node': 99})
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('fins_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (3, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'fins_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'fins.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('fins'), counts.get('fins_action')), (3, 5))
+        self.assertNotIn('conn_omron', counts, 'records, not a connection card')
+
+
+class TestHARTIP(unittest.TestCase):
+    """tests/protocol_fixtures.write_hart_ip_pcap: one record per HART-IP
+    session and per command that changes or commands a device - with what
+    Suricata 8.0.8 logged for the capture (tests/data/hart_ip_fixture.eve.json):
+    flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_hart_ip_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'hart_ip.pcap')
+        write_hart_ip_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = {r['src_port']: r['hart_ip'] for r in cls.records if r['event_type'] == 'hart_ip'}
+        cls.actions = {r['hart_ip_action']['number']: r['hart_ip_action'] for r in cls.records
+                       if r['event_type'] == 'hart_ip_action'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_session_and_its_device(self):
+        s = self.sessions[41960]
+        self.assertEqual({k: s.get(k) for k in ('host_type', 'session', 'answered', 'errors', 'tags')},
+                         {'host_type': 'primary master', 'session': 'accepted', 'answered': True,
+                          'errors': {'access restricted': 1}, 'tags': ['PT-1O1']})
+        self.assertEqual(s['devices'], [{'address': '264e0000d2', 'manufacturer_id': 38, 'device_type': '0x264e',
+                                         'device_id': '0000d2', 'device_revision': 4, 'software_revision': 1,
+                                         'config_changes': 2, 'tag': 'PT-1O1', 'descriptor': 'PRESSURE', 'pv': 4.25}],
+                         'one device - asked by polling address, then by long address with the master bit')
+
+    def test_actions(self):
+        self.assertEqual(self.actions, {
+            18: {'command': 'Write Tag, Descriptor, Date', 'number': 18, 'device': '264e0000d2', 'data': 'tag PT-1O1',
+                 'result': 'success'},
+            40: {'command': 'Enter/Exit Fixed Current Mode', 'number': 40, 'device': '264e0000d2', 'data': '20 mA',
+                 'result': 'success'},
+            42: {'command': 'Perform Device Reset', 'number': 42, 'device': '264e0000d2', 'result': 'access restricted'}})
+
+    def test_scanners(self):
+        self.assertEqual((self.sessions[41970]['session'], self.sessions[41970]['answered']), ('requested', False))
+        self.assertNotIn(23318, self.sessions, "a scanner's text template isn't HART-IP")
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('hart_ip_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (3, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'hart_ip_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'hart_ip.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('hart_ip'), counts.get('hart_ip_action')), (2, 3))
+        self.assertNotIn('conn_hart_ip', counts, 'records, not a connection card')
+
+    def test_a_udp_session_a_gateway_moved_to_another_port(self):
+        """A gateway can answer a UDP Session Initiate from a port of its
+        own and go on there - one session, on the initiate's flow."""
+        from tests.pcap_fixtures import write_pcap
+        from tests.protocol_fixtures import _hart_ip, _udp_packet
+        host, gateway = '10.1.0.90', '10.1.0.91'
+        packets = [_udp_packet(host, gateway, 42000, 5094, _hart_ip(0, 0, 1, b'\x01\x00\x00\xea\x60')),
+                   _udp_packet(gateway, host, 5095, 42000, _hart_ip(1, 0, 1, b'\x01\x00\x00\xea\x60')),
+                   _udp_packet(host, gateway, 42000, 5095, _hart_ip(0, 2, 2)),
+                   _udp_packet(gateway, host, 5095, 42000, _hart_ip(1, 2, 2))]
+        pcap = os.path.join(self.tmpdir, 'moved.pcap')
+        write_pcap(pcap, packets)
+        sessions = [r for r in shark_analyzer.run_tshark(pcap) if r['event_type'] == 'hart_ip']
+        self.assertEqual([(r['src_port'], r['dest_port'], r['hart_ip']['session'], r['hart_ip']['commands'],
+                           r['hart_ip']['moved_to_port']) for r in sessions],
+                         [(42000, 5094, 'accepted', {'Session Initiate': 1, 'Keep Alive': 1}, 5095)])
+
+
 class TestMemcache(unittest.TestCase):
     """tests/protocol_fixtures.write_memcache_pcap: one record per
     memcached connection or UDP exchange - with what Suricata 8.0.8 logged

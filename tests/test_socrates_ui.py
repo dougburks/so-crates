@@ -23266,6 +23266,18 @@ class TestTsharkUI(unittest.TestCase):
         'openvpn': {'event_type': 'openvpn', 'openvpn': {'stage': 'established', 'version': 'V2', 'control_protection': 'tls-auth',
                                                         'client_resets': 1, 'data_to_server': 2, 'data_to_client': 3,
                                                         'certificate': {'subject': 'CN=vpn.example', 'issuerdn': 'CN=CA'}}},
+        'fins': {'event_type': 'fins', 'fins': {'commands': {'Run': 1, 'Memory Area Read': 3}, 'model': 'CJ2M-CPU31',
+                                                'version': '02.01', 'node': 1, 'answered': True,
+                                                'errors': {'The mode is wrong (executing)': 1}}},
+        'fins_action': {'event_type': 'fins_action', 'fins_action': {'command': 'Memory Area Write', 'area': 'DM : Word contents',
+                                                                     'address': '0x0064', 'mode': '', 'data': 'ffff',
+                                                                     'result': 'ok'}},
+        'hart_ip': {'event_type': 'hart_ip', 'hart_ip': {'host_type': 'primary master', 'session': 'accepted',
+                                                         'commands': {'Session Initiate': 1, 'Read Primary Variable': 2},
+                                                         'tags': ['PT-101'], 'answered': True}},
+        'hart_ip_action': {'event_type': 'hart_ip_action', 'hart_ip_action': {'command': 'Perform Device Reset', 'number': 42,
+                                                                              'device': '264e0000d2', 'data': '',
+                                                                              'result': 'access restricted'}},
         'memcache': {'event_type': 'memcache', 'memcache': {'commands': {'stats': 1, 'get': 2}, 'keys': ['blob'],
                                                            'version': '1.6.38', 'answered': True, 'request_bytes': 33,
                                                            'response_bytes': 62609, 'amplification': 1897.2}},
@@ -23349,6 +23361,10 @@ class TestTsharkUI(unittest.TestCase):
         'mms': ['accepted', 'IED1LD0, IED1CTRL', 'Fixture Vendor', 'Fixture Relay'],
         'openvpn': ['established', 'V2', 'tls-auth', 'CN=vpn.example', '1', '2', '3'],
         'wireguard': ['established', '2', '2', '0', '0', '4', '5'],
+        'fins': ['Run, Memory Area Read', 'CJ2M-CPU31', '02.01', '1', 'yes', 'The mode is wrong (executing)'],
+        'fins_action': ['Memory Area Write', 'DM : Word contents', '0x0064', '', 'ffff', 'ok'],
+        'hart_ip': ['primary master', 'accepted', 'Session Initiate, Read Primary Variable', 'PT-101', 'yes'],
+        'hart_ip_action': ['Perform Device Reset', '264e0000d2', '', 'access restricted'],
         'memcache': ['stats, get', 'blob', '1.6.38', 'yes', '33', '62609', '1897.2'],
         'tns': ['FIXDB', 'sys', 'mallory', 'sqlplus@attacker', 'accepted', 'succeeded', '7'],
         'tns_statement': ['sys', 'GRANT', 'grant dba to backdoor', 'ok', '2'],
@@ -23395,6 +23411,7 @@ class TestTsharkUI(unittest.TestCase):
                 section = {'iec104_point': 'IEC 104 Point', 'bacnet_property': 'BACnet Property',
                            'bacnet_device': 'BACnet Device', 'opcua_action': 'OPC UA Action', 'mms_action': 'MMS Action',
                            'pn_dcp': 'PROFINET DCP', 'pn_device': 'PROFINET Device', 'mongodb_action': 'MongoDB Action', 'rsh': 'Remote Shell',
+                           'fins_action': 'Omron FINS Action', 'hart_ip_action': 'HART-IP Action',
                            'tls_failure': 'TLS Failure'}.get(t, r['label'])
                 self.assertIn(f'{section} Details', r['detail'])
 
@@ -23435,7 +23452,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 

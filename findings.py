@@ -90,6 +90,15 @@ def _tns_statement(b):
     return _join(text if len(text) <= 120 else text[:120] + '...', ('-', b.get('result')))
 
 
+_FINS_CONTROL = ('Run', 'Stop', 'Program Area Write', 'Program Area Clear', 'Program Area Protect Clear',
+                 'Program Area File Transfer', 'Forced Set/Reset', 'Access Right Forced Acquire', 'Memory Card Format',
+                 'File Delete', 'Parameter Area Clear')
+# HART commands that move a device's output or measurement: its loop
+# current fixed or trimmed, its range or zero set, a variable written or
+# reassigned, its address changed, it reset or locked
+_HART_PROCESS = (6, 35, 36, 37, 40, 42, 43, 45, 46, 51, 52, 66, 67, 68, 71, 79, 82, 83)
+
+
 _IEC104_CONTROL = ('Single command', 'Double command', 'Regulating step command', 'Set point (normalized)',
                    'Set point (scaled)', 'Set point (float)', 'Bitstring command', 'Reset process',
                    'Parameter activation')
@@ -268,6 +277,17 @@ RULES = (
          lambda b: _join(b.get('command'), b.get('user') or b.get('role'), _list(b.get('roles', ())),
                          ('-', b.get('result'))),
          'A user or role created, changed or given more rights - a way back in that outlasts the session.'),
+    Rule('fins_control', 'high', 'fins_action', 'Omron PLC run, stop, program change or forced I/O',
+         _in('fins_action', 'command', list(_FINS_CONTROL)),
+         lambda b: _join(b.get('command'), b.get('mode'), b.get('area'), ('-', b.get('result'))),
+         "An Omron PLC put in run or stop mode, its program written, cleared or unprotected, its I/O forced, "
+         "another device's access right taken over, or its files or memory card wiped - over FINS, which "
+         'has no login.'),
+    Rule('hart_ip_process_change', 'high', 'hart_ip_action', 'HART device output, range or calibration changed',
+         f"CAST({_j('hart_ip_action', 'number')} AS INTEGER) IN ({', '.join(str(n) for n in _HART_PROCESS)})",
+         lambda b: _join(b.get('command'), ('on', b.get('device')), ('-', b.get('result'))),
+         "A field instrument's 4-20 mA output fixed or trimmed, its range or zero moved, a variable written, "
+         'or the device reset or locked - what the control system reads from it changes.'),
     Rule('memcache_amplifier', 'high', 'memcache', 'memcached answering over UDP',
          f"{_j('memcache', 'amplification')} IS NOT NULL",
          lambda b: f"{b['amplification']:g}x amplification - {b.get('response_bytes') or 0:,} bytes back for "
@@ -362,6 +382,14 @@ RULES = (
          "A command to the TNS listener itself - lsnrctl's status, version or services, which describe the "
          'server, or stop, set or reload, which change it. From anywhere but the server or an admin '
          "host, it's a survey or an attack."),
+    Rule('fins_change', 'medium', 'fins_action', 'Omron PLC memory or setting written',
+         f"NOT {_in('fins_action', 'command', list(_FINS_CONTROL))}",
+         lambda b: _join(b.get('command'), b.get('area'), b.get('address'), ('-', b.get('result'))),
+         "An Omron PLC's memory, parameters, clock, files or names written, or its errors cleared."),
+    Rule('hart_ip_change', 'medium', 'hart_ip_action', 'HART device configuration written',
+         f"CAST({_j('hart_ip_action', 'number')} AS INTEGER) NOT IN ({', '.join(str(n) for n in _HART_PROCESS)})",
+         lambda b: _join(b.get('command'), ('on', b.get('device')), ('-', b.get('result'))),
+         "A field instrument's tag, message, damping, units or other setting written, or a self test run."),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),
@@ -432,6 +460,16 @@ RULES = (
          lambda b: _join(_list(b.get('stats', ())), ('- version', b.get('version'))),
          'A memcached server told a client its stats - version, uptime, connections, item counts, and with '
          "stats items or cachedump, what's stored. Routine from monitoring, a survey from anywhere else."),
+    Rule('fins_identified', 'low', 'fins', 'Omron PLC identified',
+         f"{_j('fins', 'model')} IS NOT NULL",
+         lambda b: _join(b.get('model'), ('version', b.get('version'))),
+         'An Omron PLC answered a Controller Data Read with its model and version - what a scanner asks '
+         'first, to find PLCs to attack.'),
+    Rule('hart_ip_session', 'low', 'hart_ip', 'HART-IP session accepted',
+         f"{_j('hart_ip', 'session')} = 'accepted'",
+         lambda b: _join(b.get('host_type'), ('-', _list(b.get('tags', ())))),
+         "A HART-IP gateway or instrument accepted a session - HART-IP 1 has no login, so anyone who reaches "
+         "it can read its devices and write to them."),
     Rule('tns_login_failed', 'low', 'tns', 'Oracle login failed',
          f"{_j('tns', 'login')} = 'failed'",
          lambda b: _join(b.get('db_user'), ('-', b.get('login_error'))),

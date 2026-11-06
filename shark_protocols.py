@@ -3115,6 +3115,343 @@ class Memcache:
         return records
 
 
+# ---------------------------------------------------------------- Omron FINS
+#
+# Omron's PLC protocol (UDP or TCP 9600), which Suricata doesn't parse:
+# commands to a PLC's memory, program, mode, clock and files, with no
+# login - only a program area's protection password, sent in the clear.
+# Two record types: 'fins', one per connection (FINS/TCP) or exchange
+# (UDP): the commands, the PLC's model and version if a Controller Data
+# Read was answered, the nodes, the end codes; and 'fins_action', one per
+# command that changes or controls the PLC - a memory or program write, a
+# run or stop, a forced set, a file deleted - with its answer. Reads (the
+# polling an HMI does) are only counted.
+
+_FINS_READS = frozenset({0x0101, 0x0104, 0x0201, 0x0220, 0x0306, 0x0501, 0x0502, 0x0601, 0x0602, 0x0603, 0x0620,
+                         0x0701, 0x0801, 0x0802, 0x0920, 0x2102, 0x2201, 0x2202, 0x220f, 0x2210, 0x230a, 0x2603})
+_FINS_DATA_PREVIEW = 32
+
+
+class _FINSConnection:
+    __slots__ = ('flow', 'first', 'body', 'waiting')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'answered': False}
+        self.waiting = {}         # (service ID, command) -> [when, action body]
+
+
+class FINS:
+    """Omron FINS - see the comment above."""
+    event_type = 'fins'
+    app_protos = ('omron',)
+    fields = ('omron.tcp.command', 'omron.tcp.client_node_address', 'omron.tcp.server_node_address', 'omron.icf',
+              'omron.sid', 'omron.command', 'vals(omron.command)', 'omron.response.code', 'vals(omron.response.code)',
+              'vals(omron.memory.area.read)', 'omron.memory.address', 'omron.memory.numitems', 'omron.command.data',
+              'omron.program_number', 'vals(omron.mode_code)', 'omron.controller.model', 'omron.controller.version',
+              'omron.password', 'omron.da1', 'omron.sa1')
+
+    def __init__(self):
+        self.connections = {}     # flow key -> _FINSConnection
+        self.actions = []         # (flow, when, body)
+
+    def feed(self, pkt, v):
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _FINSConnection(pkt.flow, pkt.when)
+        body = conn.body
+        first = lambda name: _first(v[name])
+        for name, key in (('omron.tcp.client_node_address', 'client_node'), ('omron.tcp.server_node_address', 'server_node')):
+            if _int(first(name)):
+                body.setdefault(key, _int(first(name)))
+        icf, command = _int(first('omron.icf')), _int(first('omron.command'))
+        if icf is None or command is None:
+            if first('omron.tcp.command') and pkt.src != pkt.flow.client:
+                body['answered'] = True
+            return
+        name = first('vals(omron.command)') or f'command 0x{command:04x}'
+        key = (first('omron.sid'), command)
+        if not icf & 0x40:                   # a command
+            commands = body['commands']
+            commands[name] = commands.get(name, 0) + 1
+            for field, k in (('omron.da1', 'node'), ('omron.sa1', 'source_node')):
+                if first(field):
+                    body.setdefault(k, _int(first(field)))
+            if command in _FINS_READS:
+                conn.waiting[key] = None
+                return
+            action = {'command': name, 'code': f'0x{command:04x}'}
+            if first('vals(omron.memory.area.read)'):
+                action['area'] = first('vals(omron.memory.area.read)')
+            if first('omron.memory.address'):
+                action['address'] = first('omron.memory.address')
+            if first('omron.memory.numitems'):
+                action['count'] = _int(first('omron.memory.numitems'))
+            if first('vals(omron.mode_code)'):
+                action['mode'] = first('vals(omron.mode_code)')
+            if first('omron.program_number') and command >= 0x0300:
+                action['program'] = first('omron.program_number')
+            if first('omron.password'):
+                action['password'] = first('omron.password')
+            data = _hex(first('omron.command.data'))
+            if data:
+                action['data'] = data[:_FINS_DATA_PREVIEW].hex() + ('...' if len(data) > _FINS_DATA_PREVIEW else '')
+            if 'node' in body:
+                action['node'] = body['node']
+            conn.waiting[key] = [pkt.when, action]
+            self.actions.append((pkt.flow, conn.waiting[key]))
+            return
+        body['answered'] = True
+        code = _int(first('omron.response.code'))
+        result = 'ok' if code == 0 else first('vals(omron.response.code)') or (f'0x{code:04x}' if code is not None else '')
+        if code:
+            errors = body.setdefault('errors', {})
+            errors[result] = errors.get(result, 0) + 1
+        if command == 0x0501 and code == 0:
+            for field, k in (('omron.controller.model', 'model'), ('omron.controller.version', 'version')):
+                if first(field).strip():
+                    body[k] = first(field).strip()
+        pending = conn.waiting.pop(key, None)
+        if pending is not None and result:
+            pending[1].setdefault('result', result)
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            if conn.body['commands'] or conn.body['answered']:
+                records.append((conn.flow, conn.first, 'fins', dict(conn.body)))
+        for flow, (when, action) in self.actions:
+            records.append((flow, when, 'fins_action', dict(action, result=action.get('result', 'no response'))))
+        return records
+
+
+# ---------------------------------------------------------------- HART-IP
+#
+# HART over IP (UDP or TCP 5094), which Suricata doesn't parse: a host -
+# an asset manager, a DCS - opens a session with a gateway or instrument,
+# then passes HART commands through to the field devices behind it:
+# reading their identity and process values, or writing their tag, range,
+# damping, units - or fixing their 4-20 mA output, trimming it, resetting
+# them. HART-IP 1 has no login. Two record types: 'hart_ip', one per
+# session - its host type, the commands, the devices that answered (who
+# made them, their tag, their primary variable), the errors; and
+# 'hart_ip_action', one per command that changes or commands a device,
+# with its answer. Reads are only counted.
+
+_HART_COMMANDS = {
+    0: 'Read Unique Identifier', 1: 'Read Primary Variable', 2: 'Read Loop Current and Percent of Range',
+    3: 'Read Dynamic Variables and Loop Current', 6: 'Write Polling Address', 7: 'Read Loop Configuration',
+    8: 'Read Dynamic Variable Classifications', 9: 'Read Device Variables with Status',
+    11: 'Read Unique Identifier Associated With Tag', 12: 'Read Message', 13: 'Read Tag, Descriptor, Date',
+    14: 'Read Primary Variable Transducer Information', 15: 'Read Device Information',
+    16: 'Read Final Assembly Number', 17: 'Write Message', 18: 'Write Tag, Descriptor, Date',
+    19: 'Write Final Assembly Number', 20: 'Read Long Tag', 21: 'Read Unique Identifier Associated With Long Tag',
+    22: 'Write Long Tag', 33: 'Read Device Variables', 34: 'Write Primary Variable Damping Value',
+    35: 'Write Primary Variable Range Values', 36: 'Set Primary Variable Upper Range Value',
+    37: 'Set Primary Variable Lower Range Value', 38: 'Reset Configuration Changed Flag',
+    40: 'Enter/Exit Fixed Current Mode', 41: 'Perform Self Test', 42: 'Perform Device Reset',
+    43: 'Set Primary Variable Zero', 44: 'Write Primary Variable Units', 45: 'Trim Loop Current Zero',
+    46: 'Trim Loop Current Gain', 47: 'Write Primary Variable Transfer Function', 48: 'Read Additional Device Status',
+    49: 'Write Primary Variable Transducer Serial Number', 50: 'Read Dynamic Variable Assignments',
+    51: 'Write Dynamic Variable Assignments', 52: 'Set Device Variable Zero', 53: 'Write Device Variable Units',
+    54: 'Read Device Variable Information', 55: 'Write Device Variable Damping Value',
+    56: 'Write Device Variable Transducer Serial Number', 57: 'Read Unit Tag, Descriptor, Date',
+    58: 'Write Unit Tag, Descriptor, Date', 59: 'Write Number of Response Preambles',
+    60: 'Read Analog Channel and Percent of Range', 66: 'Enter/Exit Fixed Analog Channel Mode',
+    67: 'Trim Analog Channel Zero', 68: 'Trim Analog Channel Gain', 71: 'Lock Device', 72: 'Squawk',
+    73: 'Find Device', 74: 'Read I/O System Capabilities', 75: 'Poll Sub-Device', 76: 'Read Lock Device State',
+    77: 'Send Command to Sub-Device', 78: 'Read Aggregated Commands', 79: 'Write Device Variable',
+    80: 'Read Device Variable Trim Points', 82: 'Write Device Variable Trim Point', 83: 'Reset Device Variable Trim',
+    89: 'Set Real-Time Clock', 90: 'Read Real-Time Clock', 512: 'Read Country Code', 513: 'Write Country Code'}
+_HART_READS = frozenset({0, 1, 2, 3, 7, 8, 9, 11, 12, 13, 14, 15, 16, 20, 21, 33, 48, 50, 54, 57, 60, 72, 73, 74, 75,
+                         76, 78, 80, 90, 512})
+_HART_RESPONSES = {0: 'success', 2: 'invalid selection', 3: 'passed parameter too large',
+                   4: 'passed parameter too small', 5: 'too few data bytes', 6: 'device-specific command error',
+                   7: 'in write protect mode', 16: 'access restricted', 32: 'busy', 33: 'delayed response initiated',
+                   64: 'command not implemented'}
+_HART_MESSAGES = {0: 'Session Initiate', 1: 'Session Close', 2: 'Keep Alive', 3: 'Pass Through', 4: 'Direct PDU',
+                  5: 'Read Audit Log'}
+_HART_DEVICES_MAX = 10
+
+
+def _hart_address(text):
+    """A HART long address without its first byte's top two bits - the
+    master and burst-mode bits - so a device has one address, whoever asks."""
+    data = _hex(text)
+    return (bytes([data[0] & 0x3f]) + data[1:]).hex() if len(data) == 5 else text
+
+
+class _HARTSession:
+    __slots__ = ('flow', 'first', 'body', 'devices', 'waiting', 'host', 'gateway')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'answered': False}
+        self.devices = {}         # address -> what it said
+        self.waiting = {}         # sequence number -> [when, action body] or None (a read)
+        self.host = self.gateway = None   # the requests' (address, port), and where they went
+
+
+class HARTIP:
+    """HART-IP - see the comment above."""
+    event_type = 'hart_ip'
+    app_protos = ('hart_ip',)
+    fields = ('hart_ip.version', 'hart_ip.message_type', 'hart_ip.message_id', 'hart_ip.status', 'hart_ip.transaction_id',
+              'hart_ip.session_init.master_type', 'hart_ip.pt.command', 'hart_ip.pt.response_code',
+              'hart_ip.pt.long_address', 'hart_ip.pt.short_addr', 'hart_ip.pt.payload',
+              'hart_ip.pt.rsp.manufacturer_Id', 'hart_ip.pt.rsp.expanded_device_type', 'hart_ip.pt.rsp.device_id',
+              'hart_ip.pt.rsp.device_rev', 'hart_ip.pt.rsp.software_rev', 'hart_ip.pt.rsp.configure_change',
+              'hart_ip.pt.rsp.tag', 'hart_ip.pt.rsp.descriptor', 'hart_ip.pt.rsp.message', 'hart_ip.pt.rsp.pv',
+              'hart_ip.pt.rsp.pv_loop_current', 'hart_ip.pt.rsp.write_protect_code')
+
+    def __init__(self):
+        self.sessions = {}        # flow key -> _HARTSession
+        self.actions = []         # [when, action body], with their flows
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        kind, message = _int(first('hart_ip.message_type')), _int(first('hart_ip.message_id'))
+        # (versions 1 and 2 - tshark takes a scanner's text template, '{' and
+        # all, for version 123)
+        if kind is None or message is None or _int(first('hart_ip.version')) not in (1, 2):
+            return
+        session = self.sessions.get(pkt.flow.key)
+        if session is None:
+            session = self.sessions[pkt.flow.key] = _HARTSession(pkt.flow, pkt.when)
+        body, seq = session.body, first('hart_ip.transaction_id')
+        status = _int(first('hart_ip.status'), 0)
+        if kind == 0:                        # a request
+            session.host, session.gateway = (pkt.src, pkt.sport), (pkt.dst, pkt.dport)
+            if message == 0:
+                master = _int(first('hart_ip.session_init.master_type'))
+                if master is not None:
+                    body['host_type'] = 'primary master' if master == 1 else 'secondary master'
+                body.setdefault('session', 'requested')
+            if message != 3:
+                name = _HART_MESSAGES.get(message, f'message {message}')
+                body['commands'][name] = body['commands'].get(name, 0) + 1
+                session.waiting[seq] = None
+                return
+            command = _int(first('hart_ip.pt.command'))
+            if command is None:
+                return
+            name = _HART_COMMANDS.get(command, f'Command {command}')
+            body['commands'][name] = body['commands'].get(name, 0) + 1
+            if command in _HART_READS:
+                session.waiting[seq] = None
+                return
+            action = {'command': name, 'number': command}
+            device = _hart_address(first('hart_ip.pt.long_address')) or first('hart_ip.pt.short_addr')
+            if device:
+                action['device'] = device
+            data = _hex(first('hart_ip.pt.payload'))
+            if command == 40 and len(data) == 4:
+                current = struct.unpack('!f', data)[0]
+                action['data'] = f'{current:g} mA' if current else 'exit fixed current mode'
+            elif data:
+                text = _tns_text(data.rstrip(b'\x00'))
+                action['data'] = text if text else data[:32].hex()
+            session.waiting[seq] = [pkt.when, action]
+            self.actions.append((pkt.flow, session.waiting[seq]))
+            return
+        body['answered'] = True
+        if message == 0:
+            body['session'] = 'accepted' if status == 0 else 'refused'
+        if kind == 3 or status:
+            errors = body.setdefault('errors', {})
+            label = 'NAK' if kind == 3 else f'status {status}'
+            errors[label] = errors.get(label, 0) + 1
+        pending = session.waiting.pop(seq, None)
+        if message != 3:
+            return
+        code = _int(first('hart_ip.pt.response_code'))
+        result = 'NAK' if kind == 3 else _HART_RESPONSES.get(code, f'response code {code}') if code is not None else ''
+        if code:
+            errors = body.setdefault('errors', {})
+            errors[result] = errors.get(result, 0) + 1
+        if pending is not None and result:
+            pending[1].setdefault('result', result)
+            if pending[1]['number'] in (18, 22) and first('hart_ip.pt.rsp.tag').strip():
+                pending[1].setdefault('data', 'tag ' + first('hart_ip.pt.rsp.tag').strip())   # (as the device echoes it)
+        self._device(session, v)
+
+    @staticmethod
+    def _device(session, v):
+        first = lambda name: _first(v[name])
+        address = _hart_address(first('hart_ip.pt.long_address')) or first('hart_ip.pt.short_addr')
+        # (Command 0, asked by polling address, answers with what makes up the
+        # long address: the expanded device type and the device ID)
+        kind, number = _int(first('hart_ip.pt.rsp.expanded_device_type')), first('hart_ip.pt.rsp.device_id')
+        if kind is not None and number:
+            address = f'{kind & 0x3fff:04x}{number}'
+        if not address:
+            return
+        device = session.devices.get(address)
+        if device is None:
+            if len(session.devices) >= _HART_DEVICES_MAX:
+                return
+            device = session.devices[address] = {'address': address}
+        for field, key in (('hart_ip.pt.rsp.manufacturer_Id', 'manufacturer_id'),
+                           ('hart_ip.pt.rsp.expanded_device_type', 'device_type'),
+                           ('hart_ip.pt.rsp.device_id', 'device_id'), ('hart_ip.pt.rsp.device_rev', 'device_revision'),
+                           ('hart_ip.pt.rsp.software_rev', 'software_revision'),
+                           ('hart_ip.pt.rsp.configure_change', 'config_changes'),
+                           ('hart_ip.pt.rsp.write_protect_code', 'write_protect'),
+                           ('hart_ip.pt.rsp.tag', 'tag'), ('hart_ip.pt.rsp.descriptor', 'descriptor'),
+                           ('hart_ip.pt.rsp.message', 'message')):
+            value = first(field).strip()
+            if value:
+                device[key] = _int(value, value) if key in ('manufacturer_id', 'device_revision', 'software_revision',
+                                                            'config_changes', 'write_protect') else value
+        for field, key in (('hart_ip.pt.rsp.pv', 'pv'), ('hart_ip.pt.rsp.pv_loop_current', 'loop_current')):
+            if first(field):
+                device[key] = _finite(first(field))
+
+    def _join_moved(self):
+        """A gateway can answer a UDP Session Initiate from a port of its
+        own and carry on the session there: that flow, its requests from the
+        initiate's host address and port to the same gateway, is the
+        initiate's session."""
+        sessions = list(self.sessions.values())
+        for asked in sessions:
+            if asked.flow.proto != 'UDP' or asked.body.get('session') != 'requested' or asked.body['answered']:
+                continue
+            moved = next((s for s in sessions if s is not asked and s.flow.key in self.sessions
+                          and s.flow.proto == 'UDP' and s.host == asked.host
+                          and s.gateway[0] == asked.gateway[0] and s.gateway != asked.gateway), None)
+            if moved is None:
+                continue
+            body = asked.body
+            for name, n in moved.body['commands'].items():
+                body['commands'][name] = body['commands'].get(name, 0) + n
+            for label, n in moved.body.get('errors', {}).items():
+                errors = body.setdefault('errors', {})
+                errors[label] = errors.get(label, 0) + n
+            body['answered'] = moved.body['answered']
+            body['session'] = moved.body.get('session', 'accepted' if moved.body['answered'] else 'requested')
+            for address, device in moved.devices.items():
+                asked.devices.setdefault(address, {}).update(device)
+            body['moved_to_port'] = moved.gateway[1]
+            del self.sessions[moved.flow.key]
+
+    def finish(self):
+        self._join_moved()
+        records = []
+        for session in self.sessions.values():
+            if not session.body['commands'] and not session.body['answered']:
+                continue
+            body = dict(session.body)
+            if session.devices:
+                body['devices'] = list(session.devices.values())
+                tags = [d['tag'] for d in body['devices'] if d.get('tag')]
+                if tags:
+                    body['tags'] = tags
+            records.append((session.flow, session.first, 'hart_ip', body))
+        for flow, (when, action) in self.actions:
+            records.append((flow, when, 'hart_ip_action', dict(action, result=action.get('result', 'no response'))))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -5121,7 +5458,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).
