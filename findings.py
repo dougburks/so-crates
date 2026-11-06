@@ -277,6 +277,13 @@ RULES = (
          lambda b: _join(b.get('command'), b.get('user') or b.get('role'), _list(b.get('roles', ())),
                          ('-', b.get('result'))),
          'A user or role created, changed or given more rights - a way back in that outlasts the session.'),
+    Rule('tacacs_cleartext', 'high', 'tacacs', 'TACACS+ sent unencrypted',
+         f"{_j('tacacs', 'encrypted')} = 0",
+         lambda b: _join(b.get('type'), ('by', b.get('user')), b.get('command'),
+                         ('-', 'password in the clear' if b.get('password') else None)),
+         "A network device's TACACS+ body sent without its encryption - a flag RFC 8907 says must never be "
+         'used in production: who logged in, their password, and every command they were allowed, readable '
+         'by anyone on the path.'),
     Rule('fins_control', 'high', 'fins_action', 'Omron PLC run, stop, program change or forced I/O',
          _in('fins_action', 'command', list(_FINS_CONTROL)),
          lambda b: _join(b.get('command'), b.get('mode'), b.get('area'), ('-', b.get('result'))),
@@ -477,6 +484,16 @@ RULES = (
                          'connected' if b.get('connected') else None),
          'A game server - Minecraft Bedrock, or another on RakNet - answered: one that has no place on a work '
          "network, or one that's on the internet and being listed, or used as a reflector."),
+    Rule('tacacs_login_failed', 'low', 'tacacs', 'TACACS+ login refused',
+         f"{_j('tacacs', 'type')} = 'authentication' AND {_j('tacacs', 'result')} LIKE '%Fail%'",
+         lambda b: _join(b.get('user'), ('on', b.get('port')), ('from', b.get('remote_address'))),
+         "A login to a network device refused by its TACACS+ server - a mistyped password, or one guess of "
+         'many. (Only an unencrypted body shows it.)'),
+    Rule('tacacs_command_refused', 'low', 'tacacs', 'TACACS+ command refused',
+         f"{_j('tacacs', 'type')} = 'authorization' AND {_j('tacacs', 'result')} = 'FAIL'",
+         lambda b: _join(b.get('user'), ('-', b.get('command'))),
+         "A command on a network device its TACACS+ server wouldn't allow the user - beyond their role, "
+         'or tried by someone who got in. (Only an unencrypted body shows it.)'),
     Rule('tns_login_failed', 'low', 'tns', 'Oracle login failed',
          f"{_j('tns', 'login')} = 'failed'",
          lambda b: _join(b.get('db_user'), ('-', b.get('login_error'))),

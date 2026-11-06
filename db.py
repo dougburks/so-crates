@@ -1761,6 +1761,15 @@ AGGREGATION_JSON_PATHS = {
         'Data': ['$.hart_ip_action.data'],
         'Result': ['$.hart_ip_action.result'],
     },
+    'tacacs': {
+        'Type': ['$.tacacs.type'],
+        'User': ['$.tacacs.user'],
+        'Command': ['$.tacacs.command'],
+        'Line': ['$.tacacs.port'],
+        'Remote Address': ['$.tacacs.remote_address'],
+        'Result': ['$.tacacs.result'],
+        'Encrypted': ['$.tacacs.encrypted'],
+    },
     'raknet': {
         'Messages': ['$.raknet.messages'],
         'Edition': ['$.raknet.edition'],
@@ -1953,6 +1962,7 @@ AGGREGATION_VALUE_TRANSFORMS = {
     ('memcache', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('fins', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('hart_ip', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('tacacs', 'Encrypted'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Connected'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
     ('alert', 'Severity'): lambda expr: f"'Sev ' || COALESCE({expr}, 0)",

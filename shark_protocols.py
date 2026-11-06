@@ -3555,6 +3555,127 @@ class RakNet:
         return [(f.flow, f.first, 'raknet', dict(f.body)) for f in self.flows.values() if f.known]
 
 
+# ---------------------------------------------------------------- TACACS+
+#
+# TACACS+ (TCP 49), which Suricata doesn't parse: network devices asking a
+# server whether a user may log in, whether a command may run, and
+# telling it what was done. One record per session - an authentication,
+# authorization or accounting exchange, several of which can share a
+# connection. Bodies are encrypted with a key the devices and the server
+# share, so most records hold only what kind of exchange it was and how
+# far it got. A body sent unencrypted - a flag RFC 8907 says must never be
+# used in production - shows everything: the user, the line and the
+# address they came from, the command authorized and the answer, the
+# accounting, and the password.
+
+_TACACS_TYPES = {1: 'authentication', 2: 'authorization', 3: 'accounting'}
+
+
+class _TACACSSession:
+    __slots__ = ('flow', 'first', 'body', 'asked')
+
+    def __init__(self, flow, when, kind):
+        self.flow, self.first = flow, when
+        self.body = {'type': _TACACS_TYPES.get(kind, f'type {kind}'), 'packets': 0}
+        self.asked = None         # what the server last asked for: 'user' or 'password'
+
+
+class TACACS:
+    """TACACS+ - see the comment above."""
+    event_type = 'tacacs'
+    app_protos = ('tacplus',)
+    fields = ('tacplus.type', 'tacplus.seqno', 'tacplus.session_id', 'tacplus.flags.unencrypted',
+              'vals(tacplus.authen_action)', 'vals(tacplus.authentication_type)', 'vals(tacplus.service)',
+              'tacplus.privilege_level', 'tacplus.user', 'tacplus.port', 'tacplus.remote_address', 'tacplus.auth_password',
+              'tacplus.body_authen_rep.status', 'vals(tacplus.body_authen_rep.status)', 'tacplus.body_authen_rep.server_msg',
+              'tacplus.body_authen_req_cont.user', 'tacplus.arg_value', 'vals(tacplus.body_author_rep.auth_status)',
+              'vals(tacplus.body_acct.status)', 'tacplus.acct.flags.start', 'tacplus.acct.flags.stop',
+              'tacplus.acct.flags.watchdog', 'tacplus.body_acct.server_msg')
+
+    def __init__(self):
+        self.sessions = {}        # (flow key, session ID) -> _TACACSSession
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        kind, seq = _int(first('tacplus.type')), _int(first('tacplus.seqno'))
+        if kind is None or seq is None:
+            return
+        key = (pkt.flow.key, first('tacplus.session_id'))
+        session = self.sessions.get(key)
+        if session is None:
+            session = self.sessions[key] = _TACACSSession(pkt.flow, pkt.when, kind)
+        body = session.body
+        body['packets'] += 1
+        body['encrypted'] = first('tacplus.flags.unencrypted') not in ('1', 'True')
+        if body['encrypted']:
+            body['answered'] = body.get('answered', False) or seq % 2 == 0
+            return
+        if seq % 2:                              # the device's
+            self._request(session, kind, v)
+        else:
+            self._reply(session, kind, v)
+
+    @staticmethod
+    def _request(session, kind, v):
+        first = lambda name: _first(v[name])
+        body = session.body
+        for field, key in (('vals(tacplus.authen_action)', 'action'), ('vals(tacplus.authentication_type)', 'authentication'),
+                           ('vals(tacplus.service)', 'service'), ('tacplus.user', 'user'), ('tacplus.port', 'port'),
+                           ('tacplus.remote_address', 'remote_address')):
+            if first(field):
+                body.setdefault(key, first(field))
+        if first('tacplus.privilege_level'):
+            body.setdefault('privilege', _int(first('tacplus.privilege_level')))
+        if first('tacplus.auth_password'):
+            body['password'] = first('tacplus.auth_password')
+        text = first('tacplus.body_authen_req_cont.user')
+        if text and session.asked == 'password':
+            body['password'] = text
+        elif text:
+            body.setdefault('user', text)
+        args = v['tacplus.arg_value']
+        if args:
+            body['args'] = args[:32]
+            # (a command and its arguments, each its own cmd= or cmd-arg= -
+            # '*' instead of '=' marks one optional - and <cr> ending it)
+            words = [re.split('[=*]', a, 1)[1] for a in args if re.match(r'cmd(-arg)?[=*]', a)]
+            words = [w for w in words if w and w != '<cr>']
+            if kind == 2 and words:
+                body['command'] = ' '.join(words)[:300]
+        if kind == 3:
+            body['record'] = ', '.join(name for name, field in (('start', 'tacplus.acct.flags.start'),
+                                                                   ('stop', 'tacplus.acct.flags.stop'),
+                                                                   ('watchdog', 'tacplus.acct.flags.watchdog'))
+                                       if first(field) in ('1', 'True')) or None
+            if not body['record']:
+                del body['record']
+
+    @staticmethod
+    def _reply(session, kind, v):
+        first = lambda name: _first(v[name])
+        body = session.body
+        body['answered'] = True
+        status = first({1: 'vals(tacplus.body_authen_rep.status)', 2: 'vals(tacplus.body_author_rep.auth_status)',
+                        3: 'vals(tacplus.body_acct.status)'}.get(kind, 'vals(tacplus.body_authen_rep.status)'))
+        if status:
+            body['result'] = status
+        code = _int(first('tacplus.body_authen_rep.status'))
+        session.asked = {4: 'user', 5: 'password'}.get(code)
+        message = first('tacplus.body_authen_rep.server_msg') or first('tacplus.body_acct.server_msg')
+        if message.strip() and code not in (3, 4, 5):
+            body['server_message'] = message.strip()[:200]
+        if kind == 2 and v['tacplus.arg_value']:
+            body['reply_args'] = v['tacplus.arg_value'][:32]
+
+    def finish(self):
+        records = []
+        for session in self.sessions.values():
+            body = dict(session.body)
+            body.setdefault('answered', False)
+            records.append((session.flow, session.first, 'tacacs', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -5561,7 +5682,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

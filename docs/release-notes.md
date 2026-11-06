@@ -74,6 +74,11 @@
   server's advertisement - for Minecraft Bedrock, its MOTD, version and
   players. Random bytes sent to its port no longer show up as RakNet.
   These were connection cards before
+- **TACACS+** - a record for each authentication, authorization or
+  accounting session: what kind it was, whether it was encrypted, and -
+  for a body sent unencrypted - the user, their password, the line and
+  address they came from, the command authorized and the answer. These
+  were connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -93,7 +98,9 @@
   forced, and a HART device's output, range or calibration changed, are
   high; any other FINS write and any other HART configuration write are
   medium; an Omron PLC identified by a Controller Data Read, and a
-  HART-IP session accepted, are low; so is a RakNet game server answering
+  HART-IP session accepted, are low; so is a RakNet game server answering.
+  TACACS+ sent unencrypted is high; a TACACS+ login or command refused is
+  low
 
 ### Themes
 

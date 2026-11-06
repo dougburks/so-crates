@@ -738,6 +738,67 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestTACACS(unittest.TestCase):
+    """tests/protocol_fixtures.write_tacacs_pcap: one record per TACACS+
+    session - with what Suricata 8.0.8 logged for the capture
+    (tests/data/tacacs_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_tacacs_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'tacacs.pcap')
+        write_tacacs_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = [r['tacacs'] for r in cls.records if r['event_type'] == 'tacacs']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_ascii_login_in_the_clear(self):
+        login = self.sessions[0]
+        self.assertEqual({k: login.get(k) for k in ('type', 'encrypted', 'action', 'authentication', 'user', 'password',
+                                                    'port', 'remote_address', 'result', 'packets')},
+                         {'type': 'authentication', 'encrypted': False, 'action': 'Inbound Login', 'authentication': 'ASCII',
+                          'user': 'admin', 'password': 'Sup3rS3cret', 'port': 'vty0', 'remote_address': '10.9.9.9',
+                          'result': 'Authentication Passed', 'packets': 6},
+                         'the user and password from the CONTINUEs answering GETUSER and GETPASS')
+
+    def test_authorization_and_accounting(self):
+        self.assertEqual([(s['command'], s['result'], s['privilege']) for s in self.sessions if s['type'] == 'authorization'
+                          and not s['encrypted']],
+                         [('show running-config', 'PASS_ADD', 15), ('write erase', 'FAIL', 15)])
+        accounting = next(s for s in self.sessions if s['type'] == 'accounting')
+        self.assertEqual((accounting['record'], accounting['result'], accounting['args'][0]), ('start', 'Success', 'task_id=17'))
+
+    def test_a_pap_login_refused(self):
+        pap = self.sessions[4]
+        self.assertEqual((pap['authentication'], pap['user'], pap['password'], pap['result'], pap['server_message']),
+                         ('PAP', 'guest', 'letmein', 'Authentication Failed', 'Authentication failed'))
+
+    def test_encrypted_sessions(self):
+        self.assertEqual([s for s in self.sessions if s['encrypted']],
+                         [{'type': 'authentication', 'packets': 2, 'encrypted': True, 'answered': True},
+                          {'type': 'authorization', 'packets': 2, 'encrypted': True, 'answered': True}])
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('tacacs_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (2, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'tacacs_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'tacacs.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('tacacs'), 7)
+        self.assertNotIn('conn_tacplus', counts, 'records, not a connection card')
+
+
 class TestRakNet(unittest.TestCase):
     """tests/protocol_fixtures.write_raknet_pcap: one record per RakNet
     flow - with what Suricata 8.0.8 logged for the capture
@@ -3393,10 +3454,10 @@ class TestMergeRows(unittest.TestCase):
         self.assertEqual(len(list(shark_analyzer.merge_rows(rows, self.SURICATA))), 2)
 
     def test_flows_become_connection_rows_only_for_protocols_with_nothing_else(self):
-        self.assertEqual(self._kept([_row('flow', app='tacplus'), _row('flow', app='wol'),
+        self.assertEqual(self._kept([_row('flow', app='quake'), _row('flow', app='wol'),
                                      _row('flow', app='telnet'), _row('flow', app='http'), _row('flow', app='arp'),
                                      _row('flow', app='s7comm'), _row('flow', app='syslog'), _row('flow', app='')]),
-                         [('conn_tacplus', 'tacplus'), ('conn_wol', 'wol')],
+                         [('conn_quake', 'quake'), ('conn_wol', 'wol')],
                          "telnet, http and arp are Suricata's; s7comm and syslog have records; '' is no protocol")
 
     def test_nothing_on_a_flow_suricata_gave_a_protocol(self):

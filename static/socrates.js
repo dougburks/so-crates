@@ -2491,6 +2491,7 @@
                 fins: '#29b6f6',
                 hart_ip: '#9ccc65',
                 raknet: '#8d6e63',
+                tacacs: '#5c6bc0',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -4892,6 +4893,32 @@
             return html;
         }
 
+        // tshark's TACACS+ records (shark_protocols.TACACS): one per session -
+        // an authentication, authorization or accounting exchange.
+        function renderTacacsDetails(e) {
+            const t = e.tacacs || {};
+            let html = htmlSection('TACACS+ Details', COLORS.EVENT.tacacs);
+            html += htmlRowText('Type', t.type);
+            html += htmlRowText('Encrypted', t.encrypted ? 'yes' : 'no - the body is in the clear');
+            html += htmlRowText('Action', t.action);
+            html += htmlRowText('User', t.user);
+            html += htmlRowText('Password', t.password, 'mono');
+            html += htmlRowText('Line', t.port);
+            html += htmlRowText('Remote Address', t.remote_address);
+            html += htmlRowText('Authentication', t.authentication);
+            html += htmlRowText('Service', t.service);
+            html += htmlRowText('Privilege', t.privilege !== undefined ? String(t.privilege) : '');
+            html += htmlRowText('Command', t.command, 'mono');
+            html += htmlRowText('Record', t.record);
+            html += htmlRowText('Arguments', (t.args || []).join(' '), 'mono');
+            html += htmlRowText('Result', t.result);
+            html += htmlRowText('Server Message', t.server_message);
+            html += htmlRowText('Reply Arguments', (t.reply_args || []).join(' '), 'mono');
+            html += htmlRowText('Packets', t.packets !== undefined ? String(t.packets) : '');
+            html += htmlRowText('Answered', t.answered ? 'yes' : 'no');
+            return html;
+        }
+
         // tshark's RakNet records (shark_protocols.RakNet): one per flow.
         function renderRaknetDetails(e) {
             const r = e.raknet || {};
@@ -5550,6 +5577,7 @@
             tns: renderTnsDetails,
             memcache: renderMemcacheDetails,
             raknet: renderRaknetDetails,
+            tacacs: renderTacacsDetails,
             fins: renderFinsDetails,
             fins_action: renderFinsActionDetails,
             hart_ip: renderHartIpDetails,
@@ -8678,6 +8706,7 @@
             fins: 'Omron FINS',
             hart_ip: 'HART-IP',
             raknet: 'RakNet',
+            tacacs: 'TACACS+',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -9858,6 +9887,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Host Type', 'Session', 'Commands', 'Tags', 'Answered'];
                 case 'hart_ip_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Device', 'Data', 'Result'];
+                case 'tacacs':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Type', 'User', 'Command', 'Line', 'Remote Address', 'Result', 'Encrypted'];
                 case 'raknet':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Messages', 'Edition', 'MOTD', 'Game Version', 'Players', 'Connected', 'Answered'];
                 case 'memcache':
@@ -10357,6 +10388,7 @@
                 case 'hart_ip':
                 case 'hart_ip_action':
                 case 'raknet':
+                case 'tacacs':
                 case 'rsh':
                 case 'openvpn':
                 case 'wireguard':
@@ -12998,6 +13030,7 @@
                 case 'Severity': return e.syslog ? e.syslog.severity || '' : 'Sev ' + (e.alert?.severity || 0);
                 case 'Ruleset': return classifyRuleset(e.alert?.signature_id);
                 case 'Type': {
+                    if (e.tacacs) return e.tacacs.type || '';
                     if (e.coap) return e.coap.type || '';
                     if (e.event_type === 'iec104_point') return e.iec104_point?.type || '';
                     if (e.event_type === 'dnp3') return e.dnp3?.type || '';
@@ -13028,7 +13061,7 @@
                     if (r?.value !== undefined) return String(r.value);
                     return e.opcua_action?.arguments ? e.opcua_action.arguments.join(', ') : '';
                 }
-                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || e.tns?.result || e.tns_statement?.result || e.fins_action?.result || e.hart_ip_action?.result || '';
+                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || e.tns?.result || e.tns_statement?.result || e.fins_action?.result || e.hart_ip_action?.result || e.tacacs?.result || '';
                 case 'Updates': return e.iec104_point?.updates !== undefined ? String(e.iec104_point.updates) : '';
                 case 'Last Value': { const r = e.iec104_point || e.bacnet_property; return r?.last_value !== undefined ? String(r.last_value) : ''; }
                 // BACnet: an action's, a read/notification summary's, a device's
@@ -13066,7 +13099,7 @@
                     return d?.vendor || (d?.vendor_id !== undefined ? String(d.vendor_id) : '');
                 }
                 case 'Announcements': return e.bacnet_device?.announcements !== undefined ? String(e.bacnet_device.announcements) : '';
-                case 'User': return e.telnet?.username || e.opcua?.username || e.mongodb?.user || e.rsh?.user || e.socks?.user || e.radius?.user || e.stun?.username || '';
+                case 'User': return e.telnet?.username || e.opcua?.username || e.mongodb?.user || e.rsh?.user || e.socks?.user || e.radius?.user || e.stun?.username || e.tacacs?.user || '';
                 // GOOSE: a state change's
                 case 'Control Block': return e.goose?.gocb_ref || '';
                 case 'Dataset': return e.goose?.dataset || '';
@@ -13206,6 +13239,10 @@
                 case 'Messages': return e.raknet ? Object.keys(e.raknet.messages || {}).join(', ') : (e.xdmcp?.messages || []).join(', ');
                 // RakNet: a flow's
                 case 'Edition': return e.raknet?.edition || '';
+                // TACACS+: a session's
+                case 'Line': return e.tacacs?.port || '';
+                case 'Remote Address': return e.tacacs?.remote_address || '';
+                case 'Encrypted': return e.tacacs ? (e.tacacs.encrypted ? 'yes' : 'no') : '';
                 case 'MOTD': return e.raknet?.motd || '';
                 case 'Game Version': return e.raknet?.game_version || '';
                 case 'Players': return e.raknet?.players !== undefined ? String(e.raknet.players) : '';
@@ -13302,6 +13339,7 @@
                 }
                 case 'Command': {
                     if (e.fins_action) return e.fins_action.command || '';
+                    if (e.tacacs) return e.tacacs.command || '';
                     if (e.hart_ip_action) return e.hart_ip_action.command || '';
                     if (e.rip) return e.rip.command || '';
                     if (e.mongodb_action) return e.mongodb_action.command || '';

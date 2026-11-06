@@ -1037,6 +1037,63 @@ def write_hart_ip_pcap(path):
     write_pcap(path, hart_ip_packets())
 
 
+# ---------------------------------------------------------------- TACACS+
+#
+# A router (TACACS_NAS) asks TACACS_SERVER over one unencrypted connection
+# (port 49, single-connection): an ASCII login by admin on vty0 from
+# 10.9.9.9 - username and password asked for and given, passed - then
+# authorization for "show running-config" (passed) and "write erase"
+# (failed), and accounting of the session's start. A second login, by
+# guest with PAP, fails. Another router (TACACS_NAS2) talks to the server
+# encrypted, as it should: its login and authorization show only as
+# what they are.
+
+TACACS_SERVER, TACACS_NAS, TACACS_NAS2 = '10.1.0.95', '10.1.0.96', '10.1.0.97'
+
+
+def _tacacs(kind, seq, session, body, version=0xc0, flags=0x05):
+    return struct.pack('!BBBBII', version, kind, seq, flags, session, len(body)) + body
+
+
+def _tacacs_args(args):
+    return bytes([len(a) for a in args]), b''.join(a.encode() for a in args)
+
+
+def tacacs_packets():
+    login, author1, author2, acct, pap = 0x1001, 0x1002, 0x1003, 0x1004, 0x1005
+    start = struct.pack('!BBBBBBBB', 1, 1, 1, 1, 0, 4, 8, 0) + b'vty0' + b'10.9.9.9'
+    reply = lambda status, msg, flags=0: struct.pack('!BBHH', status, flags, len(msg), 0) + msg.encode()
+    cont = lambda text: struct.pack('!HHB', len(text), 0, 0) + text.encode()
+
+    def author(session, command, status, args_back=()):
+        args = ['service=shell', 'cmd=' + command.split()[0]] + ['cmd-arg=' + a for a in command.split()[1:]] + ['cmd-arg=<cr>']
+        lens, data = _tacacs_args(args)
+        request = struct.pack('!BBBBBBBB', 6, 15, 1, 1, 5, 4, 8, len(args)) + lens + b'admin' + b'vty0' + b'10.9.9.9' + data
+        blens, bdata = _tacacs_args(args_back)
+        answer = struct.pack('!BBHH', status, len(args_back), 0, 0) + blens + bdata
+        return [(True, _tacacs(2, 1, session, request)), (False, _tacacs(2, 2, session, answer))]
+
+    lens, data = _tacacs_args(['task_id=17', 'start_time=1700000000', 'service=shell'])
+    accounting = struct.pack('!BBBBBBBBB', 0x02, 6, 15, 1, 1, 5, 4, 8, 3) + lens + b'admin' + b'vty0' + b'10.9.9.9' + data
+    pap_start = struct.pack('!BBBBBBBB', 1, 1, 2, 1, 5, 4, 8, 7) + b'guest' + b'vty1' + b'10.9.9.9' + b'letmein'
+    session = ([(True, _tacacs(1, 1, login, start)), (False, _tacacs(1, 2, login, reply(4, 'Username: '))),
+                (True, _tacacs(1, 3, login, cont('admin'))), (False, _tacacs(1, 4, login, reply(5, 'Password: ', 1))),
+                (True, _tacacs(1, 5, login, cont('Sup3rS3cret'))), (False, _tacacs(1, 6, login, reply(1, '')))]
+               + author(author1, 'show running-config', 1) + author(author2, 'write erase', 0x10)
+               + [(True, _tacacs(3, 1, acct, accounting)), (False, _tacacs(3, 2, acct, struct.pack('!HHB', 0, 0, 1)))]
+               + [(True, _tacacs(1, 1, pap, pap_start, version=0xc1)),
+                  (False, _tacacs(1, 2, pap, reply(2, 'Authentication failed'), version=0xc1))])
+    noise = bytes(range(40))
+    encrypted = [(True, _tacacs(1, 1, 0x2001, noise, flags=0x04)), (False, _tacacs(1, 2, 0x2001, noise[:16], flags=0x04)),
+                 (True, _tacacs(2, 1, 0x2002, noise, flags=0x04)), (False, _tacacs(2, 2, 0x2002, noise[:8], flags=0x04))]
+    return (tcp_segments(TACACS_NAS, TACACS_SERVER, 42100, 49, session)
+            + tcp_segments(TACACS_NAS2, TACACS_SERVER, 42101, 49, encrypted))
+
+
+def write_tacacs_pcap(path):
+    write_pcap(path, tacacs_packets())
+
+
 # ---------------------------------------------------------------- RakNet
 #
 # A Minecraft Bedrock client (CLIENT:41980) pings RAKNET_SERVER:19132,
