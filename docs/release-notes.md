@@ -84,6 +84,10 @@
   rate from the PMU's configuration, its header, and how many data frames
   said it had lost time sync, triggered or changed configuration. These
   were connection cards before
+- **EtherCAT** - a record for each master: the commands it sent, how many
+  slaves answered, the states it asked them for, EEPROM writes, and the
+  mailbox traffic - FoE files read or written, CoE objects. These were
+  connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -106,7 +110,9 @@
   HART-IP session accepted, are low; so is a RakNet game server answering.
   TACACS+ sent unencrypted is high; a TACACS+ login or command refused is
   low. A PMU told to stop sending data is medium; a PMU that lost time
-  sync, and a PMU's configuration read, are low
+  sync, and a PMU's configuration read, are low. A file or EEPROM written
+  to an EtherCAT slave is high; EtherCAT slaves sent to another state is
+  medium; EtherCAT answering over IP is low
 
 ### Themes
 

@@ -2493,6 +2493,7 @@
                 raknet: '#8d6e63',
                 tacacs: '#5c6bc0',
                 synphasor: '#ffca28',
+                ecat: '#ec407a',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -4894,6 +4895,22 @@
             return html;
         }
 
+        // tshark's EtherCAT records (shark_protocols.ECAT): one per master.
+        function renderEcatDetails(e) {
+            const c = e.ecat || {};
+            const counts = o => Object.entries(o || {}).map(([k, n]) => `${k} ${n.toLocaleString()}`).join(', ');
+            let html = htmlSection('EtherCAT Details', COLORS.EVENT.ecat);
+            html += htmlRowText('Commands', counts(c.commands));
+            html += htmlRowText('Slaves', c.slaves !== undefined ? String(c.slaves) : '');
+            html += htmlRowText('Answered', c.answered ? 'yes' : 'no');
+            html += htmlRowText('State Requests', counts(c.state_requests) + (c.broadcast_state_change ? ' (to every slave at once)' : ''));
+            if (c.eeprom_writes) html += htmlRowText('EEPROM Writes', c.eeprom_writes.toLocaleString());
+            html += htmlRowText('Mailbox', counts(c.mailbox));
+            html += htmlRowText('FoE', (c.foe || []).join(', '), 'mono');
+            html += htmlRowText('SDO Objects', (c.sdo_objects || []).join(', '), 'mono');
+            return html;
+        }
+
         // tshark's C37.118 synchrophasor records (shark_protocols.Synphasor):
         // one per stream.
         function renderSynphasorDetails(e) {
@@ -5605,6 +5622,7 @@
             raknet: renderRaknetDetails,
             tacacs: renderTacacsDetails,
             synphasor: renderSynphasorDetails,
+            ecat: renderEcatDetails,
             fins: renderFinsDetails,
             fins_action: renderFinsActionDetails,
             hart_ip: renderHartIpDetails,
@@ -8735,6 +8753,7 @@
             raknet: 'RakNet',
             tacacs: 'TACACS+',
             synphasor: 'C37.118',
+            ecat: 'EtherCAT',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -9915,6 +9934,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Host Type', 'Session', 'Commands', 'Tags', 'Answered'];
                 case 'hart_ip_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Device', 'Data', 'Result'];
+                case 'ecat':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Slaves', 'State Requests', 'EEPROM Writes', 'FoE', 'Answered'];
                 case 'synphasor':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Stations', 'Stream ID', 'Data Rate', 'Commands', 'Data Frames', 'Not Synced'];
                 case 'tacacs':
@@ -10420,6 +10441,7 @@
                 case 'raknet':
                 case 'tacacs':
                 case 'synphasor':
+                case 'ecat':
                 case 'rsh':
                 case 'openvpn':
                 case 'wireguard':
@@ -13179,7 +13201,12 @@
                 case 'OS User': return e.tns?.os_user || e.tns?.client_user || '';
                 case 'Statements': return e.tns?.statements !== undefined ? String(e.tns.statements) : '';
                 // memcached: a connection's or UDP exchange's
-                case 'Commands': return Object.keys((e.memcache || e.fins || e.hart_ip || e.synphasor)?.commands || {}).join(', ');
+                case 'Commands': return Object.keys((e.memcache || e.fins || e.hart_ip || e.synphasor || e.ecat)?.commands || {}).join(', ');
+                // EtherCAT: a master's
+                case 'Slaves': return e.ecat?.slaves !== undefined ? String(e.ecat.slaves) : '';
+                case 'State Requests': return Object.keys(e.ecat?.state_requests || {}).join(', ');
+                case 'EEPROM Writes': return e.ecat ? String(e.ecat.eeprom_writes || 0) : '';
+                case 'FoE': return (e.ecat?.foe || []).join(', ');
                 // C37.118: a stream's
                 case 'Stations': return (e.synphasor?.stations || []).join(', ');
                 case 'Stream ID': return e.synphasor?.stream_id !== undefined ? String(e.synphasor.stream_id) : '';
@@ -13488,7 +13515,7 @@
                 case 'Event': return e.anomaly?.event || '';
                 case 'Layer': return e.anomaly?.layer || '';
                 case 'Answered': {
-                    const r = e.mongodb || e.memcache || e.fins || e.hart_ip || e.raknet;
+                    const r = e.mongodb || e.memcache || e.fins || e.hart_ip || e.raknet || e.ecat;
                     return r ? (r.answered ? 'yes' : 'no') : e.shark?.answered || '';
                 }
                 case 'App Proto': return e.event_type === 'anomaly' ? (e.anomaly?.app_proto || '') : (e.app_proto || '');

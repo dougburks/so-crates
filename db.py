@@ -1761,6 +1761,14 @@ AGGREGATION_JSON_PATHS = {
         'Data': ['$.hart_ip_action.data'],
         'Result': ['$.hart_ip_action.result'],
     },
+    'ecat': {
+        'Commands': ['$.ecat.commands'],
+        'Slaves': ['$.ecat.slaves'],
+        'State Requests': ['$.ecat.state_requests'],
+        'EEPROM Writes': ['$.ecat.eeprom_writes'],
+        'FoE': ['$.ecat.foe'],
+        'Answered': ['$.ecat.answered'],
+    },
     'synphasor': {
         'Stations': ['$.synphasor.stations'],
         'Stream ID': ['$.synphasor.stream_id'],
@@ -1970,6 +1978,7 @@ AGGREGATION_VALUE_TRANSFORMS = {
     ('memcache', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('fins', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('hart_ip', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('ecat', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('tacacs', 'Encrypted'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Connected'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
@@ -2019,11 +2028,11 @@ AGGREGATION_CAST_TEXT = {
 AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
-    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'), ('synphasor', 'Stations'),
+    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'), ('synphasor', 'Stations'), ('ecat', 'FoE'),
 }
 # Object-valued columns shown as their keys, joined the same way (a count
 # per name: memcached's commands)
-AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages'), ('synphasor', 'Commands')}
+AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages'), ('synphasor', 'Commands'), ('ecat', 'Commands'), ('ecat', 'State Requests')}
 
 
 def _aggregation_expr(event_type, label, paths, prefix=''):

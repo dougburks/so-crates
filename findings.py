@@ -284,6 +284,14 @@ RULES = (
          "A network device's TACACS+ body sent without its encryption - a flag RFC 8907 says must never be "
          'used in production: who logged in, their password, and every command they were allowed, readable '
          'by anyone on the path.'),
+    Rule('ecat_firmware', 'high', 'ecat', 'EtherCAT file or EEPROM written',
+         f"({_j('ecat', 'eeprom_writes')} > 0 OR EXISTS (SELECT 1 FROM json_each(json_data, '$.ecat.foe') "
+         "WHERE value LIKE 'write%'))",
+         lambda b: _join(_list([f for f in b.get('foe', ()) if f.startswith('write')]),
+                         _counted(b.get('eeprom_writes'), 'EEPROM write')),
+         "A file - firmware, most often - written to an EtherCAT slave over FoE, or a slave's EEPROM, which "
+         'holds its identity and configuration, rewritten: a drive or I/O module changed, from wherever the '
+         'master is.'),
     Rule('fins_control', 'high', 'fins_action', 'Omron PLC run, stop, program change or forced I/O',
          _in('fins_action', 'command', list(_FINS_CONTROL)),
          lambda b: _join(b.get('command'), b.get('mode'), b.get('area'), ('-', b.get('result'))),
@@ -403,6 +411,11 @@ RULES = (
          "A C37.118 command turning off a phasor measurement unit's data - routine from its PDC when it "
          'disconnects, and from anywhere else, a way to blind wide-area monitoring and protection. C37.118 has '
          'no login.'),
+    Rule('ecat_state_change', 'medium', 'ecat', 'EtherCAT slaves sent to another state',
+         f"{_j('ecat', 'state_requests')} IS NOT NULL",
+         lambda b: _join(_list(list(b.get('state_requests') or {})), 'every slave at once' if b.get('broadcast_state_change') else None),
+         "A master asked EtherCAT slaves to change state - routine when it starts the machine (INIT, PRE-OP, "
+         'SAFE-OP, OP), and out of OP, its outputs stop: a running machine halted.'),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),
@@ -510,6 +523,11 @@ RULES = (
          lambda b: _join(_list(b.get('stations', ())), ('stream', b.get('stream_id'))),
          "A phasor measurement unit gave out its configuration - its station, channels and rate. Routine for "
          "its PDC, a survey of the substation from anywhere else."),
+    Rule('ecat_over_ip', 'low', 'ecat', 'EtherCAT answering over IP',
+         f"json_extract(json_data, '$.proto') = 'UDP' AND {_j('ecat', 'answered')} = 1",
+         lambda b: _join(_list(list(b.get('commands') or {})), ('-', _counted(b.get('slaves'), 'slave'))),
+         "EtherCAT slaves answering frames that came over UDP - a fieldbus that belongs inside a machine, "
+         'reachable from an IP network.'),
     Rule('tns_login_failed', 'low', 'tns', 'Oracle login failed',
          f"{_j('tns', 'login')} = 'failed'",
          lambda b: _join(b.get('db_user'), ('-', b.get('login_error'))),

@@ -3798,6 +3798,144 @@ class Synphasor:
         return records
 
 
+# ---------------------------------------------------------------- EtherCAT
+#
+# EtherCAT, the fieldbus inside machines: a master's frames (EtherType
+# 0x88a4, or UDP 34980 when routed) pass through every slave - drives,
+# I/O modules - each reading and writing its part, and come back. Suricata
+# doesn't parse it. One record per flow: the datagram commands, how many
+# slaves answered a broadcast read, the states the master asked the slaves
+# for through their AL Control register (dropping out of OP stops a
+# machine's outputs), EEPROM writes (a slave's identity and configuration
+# rewritten), and the mailbox traffic - CoE, and FoE files read or written
+# (how firmware goes onto a drive). The datagrams are read from the
+# frame's bytes; the mailboxes from tshark's fields. A capture sees each
+# frame twice - as the master sent it, and back from the slaves, its
+# source MAC's locally administered bit set - and a mailbox's frames as a
+# flow of their own: one master's are one record, on the flow its first
+# frame went out on, the commands counted as it sent them and the working
+# counters as they came back. Scanners probe UDP 34980 for EtherCAT
+# reachable over IP.
+
+_ECAT_COMMANDS = {0: 'NOP', 1: 'APRD', 2: 'APWR', 3: 'APRW', 4: 'FPRD', 5: 'FPWR', 6: 'FPRW', 7: 'BRD', 8: 'BWR',
+                  9: 'BRW', 10: 'LRD', 11: 'LWR', 12: 'LRW', 13: 'ARMW', 14: 'FRMW'}
+_ECAT_WRITES = frozenset({2, 3, 5, 6, 8, 9, 13, 14})
+_ECAT_STATES = {1: 'INIT', 2: 'PRE-OP', 3: 'BOOT', 4: 'SAFE-OP', 8: 'OP'}
+_ECAT_FOE = {1: 'read', 2: 'write'}
+
+
+def _ecat_datagrams(data):
+    """An EtherCAT frame's datagrams (its header already off): (command,
+    ADP, ADO, data, working counter) each - logical ones with ADP/ADO as
+    the logical address's halves."""
+    at, out = 0, []
+    while at + 12 <= len(data):
+        command, _, adp, ado, length = struct.unpack('<BBHHH', data[at:at + 8])
+        size = length & 0x7ff
+        if at + 10 + size + 2 > len(data) or command > 14:
+            break
+        payload = data[at + 10:at + 10 + size]
+        wkc = struct.unpack('<H', data[at + 10 + size:at + 12 + size])[0]
+        out.append((command, adp, ado, payload, wkc))
+        at += 12 + size
+        if not length & 0x8000:
+            break
+    return out
+
+
+class _ECATMaster:
+    __slots__ = ('flow', 'first', 'body', 'sent', 'returned', 'outgoing')
+
+    def __init__(self, flow, when, outgoing):
+        self.flow, self.first, self.outgoing = flow, when, outgoing
+        self.body = {}
+        self.sent = {'commands': {}}       # counted from the master's frames
+        self.returned = {'commands': {}}   # from the frames back - for a capture that saw only those
+
+
+def _ecat_master(pkt):
+    """The master a frame belongs to, and whether it's on its way back:
+    on Ethernet, the source MAC without its locally administered bit (set
+    by the slaves on the way back) and the destination; over UDP, the flow,
+    a frame back coming from port 34980."""
+    if pkt.flow.proto == 'UDP':
+        return pkt.flow.key, pkt.sport == 34980 and pkt.dport != 34980
+    octets = pkt.src.split(':')
+    first = _int('0x' + octets[0], 0) if octets and octets[0] else 0
+    return (':'.join([f'{first & ~0x02:02x}'] + octets[1:]), pkt.dst), bool(first & 0x02)
+
+
+class ECAT:
+    """EtherCAT - see the comment above."""
+    event_type = 'ecat'
+    app_protos = ('ecat', 'ecatf', 'ecat_mailbox')
+    fields = ('ecatf.type', '@ecat', 'vals(ecat_mailbox.type)', 'ecat_mailbox.foe_opmode', 'ecat_mailbox.foe_filename',
+              'ecat_mailbox.coe.sdoidx')
+
+    def __init__(self):
+        self.masters = {}         # see _ecat_master -> _ECATMaster
+
+    def feed(self, pkt, v):
+        if _int(_first(v['ecatf.type'])) != 1:            # (1: EtherCAT commands; the rest - ADS, NV - aren't)
+            return
+        datagrams = _ecat_datagrams(_hex(_first(v['@ecat'])))
+        if not datagrams:
+            return
+        key, back = _ecat_master(pkt)
+        master = self.masters.get(key)
+        if master is None:
+            master = self.masters[key] = _ECATMaster(pkt.flow, pkt.when, not back)
+        elif not back and not master.outgoing:
+            master.flow, master.outgoing = pkt.flow, True     # (on the master's own flow, when there is one)
+        for command, adp, ado, payload, wkc in datagrams:
+            if wkc:
+                master.body['answered'] = True
+            if back and command == 7 and ado == 0x0130:
+                master.body['slaves'] = max(master.body.get('slaves', 0), wkc)
+        self._sent(master.returned if back else master.sent, datagrams, v)
+
+    @staticmethod
+    def _sent(body, datagrams, v):
+        for command, adp, ado, payload, wkc in datagrams:
+            name = _ECAT_COMMANDS[command]
+            body['commands'][name] = body['commands'].get(name, 0) + 1
+            if command not in _ECAT_WRITES:
+                continue
+            if ado <= 0x0120 < ado + len(payload) and command != 13:
+                state = payload[0x0120 - ado] & 0x0f
+                label = _ECAT_STATES.get(state, f'state {state}')
+                requested = body.setdefault('state_requests', {})
+                requested[label] = requested.get(label, 0) + 1
+                if command in (8, 9):
+                    body['broadcast_state_change'] = True
+            if ado <= 0x0502 < ado + len(payload) - 1:
+                control = struct.unpack('<H', payload[0x0502 - ado:0x0504 - ado])[0]
+                if control & 0x0700 == 0x0200:
+                    body['eeprom_writes'] = body.get('eeprom_writes', 0) + 1
+        for kind in v['vals(ecat_mailbox.type)']:
+            mailbox = body.setdefault('mailbox', {})
+            mailbox[kind] = mailbox.get(kind, 0) + 1
+        for op, name in zip(v['ecat_mailbox.foe_opmode'], v['ecat_mailbox.foe_filename'] + [''] * 8):
+            label = _ECAT_FOE.get(_int(op))
+            if label:
+                files = body.setdefault('foe', [])
+                entry = f'{label} {name}'.strip()
+                if entry not in files and len(files) < 20:
+                    files.append(entry)
+        indexes = body.setdefault('sdo_objects', []) if v['ecat_mailbox.coe.sdoidx'] else None
+        for index in v['ecat_mailbox.coe.sdoidx']:
+            if index not in indexes and len(indexes) < 32:
+                indexes.append(index)
+
+    def finish(self):
+        records = []
+        for master in self.masters.values():
+            body = dict(master.sent if master.sent['commands'] else master.returned, **master.body)
+            body.setdefault('answered', False)
+            records.append((master.flow, master.first, 'ecat', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -5804,7 +5942,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

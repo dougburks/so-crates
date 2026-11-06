@@ -738,6 +738,61 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestECAT(unittest.TestCase):
+    """tests/protocol_fixtures.write_ecat_pcap: one record per EtherCAT
+    master - with what Suricata 8.0.8 logged for the capture
+    (tests/data/ecat_fixture.eve.json): an Ethertype unknown alert for each
+    Ethernet frame, and the UDP probe's flow."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_ecat_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'ecat.pcap')
+        write_ecat_pcap(cls.pcap)
+        cls.records = [r for r in shark_analyzer.run_tshark(cls.pcap) if r['event_type'] == 'ecat']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_master_its_frames_going_out_and_back(self):
+        from tests.protocol_fixtures import ECAT_MASTER
+        master = next(r for r in self.records if r['proto'] != 'UDP')
+        self.assertEqual(master['src_ip'], ECAT_MASTER, "the master's own flow, not the frames' way back")
+        self.assertEqual(master['ecat'], {'commands': {'BRD': 1, 'BWR': 2, 'FPWR': 2}, 'slaves': 3, 'answered': True,
+                                          'state_requests': {'INIT': 1, 'OP': 1}, 'broadcast_state_change': True,
+                                          'eeprom_writes': 1, 'mailbox': {'FoE (File access over EtherCAT)': 1},
+                                          'foe': ['write firmware.efw']},
+                         'each command counted once, as the master sent it')
+
+    def test_a_scanners_probe_over_udp(self):
+        probe = next(r for r in self.records if r['proto'] == 'UDP')
+        self.assertEqual(probe['ecat'], {'commands': {'BRD': 1}, 'answered': False})
+
+    def test_the_merge_adds_the_records(self):
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'ecat_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'ecat.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('ecat'), 2)
+        self.assertFalse([t for t in counts if t.startswith('conn_ecat')], 'records, not a connection card')
+
+    def test_a_datagram_from_a_real_capture(self):
+        """A broadcast read of AL Status back from five slaves, from
+        ICS-pcap's EtherCAT capture (a master starting them, 2007): the
+        slaves each counted the ADP and the working counter up, and said OP."""
+        from shark_protocols import _ecat_datagrams
+        datagram = bytes.fromhex('0702050030010200040008000500')
+        self.assertEqual(_ecat_datagrams(datagram), [(7, 5, 0x0130, b'\x08\x00', 5)])
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestSynphasor(unittest.TestCase):
     """tests/protocol_fixtures.write_synphasor_pcap: one record per C37.118
     stream - with what Suricata 8.0.8 logged for the capture
@@ -790,6 +845,7 @@ class TestSynphasor(unittest.TestCase):
         self.assertNotIn('conn_synphasor', counts, 'records, not a connection card')
 
 
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestTACACS(unittest.TestCase):
     """tests/protocol_fixtures.write_tacacs_pcap: one record per TACACS+
     session - with what Suricata 8.0.8 logged for the capture
@@ -851,6 +907,7 @@ class TestTACACS(unittest.TestCase):
         self.assertNotIn('conn_tacplus', counts, 'records, not a connection card')
 
 
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestRakNet(unittest.TestCase):
     """tests/protocol_fixtures.write_raknet_pcap: one record per RakNet
     flow - with what Suricata 8.0.8 logged for the capture
@@ -904,6 +961,7 @@ class TestRakNet(unittest.TestCase):
         self.assertNotIn('conn_raknet', counts, 'records, not a connection card')
 
 
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestFINS(unittest.TestCase):
     """tests/protocol_fixtures.write_fins_pcap: one record per Omron FINS
     connection or exchange and per command that changes or controls the
@@ -965,6 +1023,7 @@ class TestFINS(unittest.TestCase):
         self.assertNotIn('conn_omron', counts, 'records, not a connection card')
 
 
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestHARTIP(unittest.TestCase):
     """tests/protocol_fixtures.write_hart_ip_pcap: one record per HART-IP
     session and per command that changes or commands a device - with what
@@ -1042,6 +1101,7 @@ class TestHARTIP(unittest.TestCase):
                          [(42000, 5094, 'accepted', {'Session Initiate': 1, 'Keep Alive': 1}, 5095)])
 
 
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestMemcache(unittest.TestCase):
     """tests/protocol_fixtures.write_memcache_pcap: one record per
     memcached connection or UDP exchange - with what Suricata 8.0.8 logged
@@ -1105,6 +1165,7 @@ class TestMemcache(unittest.TestCase):
         self.assertNotIn(db.PROBED_CONNECTION_TYPE, counts, 'nor are the random bytes a probe')
 
 
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestTNS(unittest.TestCase):
     """tests/protocol_fixtures.write_tns_pcap: one record per Oracle TNS
     connection and per distinct statement - with what Suricata 8.0.8
@@ -1219,6 +1280,7 @@ class TestTNSMessages(unittest.TestCase):
                          ['CREATE OR REPLACE PROCEDURE', 'DROP PUBLIC SYNONYM', 'ALTER SESSION', 'GRANT', 'TRUNCATE TABLE'])
 
 
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestWireGuard(unittest.TestCase):
     """tests/protocol_fixtures.write_wireguard_pcap: one record per
     WireGuard connection - with what Suricata 8.0.8 logged for the capture
@@ -1319,6 +1381,7 @@ class TestDecryptedWireGuard(unittest.TestCase):
         self.assertEqual((body['data_to_server'], body['data_to_client']), (2, 2))
 
 
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestOpenVPN(unittest.TestCase):
     """tests/protocol_fixtures.write_openvpn_pcap: one record per OpenVPN
     connection - with what Suricata 8.0.8 logged for the capture

@@ -1037,6 +1037,51 @@ def write_hart_ip_pcap(path):
     write_pcap(path, hart_ip_packets())
 
 
+# ---------------------------------------------------------------- EtherCAT
+#
+# An EtherCAT master (ECAT_MASTER) on its segment, each frame captured
+# going out and coming back (the source MAC's locally administered bit
+# set, the working counters counted up by the slaves): a broadcast read of
+# AL Status that three slaves answer, the slaves sent to INIT, slave
+# 0x1001's EEPROM written, a firmware file sent to it over FoE, and the
+# slaves sent to OP. ECAT_SCANNER's broadcast read over UDP 34980 - as
+# internet scanners send it - gets no answer.
+
+ECAT_MASTER, ECAT_SCANNER = '00:14:4f:23:98:cf', '10.1.0.99'
+
+
+def _ecat_datagram(command, adp, ado, data, wkc=0, more=False):
+    return struct.pack('<BBHHHH', command, 0, adp, ado, len(data) | (0x8000 if more else 0), 0) + data + struct.pack('<H', wkc)
+
+
+def _ecat_frame(datagrams, back=False):
+    payload = b''.join(datagrams)
+    src = bytes.fromhex(ECAT_MASTER.replace(':', ''))
+    if back:
+        src = bytes([src[0] | 0x02]) + src[1:]
+    frame = b'\xff' * 6 + src + b'\x88\xa4' + struct.pack('<H', len(payload) | 0x1000) + payload
+    return frame + b'\x00' * max(0, 60 - len(frame))
+
+
+def ecat_packets():
+    foe = b'\x02\x00' + struct.pack('<I', 0) + b'firmware.efw'
+    mailbox = struct.pack('<HHBB', len(foe), 0, 0, 0x14) + foe
+    # (command, slave, register, data, the working counter back: every slave, or the one addressed)
+    steps = [(7, 0, 0x0130, b'\x00\x00', 3), (8, 0, 0x0120, b'\x11\x00', 3),
+             (5, 0x1001, 0x0502, b'\x01\x02\x00\x00\x10\x00', 1), (5, 0x1001, 0x1000, mailbox, 1),
+             (8, 0, 0x0120, b'\x08\x00', 3)]
+    frames = []
+    for command, slave, register, data, wkc in steps:
+        frames += [_ecat_frame([_ecat_datagram(command, slave, register, data)]),
+                   _ecat_frame([_ecat_datagram(command, slave, register, data, wkc)], back=True)]
+    probe = b'\x0e\x10' + _ecat_datagram(7, 0, 0x0130, b'\x00\x00') + b'\x00' * 30
+    return frames + [_udp_packet(ECAT_SCANNER, '10.1.0.100', 34980, 34980, probe)]
+
+
+def write_ecat_pcap(path):
+    write_pcap(path, ecat_packets())
+
+
 # ---------------------------------------------------------------- C37.118
 #
 # Shaped on pyPMU's PMU and PDC talking: a PDC (CLIENT:42200) asks
