@@ -738,6 +738,71 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestRShell(unittest.TestCase):
+    """tests/protocol_fixtures.write_rsh_pcap: one record per rsh, rlogin
+    or rexec connection - with what Suricata 8.0.8 logged for the capture
+    (tests/data/rsh_fixture.eve.json): flows it gives no protocol, and the
+    scanner's probe, which it names HTTP by its content."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_rsh_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'rsh.pcap')
+        write_rsh_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = {r['src_port']: r['rsh'] for r in cls.records if r['event_type'] == 'rsh'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_rsh_with_its_output(self):
+        self.assertEqual(self.sessions[1022], {
+            'service': 'rsh', 'local_user': 'alice', 'user': 'root', 'command': 'id; uname -a', 'result': 'accepted',
+            'output': 'uid=0(root) gid=0(root) groups=0(root) Linux plc 5.10.0'})
+
+    def test_rexec_refused(self):
+        self.assertEqual(self.sessions[1023], {
+            'service': 'rexec', 'user': 'operator', 'password': 's3cret', 'command': 'shutdown -r now',
+            'result': 'refused', 'error': 'Login incorrect.'})
+
+    def test_rlogin_read_like_telnet(self):
+        self.assertEqual(self.sessions[1021], {
+            'service': 'rlogin', 'local_user': 'bob', 'user': 'bob', 'terminal': 'xterm/38400', 'result': 'accepted',
+            'password': 'hunter2', 'commands': ['ls', 'exit']})
+
+    def test_a_probe_and_its_answer(self):
+        self.assertEqual(self.sessions[40000], {'service': 'rsh', 'result': 'refused', 'probe': 'GET / HTTP/1.0',
+                                                'error': 'Can not make pipe'})
+
+    def test_a_probe_with_nuls_is_no_login(self):
+        """A scanner's RPC packet holds NULs where rsh's strings would end."""
+        from shark_protocols import RShell, Packet
+        from types import SimpleNamespace
+        rsh = RShell()
+        flow = SimpleNamespace(key=1)
+        probe = bytes.fromhex('80000028729f000000000000000200018690000000040000000000000000')
+        rsh.feed(Packet(1, 1.0, flow, 40001, 514, 'rsh'), {'@rsh': [probe.hex()]})
+        [(_, _, _, body)] = rsh.finish()
+        self.assertNotIn('user', body)
+        self.assertEqual(body['probe'][:5], '...(r')
+
+    def test_the_merge_adds_the_records(self):
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'rsh_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'rsh.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('rsh'), 3, "not the probe's: Suricata identified that flow as HTTP")
+        self.assertFalse({'conn_rsh', 'conn_rlogin', 'conn_exec'} & set(counts), 'records, not connection cards')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestMongoDB(unittest.TestCase):
     """tests/protocol_fixtures.write_mongodb_pcap, read by the structured
     pass: each connection, and the changes with their results - with what
@@ -2815,12 +2880,13 @@ class TestMergeRows(unittest.TestCase):
                          "telnet, http and arp are Suricata's; s7comm and syslog have records; '' is no protocol")
 
     def test_nothing_on_a_flow_suricata_gave_a_protocol(self):
-        """The 4SICS case: a scanner's HTTP request to the rsh port is HTTP
-        to Suricata and rsh to tshark - Suricata's word stands."""
-        self.assertEqual(self._kept([_row('flow', cid='1:http', app='rsh'), _row('nbns', cid='1:http'),
-                                     _row('flow', cid='1:http', app='rsh', when='2026-01-01T01:00:00.000000+0000'),
-                                     _row('flow', cid='1:other', app='rsh')]),
-                         [('conn_rsh', 'rsh'), ('conn_rsh', 'rsh')],
+        """The 4SICS case: a scanner's HTTP request to a port tshark names
+        by its number (rsh's there; chargen's here, which has no records) is
+        HTTP to Suricata - Suricata's word stands."""
+        self.assertEqual(self._kept([_row('flow', cid='1:http', app='chargen'), _row('nbns', cid='1:http'),
+                                     _row('flow', cid='1:http', app='chargen', when='2026-01-01T01:00:00.000000+0000'),
+                                     _row('flow', cid='1:other', app='chargen')]),
+                         [('conn_chargen', 'chargen'), ('conn_chargen', 'chargen')],
                          'the same Community ID an hour later is another connection; another ID is too')
 
 

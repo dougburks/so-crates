@@ -23263,6 +23263,8 @@ class TestTsharkUI(unittest.TestCase):
         'mms': {'event_type': 'mms', 'mms': {'initiate': 'accepted', 'vendor': 'Fixture Vendor', 'model': 'Fixture Relay',
                                              'revision': '1.2', 'domains': ['IED1LD0', 'IED1CTRL'],
                                              'services': {'read': 1, 'write': 2}, 'errors': 0}},
+        'rsh': {'event_type': 'rsh', 'rsh': {'service': 'rexec', 'user': 'operator', 'password': 's3cret',
+                                             'command': 'shutdown -r now', 'result': 'refused', 'error': 'Login incorrect.'}},
         'mongodb': {'event_type': 'mongodb', 'mongodb': {'commands': {'isMaster': 1, 'listDatabases': 1}, 'errors': 0,
                                                         'answered': True, 'driver': 'PyMongo 4.6.3', 'user': 'alice',
                                                         'login': 'failed', 'databases': ['admin', 'shop'],
@@ -23331,6 +23333,7 @@ class TestTsharkUI(unittest.TestCase):
         'opcua': ['opc.tcp://10.1.0.48:4840/fixture', 'None', 'Fixture Client', 'user1', 's3cret', 'Good'],
         'opcua_action': ['Call', 'ns=1;i=62541', 'Hello', 'BadNodeIdUnknown'],
         'mms': ['accepted', 'IED1LD0, IED1CTRL', 'Fixture Vendor', 'Fixture Relay'],
+        'rsh': ['rexec', 'operator', '', 'shutdown -r now', 's3cret', 'refused'],
         'mongodb': ['PyMongo 4.6.3', 'alice', 'failed', 'admin, shop', '6.0.5', 'yes'],
         'mongodb_action': ['insert', 'READ_ME', 'README', '1', 'ok'],
         'pn_dcp': ['Set', '', 'IP address', '', '10.9.9.9', 'ok', ''],
@@ -23372,7 +23375,7 @@ class TestTsharkUI(unittest.TestCase):
                 # one record per point, so its section is a point's
                 section = {'iec104_point': 'IEC 104 Point', 'bacnet_property': 'BACnet Property',
                            'bacnet_device': 'BACnet Device', 'opcua_action': 'OPC UA Action', 'mms_action': 'MMS Action',
-                           'pn_dcp': 'PROFINET DCP', 'pn_device': 'PROFINET Device', 'mongodb_action': 'MongoDB Action',
+                           'pn_dcp': 'PROFINET DCP', 'pn_device': 'PROFINET Device', 'mongodb_action': 'MongoDB Action', 'rsh': 'Remote Shell',
                            'tls_failure': 'TLS Failure'}.get(t, r['label'])
                 self.assertIn(f'{section} Details', r['detail'])
 
@@ -23413,7 +23416,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 

@@ -2477,6 +2477,7 @@
                 s7comm: '#00897b',
                 ssdp: '#7e57c2',
                 telnet: '#ffa726',
+                rsh: '#ff8a65',
                 iec104: '#ef5350',
                 bacnet: '#ab47bc',
                 opcua: '#29b6f6',
@@ -4909,6 +4910,29 @@
             return html;
         }
 
+        // tshark's rsh, rlogin and rexec records (shark_protocols.RShell):
+        // one per connection - a session, or a probe and its answer.
+        function renderRshDetails(e) {
+            const r = e.rsh || {};
+            let html = htmlSection('Remote Shell Details', COLORS.EVENT.rsh);
+            html += htmlRowText('Service', r.service);
+            html += htmlRowText('Local User', r.local_user, 'mono');
+            html += htmlRowText('User', r.user, 'mono');
+            html += htmlRowText('Password', r.password, 'mono');
+            html += htmlRowText('Command', r.command, 'mono');
+            html += htmlRowText('Terminal', r.terminal);
+            html += htmlRowText('Error Port', r.stderr_port !== undefined ? String(r.stderr_port) : '');
+            html += htmlRowText('Result', r.result);
+            html += htmlRowText('Error', r.error);
+            html += htmlRowText('Login', r.login);
+            html += htmlRowText('Earlier Failed Logins', r.earlier_failures ? String(r.earlier_failures) : '');
+            html += htmlRowText('Output', r.output, 'mono');
+            // the lines typed in an rlogin session, one per line
+            if ((r.commands || []).length) html += htmlRow('Commands', escapeHtml(r.commands.join('\n')), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Probe', r.probe, 'mono');
+            return html;
+        }
+
         // tshark's SSDP records (shark_protocols.SSDP).
         function renderSsdpDetails(e) {
             const sp = e.ssdp || {};
@@ -5281,6 +5305,7 @@
             s7comm: renderS7commDetails,
             ssdp: renderSsdpDetails,
             telnet: renderTelnetDetails,
+            rsh: renderRshDetails,
             iec104: renderIec104Details,
             bacnet: renderBacnetDetails,
             opcua: renderOpcuaDetails,
@@ -8419,6 +8444,7 @@
             s7comm: 'S7comm',
             ssdp: 'SSDP',
             telnet: 'Telnet',
+            rsh: 'Remote Shell',
             iec104: 'IEC 104',
             bacnet: 'BACnet',
             opcua: 'OPC UA',
@@ -9584,6 +9610,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Object', 'Control', 'Value', 'Result'];
                 case 'pn_dcp':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Query', 'Changes', 'Station Name', 'IP', 'Result', 'Count'];
+                case 'rsh':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'User', 'Local User', 'Command', 'Password', 'Result'];
                 case 'mongodb':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Driver', 'User', 'Login', 'Databases', 'Server Version', 'Answered'];
                 case 'mongodb_action':
@@ -10071,6 +10099,7 @@
                 case 'pn_device':
                 case 'mongodb':
                 case 'mongodb_action':
+                case 'rsh':
                 case 'goose':
                 case 'browser':
                 case 'lldp':
@@ -12739,7 +12768,7 @@
                     if (r?.value !== undefined) return String(r.value);
                     return e.opcua_action?.arguments ? e.opcua_action.arguments.join(', ') : '';
                 }
-                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
+                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
                 case 'Updates': return e.iec104_point?.updates !== undefined ? String(e.iec104_point.updates) : '';
                 case 'Last Value': { const r = e.iec104_point || e.bacnet_property; return r?.last_value !== undefined ? String(r.last_value) : ''; }
                 // BACnet: an action's, a read/notification summary's, a device's
@@ -12775,7 +12804,7 @@
                     return d?.vendor || (d?.vendor_id !== undefined ? String(d.vendor_id) : '');
                 }
                 case 'Announcements': return e.bacnet_device?.announcements !== undefined ? String(e.bacnet_device.announcements) : '';
-                case 'User': return e.telnet?.username || e.opcua?.username || e.mongodb?.user || e.socks?.user || e.radius?.user || e.stun?.username || '';
+                case 'User': return e.telnet?.username || e.opcua?.username || e.mongodb?.user || e.rsh?.user || e.socks?.user || e.radius?.user || e.stun?.username || '';
                 // GOOSE: a state change's
                 case 'Control Block': return e.goose?.gocb_ref || '';
                 case 'Dataset': return e.goose?.dataset || '';
@@ -12802,10 +12831,12 @@
                 case 'Role': return e.pn_device?.role || '';
                 // MongoDB: a connection's, an action's
                 case 'Driver': return e.mongodb?.driver || '';
+                // rsh, rlogin, rexec: a connection's
+                case 'Local User': return e.rsh?.local_user || '';
                 case 'Databases': return (e.mongodb?.databases || []).join(', ');
                 case 'Database': return e.mongodb_action?.database || '';
                 case 'Collection': return e.mongodb_action?.collection || '';
-                case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || '';
+                case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || e.rsh?.password || '';
                 case 'Login': return e.telnet?.login || e.mongodb?.login || '';
                 case 'Area': return e.s7comm?.items?.[0]?.area || '';
                 case 'Error': return e.s7comm?.response?.error_class || '';
@@ -12968,6 +12999,7 @@
                 case 'Command': {
                     if (e.rip) return e.rip.command || '';
                     if (e.mongodb_action) return e.mongodb_action.command || '';
+                    if (e.rsh) return e.rsh.command || '';
                     if (e.event_type === 'iec104') return e.iec104?.action || e.iec104?.type || '';
                     if (e.event_type === 'pgsql') return e.pgsql?.response?.command_completed || '';
                     if (e.event_type === 'enip') return e.enip?.request?.command || e.enip?.response?.command || '';
@@ -13014,6 +13046,7 @@
                     if (e.event_type === 'opcua_action') return e.opcua_action?.service || '';
                     if (e.event_type === 'mms_action') return e.mms_action?.service || '';
                     if (e.event_type === 'pn_dcp') return e.pn_dcp?.service || '';
+                    if (e.event_type === 'rsh') return e.rsh?.service || '';
                     return e.krb5?.sname || '';
                 }
                 // The name alone, as the server aggregates it - the <suffix> is

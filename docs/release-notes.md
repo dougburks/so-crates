@@ -28,12 +28,20 @@
   collection or database dropped, a user or role created or granted -
   with its result; an insert shows its first document, which is where a
   ransom note turns up. These were connection cards before
+- **rsh, rlogin and rexec** - a record for each connection: the users,
+  the command and its output's start, rlogin's typed lines, the password
+  (rexec's, or the one typed at rlogin's prompt) and whether the server
+  accepted it - or, for a connection that opens with something else, the
+  scanner's probe and the service's answer. These were connection cards
+  before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
   of every device is low. A MongoDB database or collection dropped, or a
   user or role created or granted, is high; a MongoDB server answering
-  without a login, and any other MongoDB write or change, are medium
+  without a login, and any other MongoDB write or change, are medium. An
+  rsh, rlogin or rexec login is high; one of their services answering a
+  probe is low
 
 ### Themes
 

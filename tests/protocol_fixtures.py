@@ -910,6 +910,33 @@ def write_mongodb_pcap(path):
     write_pcap(path, mongodb_packets())
 
 
+# ---------------------------------------------------------------- rsh, rlogin, rexec
+#
+# One host (RSH_SERVER) running all three. alice runs `id; uname -a` as
+# root over rsh (accepted, with its output); operator's rexec of a reboot
+# is refused (Login incorrect); bob logs in over rlogin, types his password
+# at the prompt, then ls and exit; and a scanner sends rsh an HTTP request,
+# which it answers with an error.
+
+RSH_SERVER = '10.1.0.51'
+
+
+def rsh_packets():
+    rsh = [(True, b'0\x00alice\x00root\x00id; uname -a\x00'), (False, b'\x00'),
+           (False, b'uid=0(root) gid=0(root) groups=0(root)\nLinux plc 5.10.0\n')]
+    rexec = [(True, b'0\x00operator\x00s3cret\x00shutdown -r now\x00'), (False, b'\x01Login incorrect.\n')]
+    rlogin = [(True, b'\x00bob\x00bob\x00xterm/38400\x00'), (False, b'\x00'), (False, b'Password: '),
+              (True, b'hunter2\r'), (False, b'\r\nLast login: Mon Nov  2 09:00\r\n$ '), (True, b'ls\r'),
+              (False, b'ls\r\nnotes.txt\r\n$ '), (True, b'exit\r')]
+    probe = [(True, b'GET / HTTP/1.0\r\n\r\n'), (False, b'\x01Can not make pipe\n')]
+    return (tcp_segments(CLIENT, RSH_SERVER, 1022, 514, rsh) + tcp_segments(CLIENT, RSH_SERVER, 1023, 512, rexec)
+            + tcp_segments(CLIENT, RSH_SERVER, 1021, 513, rlogin) + tcp_segments(CLIENT, RSH_SERVER, 40000, 514, probe))
+
+
+def write_rsh_pcap(path):
+    write_pcap(path, rsh_packets())
+
+
 # ---------------------------------------------------------------- PROFINET DCP
 #
 # An engineering station (PN_ENGINEERING) asks every PROFINET device to

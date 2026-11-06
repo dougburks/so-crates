@@ -1698,6 +1698,14 @@ AGGREGATION_JSON_PATHS = {
         'Repeats': ['$.goose.repeats'],
         'Anomaly': ['$.goose.anomaly'],
     },
+    'rsh': {
+        'Service': ['$.rsh.service'],
+        'User': ['$.rsh.user'],
+        'Local User': ['$.rsh.local_user'],
+        'Command': ['$.rsh.command'],
+        'Password': ['$.rsh.password'],
+        'Result': ['$.rsh.result'],
+    },
     'mongodb': {
         'Driver': ['$.mongodb.driver'],
         'User': ['$.mongodb.user'],

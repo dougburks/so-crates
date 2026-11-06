@@ -2252,6 +2252,163 @@ class Telnet:
         return records
 
 
+# ---------------------------------------------------------------- rsh, rlogin, rexec
+#
+# The BSD remote shells, all in the clear, which Suricata doesn't parse.
+# Each opens with NUL-terminated strings from the client - rsh (514): the
+# port for errors, the local and remote user names and the command;
+# rexec (512): the port, the user name, the password and the command;
+# rlogin (513): a NUL, the local and remote user names and the terminal -
+# then a byte from the server, 0 to go ahead or 1 and why not. After
+# that rsh and rexec carry the command's output, and rlogin a terminal
+# session, read like Telnet's (a password prompt, the lines typed). One
+# 'rsh' record per connection; a start that isn't one of these (a
+# scanner's HTTP request) is kept as the probe it is, with the answer.
+
+_RSH_SERVICES = {'rsh': 'rsh', 'rlogin': 'rlogin', 'exec': 'rexec'}
+_RSH_PORTS = {512: 'rexec', 513: 'rlogin', 514: 'rsh'}
+_RSH_MAX_START = 1024
+_RSH_MAX_TEXT = 200
+
+
+def _rsh_text(data, limit=_RSH_MAX_TEXT):
+    """Bytes as one line of text - for a command's output, an error, a
+    probe: line breaks and tabs as spaces (runs of them as one), other
+    bytes that aren't text as dots, as a hex dump shows them."""
+    text = ''.join(' ' if ch in '\t\r\n ' else ch if ch > ' ' and ch not in '\x7f\ufffd' else '.'
+                   for ch in data.decode('utf-8', 'replace'))
+    text = ' '.join(text.split())
+    return text if len(text) <= limit else text[:limit] + '...'
+
+
+def _rsh_names(fields):
+    """Whether a start's strings read as user names and a command: text,
+    with a user name to log in as - not a probe's bytes that happen to
+    hold NULs."""
+    try:
+        texts = [f.decode('utf-8') for f in fields]
+    except UnicodeDecodeError:
+        return False
+    return bool(texts[1]) and all(ch >= ' ' or ch == '\t' for t in texts for ch in t)
+
+
+class _RshSession:
+    __slots__ = ('flow', 'first', 'service', 'client', 'server', 'started', 'answered', 'body', 'terminal')
+
+    def __init__(self, flow, when, service):
+        self.flow, self.first, self.service = flow, when, service
+        self.client = b''          # the client's bytes until its start is read
+        self.server = b''          # the server's, after its answer, for output
+        self.started = False
+        self.answered = False
+        self.body = {'service': service}
+        self.terminal = None       # rlogin's session, read as Telnet's (_TelnetSession)
+
+
+class RShell:
+    """rsh, rlogin and rexec - see the comment above."""
+    event_type = 'rsh'
+    app_protos = ('rsh', 'rlogin', 'exec')
+    fields = ('@rsh', '@rlogin', '@exec')
+
+    def __init__(self):
+        self.sessions = {}         # flow key -> _RshSession
+
+    def feed(self, pkt, v):
+        service = _RSH_SERVICES.get(pkt.app)
+        data = _hex((v['@' + pkt.app] or [''])[0]) if service else b''
+        if not data:
+            return
+        session = self.sessions.get(pkt.flow.key)
+        if session is None:
+            session = self.sessions[pkt.flow.key] = _RshSession(pkt.flow, pkt.when, service)
+        # the server is whoever's on the service's port
+        if _RSH_PORTS.get(pkt.sport) == service:
+            self._from_server(session, data)
+        else:
+            self._from_client(session, data)
+
+    def _from_client(self, session, data):
+        if session.started:
+            if session.terminal is not None:
+                Telnet._from_client(session.terminal, data.decode('utf-8', 'replace'))
+            return
+        session.client = (session.client + data)[:_RSH_MAX_START]
+        start = session.client
+        if session.service == 'rlogin':
+            if start[:1] != b'\x00':
+                return
+            fields = start[1:].split(b'\x00')
+            if len(fields) < 4:
+                return
+            if not _rsh_names(fields[:3]):
+                session.started = True         # not rlogin's start: a probe
+                return
+            local, remote, terminal = (f.decode('utf-8', 'replace') for f in fields[:3])
+            session.body.update({'local_user': local, 'user': remote, 'terminal': terminal})
+            session.terminal = _TelnetSession(session.flow, session.first)
+            rest = b'\x00'.join(fields[3:])
+        else:
+            fields = start.split(b'\x00')
+            if len(fields) < 5:
+                return
+            if not (fields[0].isdigit() or not fields[0]) or not _rsh_names(fields[1:4]):
+                session.started = True         # not its start: a probe
+                return
+            port, first, second, command = (f.decode('utf-8', 'replace') for f in fields[:4])
+            if port not in ('', '0'):
+                session.body['stderr_port'] = int(port)
+            if session.service == 'rexec':
+                session.body.update({'user': first, 'password': second})
+            else:
+                session.body.update({'local_user': first, 'user': second})
+            session.body['command'] = command[:4 * _RSH_MAX_TEXT]
+            rest = b''
+        session.started = True
+        session.client = b''
+        if rest and session.terminal is not None:
+            Telnet._from_client(session.terminal, rest.decode('utf-8', 'replace'))
+
+    def _from_server(self, session, data):
+        if not session.answered:
+            session.answered = True
+            if data[:1] == b'\x00':
+                session.body['result'] = 'accepted'
+                data = data[1:]
+            else:
+                # a refusal: byte 1, then why
+                session.body['result'] = 'refused'
+                data = data[1:] if data[:1] == b'\x01' else data
+                session.server = data
+                return
+        if session.body.get('result') == 'refused':
+            session.server = (session.server + data)[:4 * _RSH_MAX_TEXT]
+        elif session.terminal is not None:
+            Telnet._from_server(session.terminal, data.decode('utf-8', 'replace'))
+        elif len(session.server) < 4 * _RSH_MAX_TEXT:
+            session.server += data
+
+    def finish(self):
+        records = []
+        for session in self.sessions.values():
+            body = dict(session.body)
+            if session.client and _rsh_text(session.client):
+                body['probe'] = _rsh_text(session.client)
+            if body.get('result') == 'refused' and session.server.strip(b'\x00\r\n'):
+                # the reason runs to the end of its line
+                body['error'] = _rsh_text(session.server.split(b'\n', 1)[0])
+            elif session.server:
+                body['output'] = _rsh_text(session.server)
+            if session.terminal is not None:
+                body.update({k: v for k, v in session.terminal.body.items() if k in ('password', 'login',
+                                                                                   'earlier_failures')})
+                if session.terminal.commands:
+                    body['commands'] = session.terminal.commands
+            body.setdefault('result', 'no response')
+            records.append((session.flow, session.first, 'rsh', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -4258,7 +4415,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

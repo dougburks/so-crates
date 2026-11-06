@@ -30,6 +30,8 @@ MATCHES = {
                                            'endpoint': 'opc.tcp://plc:4840/'}),
     'telnet_login': ('telnet', {'banner': 'MOXA', 'username': 'admin', 'password': 'moxa-secret',
                                 'login': 'failed'}),
+    'rsh_login': ('rsh', {'service': 'rexec', 'user': 'operator', 'password': 'rexec-secret',
+                           'command': 'shutdown -r now', 'result': 'refused'}),
     's7_plc_control': ('s7comm', {'function': 'PLC Stop'}),
     's7_download': ('s7comm', {'function': 'Download block'}),
     'bacnet_device_control': ('bacnet', {'service': 'reinitializeDevice', 'state': 'coldstart',
@@ -60,6 +62,8 @@ MATCHES = {
     'rpc_exports': ('rpc', {'exports': ['/srv/nfs']}),
     'syslog_critical': ('syslog', {'severity': 'crit', 'hostname': 'fw01', 'message': 'disk failing'}),
     'pn_dcp_identify_all': ('pn_dcp', {'service': 'Identify', 'query': 'all', 'count': 1, 'responses': 3}),
+    'rsh_answering': ('rsh', {'service': 'rsh', 'probe': 'GET / HTTP/1.0', 'result': 'refused',
+                              'error': 'Can not make pipe'}),
     'rip_whole_table': ('rip', {'command': 'request', 'whole_table': True, 'responses': 1, 'route_count': 2}),
     'rpc_portmapper': ('rpc', {'mappings': [{'program': 'nfs'}, {'program': 'mountd'}]}),
     'bacnet_write': ('bacnet', {'service': 'writeProperty', 'object': 'analog-value,0', 'result': 'ok'}),
@@ -93,6 +97,7 @@ NON_MATCHES = [
     ('goose', {'changed': ['a']}),
     ('pn_dcp', {'service': 'Set', 'changes': ['signal'], 'result': 'ok'}),
     ('mongodb', {'commands': {'isMaster': 1}, 'answered': False}),
+    ('rsh', {'service': 'rsh', 'probe': 'GET / HTTP/1.0', 'result': 'no response'}),
     ('mongodb', {'commands': {'saslStart': 1, 'find': 3}, 'login': 'succeeded'}),
     ('pn_dcp', {'service': 'Identify', 'query': 'switch1', 'count': 2, 'responses': 0}),
     ('slp', {'function': 'Service Registration'}),
@@ -163,7 +168,7 @@ class TestFindings(unittest.TestCase):
         events = [_record(t, b, i) for i, (t, b) in enumerate(MATCHES.values())]
         result = findings.query_findings(self._db(events))
         details = ' '.join(f['detail'] for f in result['findings'])
-        for secret in ('hunter2', 'moxa-secret', 'bacnet-secret'):
+        for secret in ('hunter2', 'moxa-secret', 'bacnet-secret', 'rexec-secret'):
             self.assertNotIn(secret, details)
         by_rule = {f['rule']: f['detail'] for f in result['findings']}
         self.assertEqual(by_rule['telnet_login'], 'user admin - login failed')

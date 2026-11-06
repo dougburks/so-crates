@@ -218,6 +218,12 @@ RULES = (
          lambda b: _join(f"user {b['username']}" if b.get('username') else 'a password, no user name',
                          '- login failed' if b.get('login') == 'failed' else ''),
          "Telnet sends the user name and password as typed; the device's banner is on the record."),
+    Rule('rsh_login', 'high', 'rsh', 'rsh, rlogin or rexec login in the clear',
+         f"{_j('rsh', 'user')} IS NOT NULL",
+         lambda b: _join(b.get('service'), ('as', b.get('user')), ('from', b.get('local_user')),
+                         ('-', b.get('command')), ('-', b.get('result'))),
+         "The BSD remote shells send everything as typed - rexec its password, rlogin the one typed at its "
+         "prompt - and rsh and rlogin trust the client's word for who it is. The command run is on the record."),
     Rule('s7_plc_control', 'high', 's7comm', 'S7 PLC started or stopped',
          _in('s7comm', 'function', ['PLC Stop', 'PLC Control']),
          lambda b: _join(b.get('function'), (b.get('response') or {}).get('error')),
@@ -351,6 +357,11 @@ RULES = (
          lambda b: f"{_counted(b['responses'], 'device')} answered" if b.get('responses') else 'no answer',
          "A DCP Identify All lists every PROFINET device on the segment, with its name, type and address - "
          "routine from an engineering station, a survey from anywhere else."),
+    Rule('rsh_answering', 'low', 'rsh', 'rsh, rlogin or rexec service answering',
+         f"{_j('rsh', 'probe')} IS NOT NULL AND {_j('rsh', 'result')} != 'no response'",
+         lambda b: _join(b.get('service'), ('-', b.get('error') or b.get('result'))),
+         "Something that wasn't a login reached a remote shell service and it answered - a scanner found it "
+         "listening."),
     Rule('rip_whole_table', 'low', 'rip', 'RIP routing table handed out',
          f"{_j('rip', 'whole_table')} = 1 AND {_j('rip', 'responses')} IS NOT NULL",
          lambda b: _counted(b.get('route_count'), 'route'),
