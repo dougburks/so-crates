@@ -1,6 +1,6 @@
 # Themes
 
-SO-CRATES includes forty-two UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them: hovering a theme shows a live preview without changing the rest of the app, and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
+SO-CRATES includes forty-two UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them - six to a row, so the whole picker fits a 1080p window without scrolling. Hovering a theme shows a live preview without changing the rest of the app - a miniature of the analysis page, with stat cards in their Triage, Protocol records and Connections sections, each number in its event type's color, and a fun theme's corner brackets on the active card - and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
 
 Click any screenshot below to zoom in.
 
@@ -79,6 +79,8 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/white.png" width="360" height="225" alt="White theme">
 
 ## Fun Themes
+
+Each Fun theme also swaps the plain loading messages shown while a file is analyzed for its own - Thermal's and Blueprint's included. The Dark and Light themes keep the plain ones.
 
 Every theme on this page (Fun or otherwise) can also be switched to by typing its name anywhere outside a text field and pressing Enter (if what you've typed also matches another theme, arrow to the right one first) - see [Command Palette](usage/keyboard-and-menus.md#command-palette).
 
