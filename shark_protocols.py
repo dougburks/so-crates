@@ -521,7 +521,7 @@ class RPC:
             if procedure is not None:
                 names = _RPCBIND_PROCEDURES if body['program'] == 'portmapper' and (version or 2) > 2 \
                     else _RPC_PROCEDURES.get(body['program'], ())
-                body['procedure'] = names[procedure] if procedure < len(names) else f'procedure {procedure}'
+                body['procedure'] = names[procedure] if 0 <= procedure < len(names) else f'procedure {procedure}'
             self.records.append((pkt.flow, pkt.when, self.event_type, body))
         if kind == 0:
             body['calls'] = body.get('calls', 0) + 1
@@ -3810,14 +3810,16 @@ class Synphasor:
                 body['pmus'] = pmus
             if first('synphasor.rate_of_transmission'):
                 rate = _int(first('synphasor.rate_of_transmission'))
-                body['data_rate'] = f'{rate} per second' if rate > 0 else f'1 per {-rate} seconds'
+                if rate:
+                    body['data_rate'] = f'{rate} per second' if rate > 0 else f'1 per {-rate} seconds'
         elif kind == 5:
             stations = [n.strip() for n in v['synphasor.station_name'] if n.strip()]
             if stations:
                 body.setdefault('pmus', [{'station': n} for n in stations[:_SYNPHASOR_PMUS_MAX]])
             if first('synphasor.rate_of_transmission'):
                 rate = _int(first('synphasor.rate_of_transmission'))
-                body['data_rate'] = f'{rate} per second' if rate > 0 else f'1 per {-rate} seconds'
+                if rate:
+                    body['data_rate'] = f'{rate} per second' if rate > 0 else f'1 per {-rate} seconds'
         elif kind == 0:
             for field, key in (('synphasor.data.sync', 'not_synced'), ('synphasor.data.trigger', 'triggered'),
                                ('synphasor.data.CFGchange', 'config_changed'),
@@ -6133,7 +6135,7 @@ class PNDCP:
         if body is None:
             return
         if service == 'Identify':
-            body['responses'] += 1
+            body['responses'] = body.get('responses', 0) + 1     # (its xid can match a Set's or Get's)
             return
         errors = [_PN_DCP_ERRORS.get(e, f'error {e}') for e in (_int(x) for x in v['pn_dcp.block_error']) if e]
         body['result'] = ', '.join(dict.fromkeys(errors)) if errors else 'ok' if kind == 1 else 'not supported'
@@ -6392,6 +6394,18 @@ def _dict(value):
     return value if isinstance(value, dict) else {}
 
 
+def _text(value):
+    """A JSON tree's text field - '' for anything else (a field tshark
+    wrote twice comes out a list)."""
+    return value if isinstance(value, str) else ''
+
+
+def _id(value):
+    """A request or invoke ID from a JSON tree - None for anything that
+    can't key a dict (a field tshark wrote twice comes out a list)."""
+    return value if isinstance(value, (str, int)) and not isinstance(value, bool) else None
+
+
 def _child(tree, name):
     """A JSON subtree's child by its label's name - tshark keys a
     structure 'Name: Type'."""
@@ -6502,7 +6516,7 @@ class OPCUA:
             body.setdefault('endpoint', pdu['opcua.transport.endpoint'])
         elif kind == 'ERR':
             body['transport_error'] = _opcua_status(pdu.get('opcua.transport.error', ''))
-        elif kind == 'OPN' and pdu.get('opcua.security.spu'):
+        elif kind == 'OPN' and _text(pdu.get('opcua.security.spu')):
             body.setdefault('security_policy', pdu['opcua.security.spu'].rsplit('#', 1)[-1])
         message = _child(pdu, 'Message')
         if not isinstance(message, dict):
@@ -6516,7 +6530,7 @@ class OPCUA:
         tree = message.get(name) if name in message else _child(message, name) if name else None
         if not name or not isinstance(tree, dict):
             return
-        request_id = pdu.get('opcua.sequence.rqid')
+        request_id = _id(pdu.get('opcua.sequence.rqid'))
         if name.endswith('Request'):
             self._request(pkt, session, name, tree, request_id)
         elif name.endswith('Response') or name == 'ServiceFault':
@@ -6820,7 +6834,7 @@ class MMS:
         elif kind == 'mms.confirmed_ResponsePDU_element' and isinstance(tree, dict):
             self._response(association, tree)
         elif kind == 'mms.confirmed_ErrorPDU_element' and isinstance(tree, dict):
-            self._failed(association, tree.get('mms.invokeID'), _mms_error(tree) or 'error')
+            self._failed(association, _id(tree.get('mms.invokeID')), _mms_error(tree) or 'error')
         elif kind == 'mms.unconfirmed_PDU_element' and isinstance(tree, dict):
             service = _mms_name(_MMS_UNCONFIRMED, tree.get('mms.unconfirmedService'))
             reports = body.setdefault('reports', {})
@@ -6841,7 +6855,7 @@ class MMS:
         request = tree.get('mms.confirmedServiceRequest_tree')
         self._domains(association, request)
         actions = self._changes(pkt, service, request) if service in _MMS_CHANGES else []
-        invoke = tree.get('mms.invokeID')
+        invoke = _id(tree.get('mms.invokeID'))
         if invoke is not None:
             association.waiting[invoke] = (service, actions)
             if len(association.waiting) > 256:
@@ -6877,7 +6891,7 @@ class MMS:
         return actions
 
     def _response(self, association, tree):
-        waiting = association.waiting.pop(tree.get('mms.invokeID'), None)
+        waiting = association.waiting.pop(_id(tree.get('mms.invokeID')), None)
         service = waiting[0] if waiting else _mms_name(_MMS_SERVICES, tree.get('mms.confirmedServiceResponse'))
         response = tree.get('mms.confirmedServiceResponse_tree')
         if waiting and waiting[1]:
@@ -7058,9 +7072,9 @@ class MongoDB:
         reply_to = _int(message.get('mongo.response_to')) or 0
         if opcode == _MONGO_REPLY or (opcode == _MONGO_MSG and reply_to not in (0, 0xffffffff)):
             body['answered'] = True
-            self._reply(connection, message.get('mongo.response_to'), docs[0] if docs else {})
+            self._reply(connection, _id(message.get('mongo.response_to')), docs[0] if docs else {})
             return
-        namespace = message.get('mongo.full_collection_name') or ''
+        namespace = _text(message.get('mongo.full_collection_name'))
         database, _, collection = namespace.partition('.')
         if opcode in (_MONGO_QUERY, _MONGO_MSG) and docs and (opcode == _MONGO_MSG or collection == '$cmd'):
             command, target = (_mongo_elements(docs[0]) or [(None, None)])[0]
@@ -7080,7 +7094,7 @@ class MongoDB:
             if command.lower() in ('hello', 'ismaster'):
                 self._client(body, _mongo_get(docs[0], 'client'))
         actions = self._change(pkt, opcode, command, database, collection, docs) if command in _MONGO_CHANGES else []
-        request_id = message.get('mongo.request_id')
+        request_id = _id(message.get('mongo.request_id'))
         if request_id is not None:
             connection.waiting[request_id] = (command, actions)
             if len(connection.waiting) > 256:

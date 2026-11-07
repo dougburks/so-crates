@@ -3942,6 +3942,42 @@ class TestHostileProtocolInput(unittest.TestCase):
         irc.feed(Packet(1, 1.0, flow, 6667, 50000, 'irc', '10.0.0.9', '10.0.0.5'), {'@irc': [lines.encode().hex()]})
         self.assertEqual(irc.connections[flow.key].body['dcc'][0]['address'], '\u00b2:5')
 
+    @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+    def test_a_parser_that_raises_skips_its_packet_not_the_run(self):
+        """For a user, a parser's exception costs the packet it was reading,
+        counted for the server's log - not every record of the run. The
+        tests run strict, so a parser's bug fails them."""
+        from shark_protocols import Redis
+        from tests.protocol_fixtures import write_redis_pcap
+        with tempfile.TemporaryDirectory() as tmp:
+            pcap = os.path.join(tmp, 'redis.pcap')
+            write_redis_pcap(pcap)
+            calls = []
+
+            def flaky(self, pkt, v, feed=Redis.feed):
+                calls.append(pkt.frame)
+                if len(calls) == 3:
+                    raise ValueError('a bug')
+                return feed(self, pkt, v)
+            with mock.patch.object(Redis, 'feed', flaky), mock.patch.object(shark_analyzer, '_STRICT_PARSERS', False):
+                records = shark_analyzer.run_tshark(pcap)
+                self.assertEqual(shark_analyzer._PARSER_ERRORS, {'Redis': [1, 'ValueError: a bug']})
+            # (the third packet was the inline connection's only command:
+            # that connection has no record, the other three do)
+            self.assertEqual(sum(r['event_type'] == 'redis' for r in records), 3)
+            self.assertEqual(sum(r['event_type'] == 'flow' for r in records), 4, 'every flow still there')
+            calls.clear()
+            with mock.patch.object(Redis, 'feed', flaky), mock.patch.object(shark_analyzer, '_STRICT_PARSERS', True):
+                with self.assertRaises(ValueError):
+                    shark_analyzer.run_tshark(pcap)
+
+    def test_json_fields_tshark_wrote_twice(self):
+        """tshark's JSON makes a field that appears twice a list: an ID that
+        is one keys nothing, and text that is one reads as empty."""
+        from shark_protocols import _id, _text
+        self.assertEqual([_id(v) for v in ('7', 7, ['7', '8'], {'a': 1}, True, None)], ['7', 7, None, None, None, None])
+        self.assertEqual([_text(v) for v in ('db.coll', ['a', 'b'], 5, None)], ['db.coll', '', '', ''])
+
     def test_passwords_a_statement_or_command_gives_are_masked(self):
         from shark_protocols import _TACACS_SECRET, _sql_password
         for statement, shown, password in (

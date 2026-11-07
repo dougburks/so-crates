@@ -180,6 +180,13 @@
   threw them away and queued them again, over and over, the status saying
   it was waiting on something else to finish. A newer build is now used
   as it is
+- **One bad packet no longer costs every tshark record** - a packet one of
+  tshark's protocol parsers couldn't make sense of stopped the whole run,
+  and the analysis lost every protocol's records, not just that one's. Now
+  the parser skips that packet, and the server's log says how many it
+  skipped and why. Fuzzing every parser turned up the packets that did
+  this - in OPC UA, MMS, MongoDB, PROFINET DCP, ONC RPC and C37.118, and in
+  the new parsers before release - and each is fixed
 
 ## 5.2.0
 

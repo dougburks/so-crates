@@ -940,7 +940,12 @@ def iter_records(lines, pcap_path=None, deadline=None, combined=()):
     finally:
         protocols += passes.wait()
     for handler in protocols + structured:
-        for flow, when, event_type, body in handler.finish():
+        try:
+            records = handler.finish()
+        except Exception as error:
+            _parser_failed(handler, error)
+            continue
+        for flow, when, event_type, body in records:
             yield flow.record(when, event_type, body)
     yield from tunnels.records()
     yield from tls_failures.records()
@@ -1118,7 +1123,10 @@ def _structured_pass(pcap_path, flows, handlers, total_frames, deadline=None, on
                     packet = Packet(_int(frame.get('frame.number')), when, flow, flow.cport, flow.sport)
                     for handler in active:
                         if any(name in layers for name in handler.layers):
-                            handler.feed_json(packet, layers)
+                            try:
+                                handler.feed_json(packet, layers)
+                            except Exception as error:
+                                _parser_failed(handler, error)
                 proc.wait()
             finally:
                 if killer:
@@ -1258,6 +1266,24 @@ def _feed_outer(cols, f, app, index, feeds):
         _feed(cols, feeds, Packet(_int(f[_F_FRAME]), when, _open_at(candidates, when), sport, dport, app, src, dst))
 
 
+# A parser that raises on one packet skips that packet, rather than failing
+# the run and losing every protocol's records: bytes a capture's sender
+# chose shouldn't be able to do that. Each parser's count of skipped
+# packets and first error, for the run (build reports them in the server's
+# log); the tests set SOCRATES_STRICT_PARSERS, so a parser's bug fails them
+# instead of passing unseen.
+_STRICT_PARSERS = bool(os.environ.get('SOCRATES_STRICT_PARSERS'))
+_PARSER_ERRORS = {}
+_PARSER_ERROR_PREFIX = 'tshark parser skipped'
+
+
+def _parser_failed(handler, error):
+    if _STRICT_PARSERS:
+        raise error
+    entry = _PARSER_ERRORS.setdefault(type(handler).__name__, [0, f'{type(error).__name__}: {error}'[:200]])
+    entry[0] += 1
+
+
 def _feed(cols, feeds, packet):
     """A packet's fields to each protocol it's for."""
     app = packet.app
@@ -1271,8 +1297,11 @@ def _feed(cols, feeds, packet):
         values = [cols[i] if i < len(cols) else '' for i in columns]
         if not any(values):
             continue
-        handler.feed(packet, {name: [_unescape(x) for x in value.split(_AGGREGATOR)] if value else []
-                              for name, value in zip(handler.fields, values)})
+        try:
+            handler.feed(packet, {name: [_unescape(x) for x in value.split(_AGGREGATOR)] if value else []
+                                  for name, value in zip(handler.fields, values)})
+        except Exception as error:
+            _parser_failed(handler, error)
 
 
 def build_flows(lines):
@@ -1335,6 +1364,7 @@ def run_tshark(pcap_path, timeout=None, on_start=None, consume=list, notes=None)
     shark.db instead. Raises RuntimeError if tshark is missing, fails, is
     killed, or exceeds the timeout. on_start, if given, is called with the
     tshark process as soon as it starts."""
+    _PARSER_ERRORS.clear()
     if not shutil.which('tshark'):
         raise RuntimeError('tshark is not installed')
     # A capture mostly of protocols with records: one pass asking for the
@@ -1489,6 +1519,11 @@ def _analyze(dir_path, pcap_path, on_start, run_dir):
             proc.wait()
         watchdog.join()
         succeeded = not too_big.is_set() and proc.returncode == 0
+        if succeeded:
+            stderr_file.seek(0)
+            for line in stderr_file.read()[-64 * 1024:].splitlines():
+                if line.startswith(_PARSER_ERROR_PREFIX):
+                    print(f'Warning: {line}', file=sys.stderr)
         if not too_big.is_set() and (proc.returncode == 0 or _was_cancelled(dir_path)
                                      or os.path.exists(os.path.join(dir_path, SHARK_ERROR))):
             return succeeded
@@ -1551,6 +1586,8 @@ def build(dir_path, pcap_path, copy_dir=None, from_copy=False):
         finally:
             conn.close()
         os.replace(tmp_path, db_path)
+        for name, (count, error) in sorted(_PARSER_ERRORS.items()):
+            print(f'{_PARSER_ERROR_PREFIX} {count} packet(s) of {name} in {pcap_path} - {error}', file=sys.stderr)
         return True
     except Exception as e:
         _remove(tmp_path)
