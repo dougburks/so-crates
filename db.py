@@ -1804,6 +1804,31 @@ AGGREGATION_JSON_PATHS = {
         'Resp Bytes': ['$.memcache.response_bytes'],
         'Amplification': ['$.memcache.amplification'],
     },
+    'redis': {
+        'DB User': ['$.redis.user'],
+        'Auth': ['$.redis.auth'],
+        'Commands': ['$.redis.commands'],
+        'Keys': ['$.redis.keys'],
+        'Server Version': ['$.redis.server_version'],
+        'Answered': ['$.redis.answered'],
+        'Errors': ['$.redis.errors'],
+    },
+    'redis_command': {
+        'DB User': ['$.redis_command.user'],
+        'Command': ['$.redis_command.name'],
+        'Statement': ['$.redis_command.command'],
+        'Result': ['$.redis_command.result'],
+        'Count': ['$.redis_command.count'],
+    },
+    'zabbix': {
+        'Request': ['$.zabbix.request'],
+        'Host': ['$.zabbix.host'],
+        'Version': ['$.zabbix.version'],
+        'Connections': ['$.zabbix.connections'],
+        'Keys': ['$.zabbix.keys'],
+        'Commands': ['$.zabbix.commands'],
+        'Answered': ['$.zabbix.answered'],
+    },
     'mssql': {
         'DB User': ['$.mssql.user'],
         'Database': ['$.mssql.database'],
@@ -2002,6 +2027,7 @@ AGGREGATION_TRUNCATE = {
     ('tns_statement', 'Statement'): 200,
     ('mysql_statement', 'Statement'): 200,
     ('mssql_statement', 'Statement'): 200,
+    ('redis_command', 'Statement'): 200,
 }
 
 # Value transforms beyond plain extraction, matching extractValue's own
@@ -2014,6 +2040,8 @@ AGGREGATION_VALUE_TRANSFORMS = {
     ('hart_ip', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('mysql', 'SSL'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
     ('ecat', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('redis', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('zabbix', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('tacacs', 'Encrypted'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Connected'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
@@ -2064,10 +2092,14 @@ AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
     ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'), ('synphasor', 'Stations'), ('ecat', 'FoE'),
+    ('redis', 'Keys'), ('zabbix', 'Keys'),
 }
 # Object-valued columns shown as their keys, joined the same way (a count
 # per name: memcached's commands)
-AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages'), ('synphasor', 'Commands'), ('ecat', 'Commands'), ('ecat', 'State Requests')}
+AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages'), ('synphasor', 'Commands'), ('ecat', 'Commands'), ('ecat', 'State Requests'), ('redis', 'Commands'), ('redis', 'Errors')}
+# Columns of a list of objects shown as one field of each, joined with the
+# separator given (Zabbix's commands, each with its result)
+AGGREGATION_OBJECT_FIELD_JOIN_COLUMNS = {('zabbix', 'Commands'): ('command', '; ')}
 
 
 def _aggregation_expr(event_type, label, paths, prefix=''):
@@ -2082,6 +2114,10 @@ def _aggregation_expr(event_type, label, paths, prefix=''):
         expr = f"(SELECT group_concat(value, ', ') FROM json_each({prefix}json_data, '{paths[0]}'))"
     elif (event_type, label) in AGGREGATION_KEY_JOIN_COLUMNS:
         expr = f"(SELECT group_concat(key, ', ') FROM json_each({prefix}json_data, '{paths[0]}'))"
+    elif (event_type, label) in AGGREGATION_OBJECT_FIELD_JOIN_COLUMNS:
+        field, separator = AGGREGATION_OBJECT_FIELD_JOIN_COLUMNS[(event_type, label)]
+        expr = (f"(SELECT group_concat(json_extract(value, '$.{field}'), '{separator}') "
+                f"FROM json_each({prefix}json_data, '{paths[0]}'))")
     else:
         parts = [f"json_extract({prefix}json_data, '{p}')" for p in paths]
         expr = parts[0] if len(parts) == 1 else f"COALESCE({', '.join(parts)})"

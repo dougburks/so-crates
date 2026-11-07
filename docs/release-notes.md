@@ -95,6 +95,18 @@
   statement - a SQL Server RPC call's too - with its result and how many
   times it was sent; a password a statement sets is masked in it. These
   were connection cards before
+- **Redis** - a record for each connection (the login and its password,
+  the commands and keys, the server's version from INFO or HELLO, the
+  errors) and one for each distinct admin command - CONFIG, REPLICAOF,
+  MODULE, ACL, EVAL, SAVE, FLUSHALL... - with its answer; a password one
+  sets is masked in it. Inline commands from netcat too. These were
+  connection cards before
+- **Zabbix** - a record for each client, server and kind of request,
+  with how many connections it took: the host, version and item keys,
+  and every command - a system.run item, a remote command, a frontend
+  script - with its output or refusal; and which kinds of credentials a
+  proxy's configuration carried, never their values. These were
+  connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -124,7 +136,12 @@
   files, SQL Server running operating-system commands, and a SQL Server
   login sent unencrypted are high; any other write, password hashes read,
   a MySQL login with no password and a SQL Server configuration change
-  are medium; a failed login is low
+  are medium; a failed login is low. Zabbix running a command, and Redis
+  made a replica, loading a module, told to save somewhere else, its users
+  or password changed, or flushed, are high; Redis answering without a
+  password, Redis running Lua, any other Redis configuration change,
+  Zabbix reading files and Zabbix credentials sent unencrypted are
+  medium; a failed Redis login and a Zabbix agent refusing checks are low
 
 ### Themes
 

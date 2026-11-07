@@ -19,6 +19,7 @@ the addresses, ports and Community ID from the flow, oriented client to
 server like its flow records.
 """
 
+import json
 import math
 import re
 import socket
@@ -4328,6 +4329,620 @@ class TDS:
         return records
 
 
+# ---------------------------------------------------------------- Redis
+#
+# Redis and its forks (Valkey, KeyDB) on TCP 6379, which Suricata doesn't
+# parse. Often reachable without a password, or with one sent in the
+# clear (AUTH); and its own admin commands are the usual way in: CONFIG
+# SET dir and dbfilename then SAVE writes the database - with a key
+# holding an SSH key, a cron line or a web shell - over a file of the
+# attacker's choosing; REPLICAOF a rogue server hands it the data, and
+# MODULE LOAD runs a library from it; EVAL runs Lua (CVE-2022-0543's
+# sandbox escape). Two record types: 'redis', one per connection - the
+# commands counted, the first keys, the login and its password, the
+# server's version (from INFO or HELLO), the errors - and
+# 'redis_command', one per distinct admin command (CONFIG, REPLICAOF,
+# MODULE, ACL, EVAL, SAVE, FLUSHALL...) with its answer, counted. Read
+# from the messages' bytes: RESP arrays, or the inline commands netcat
+# sends. A password a command sets (ACL SETUSER's >, CONFIG SET
+# requirepass) is masked in it and kept beside it.
+
+_REDIS_ADMIN = frozenset('CONFIG SLAVEOF REPLICAOF MODULE EVAL EVALSHA EVAL_RO EVALSHA_RO FCALL FCALL_RO FUNCTION '
+                         'SCRIPT SAVE BGSAVE BGREWRITEAOF FLUSHALL FLUSHDB SHUTDOWN DEBUG ACL MIGRATE SYNC PSYNC '
+                         'FAILOVER CLUSTER'.split())
+_REDIS_SUBCOMMANDS = frozenset('CONFIG MODULE FUNCTION SCRIPT ACL CLIENT DEBUG CLUSTER COMMAND MEMORY OBJECT '
+                               'XINFO XGROUP SLOWLOG LATENCY'.split())
+_REDIS_CLIENT_ADMIN = frozenset(('KILL', 'PAUSE', 'NO-EVICT', 'NO-TOUCH'))
+_REDIS_NO_KEY = frozenset('AUTH HELLO PING ECHO INFO CONFIG CLIENT SELECT DBSIZE KEYS SCAN RANDOMKEY FLUSHALL FLUSHDB '
+                          'SAVE BGSAVE BGREWRITEAOF LASTSAVE SHUTDOWN SLAVEOF REPLICAOF MODULE EVAL EVALSHA EVAL_RO '
+                          'EVALSHA_RO FCALL FCALL_RO FUNCTION SCRIPT ACL DEBUG COMMAND TIME ROLE MONITOR SUBSCRIBE '
+                          'PSUBSCRIBE SSUBSCRIBE UNSUBSCRIBE PUNSUBSCRIBE SUNSUBSCRIBE PUBLISH SPUBLISH PUBSUB SLOWLOG '
+                          'LATENCY MEMORY MULTI EXEC DISCARD UNWATCH QUIT RESET CLUSTER READONLY READWRITE WAIT '
+                          'WAITAOF SYNC PSYNC REPLCONF SWAPDB MIGRATE FAILOVER LOLWUT'.split())
+_REDIS_WRITES = frozenset('SET SETEX PSETEX SETNX MSET MSETNX APPEND SETRANGE SETBIT GETSET GETDEL GETEX DEL UNLINK '
+                          'INCR INCRBY INCRBYFLOAT DECR DECRBY HSET HSETNX HMSET HDEL HINCRBY HINCRBYFLOAT LPUSH '
+                          'LPUSHX RPUSH RPUSHX LPOP RPOP LSET LREM LTRIM LINSERT LMOVE RPOPLPUSH SADD SREM SPOP SMOVE '
+                          'SINTERSTORE SUNIONSTORE SDIFFSTORE ZADD ZREM ZINCRBY ZPOPMIN ZPOPMAX ZREMRANGEBYSCORE '
+                          'ZREMRANGEBYRANK ZREMRANGEBYLEX ZUNIONSTORE ZINTERSTORE RENAME RENAMENX EXPIRE PEXPIRE '
+                          'EXPIREAT PEXPIREAT PERSIST MOVE COPY RESTORE XADD XDEL XTRIM PFADD PFMERGE GEOADD '
+                          'FLUSHALL FLUSHDB SWAPDB'.split())
+_REDIS_SECRET_SETTINGS = frozenset(('requirepass', 'masterauth', 'tls-key-file-pass', 'tls-client-key-file-pass'))
+_REDIS_COMMANDS_MAX = 500           # distinct admin commands kept per connection
+_REDIS_ARG_MAX = 200
+_REDIS_COMMAND_MAX = 1000
+_REDIS_KEYS_MAX = 10
+_REDIS_WAITING_MAX = 1000           # commands sent and not yet answered
+_REDIS_BUFFER_MAX = 1 << 20         # bytes of a message split across packets held for the rest
+_REDIS_DEPTH_MAX = 8
+
+
+class _RESPIncomplete(Exception):
+    pass
+
+
+class _RESPError(str):
+    """A RESP error reply: its text."""
+
+
+def _resp_line(data, at):
+    end = data.find(b'\r\n', at)
+    if end < 0:
+        if len(data) - at > 65536:
+            raise ValueError('no line end')
+        raise _RESPIncomplete
+    return data[at:end], end + 2
+
+
+def _resp_value(data, at, depth=0):
+    """One RESP2/RESP3 value at data[at]: (value, where the next starts) -
+    a bulk string as bytes, an array, set or map as a list (a map's keys
+    and values in turn), an error as _RESPError. _RESPIncomplete if the
+    data ends before it does, ValueError if it isn't RESP."""
+    if at >= len(data):
+        raise _RESPIncomplete
+    if depth > _REDIS_DEPTH_MAX:
+        raise ValueError('too deep')
+    kind = data[at:at + 1]
+    line, at = _resp_line(data, at + 1)
+    if kind in (b'+', b'-', b':', b',', b'(', b'#', b'_'):
+        text = line.decode('utf-8', 'replace')
+        return (_RESPError(text) if kind == b'-' else None if kind == b'_' else text), at
+    if kind in (b'$', b'!', b'='):
+        size = int(line)
+        if size < 0:
+            return None, at
+        if len(data) < at + size + 2:
+            raise _RESPIncomplete
+        value = data[at:at + size]
+        return (_RESPError(value.decode('utf-8', 'replace')) if kind == b'!' else value), at + size + 2
+    if kind in (b'*', b'~', b'>', b'%', b'|'):
+        count = int(line)
+        if count < 0:
+            return None, at
+        count *= 2 if kind in (b'%', b'|') else 1
+        items = []
+        for _ in range(count):
+            item, at = _resp_value(data, at, depth + 1)
+            if len(items) < 256:
+                items.append(item)
+        if kind == b'|':                     # an attribute: the reply itself follows
+            return _resp_value(data, at, depth)
+        return (('push', items) if kind == b'>' else items), at
+    raise ValueError('not RESP')
+
+
+def _resp_text(value):
+    return value.decode('utf-8', 'replace') if isinstance(value, bytes) else str(value)
+
+
+def _redis_quote(arg):
+    text = arg[:_REDIS_ARG_MAX]
+    if not text or any(ch in text for ch in ' "\'\\') or not text.isprintable():
+        text = '"' + text.replace('\\', '\\\\').replace('"', '\\"').encode('unicode_escape').decode('ascii') + '"'
+    return text + ('...' if len(arg) > _REDIS_ARG_MAX else '')
+
+
+class _RedisConnection:
+    __slots__ = ('flow', 'first', 'body', 'buffers', 'waiting', 'commands', 'keys', 'known', 'pubsub')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}}
+        self.buffers = [b'', b'']    # bytes of a message still to come: from the client, from the server
+        self.waiting = []            # (command name, args, admin record or None), oldest first
+        self.commands = {}           # command text -> [when, body]
+        self.keys = {}               # key -> None, in first-seen order
+        self.known = False           # a message of Redis's seen
+        self.pubsub = False          # subscribed: the server sends messages unasked
+
+
+class Redis:
+    """Redis - see the comment above."""
+    event_type = 'redis'
+    app_protos = ('resp',)
+    fields = ('@resp',)
+
+    def __init__(self):
+        self.connections = {}        # flow key -> _RedisConnection
+
+    def feed(self, pkt, v):
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _RedisConnection(pkt.flow, pkt.when)
+        side = 0 if (pkt.src, pkt.sport) == (pkt.flow.client, pkt.flow.cport) else 1
+        for raw in v['@resp']:
+            data = conn.buffers[side] + _hex(raw)
+            conn.buffers[side] = b''
+            at = 0
+            while at < len(data):
+                inline = side == 0 and data[at:at + 1] != b'*'
+                try:
+                    if inline:
+                        line, end = _resp_line(data, at)
+                        value = [w.encode() for w in line.decode('utf-8', 'replace').split()]
+                    else:
+                        value, end = _resp_value(data, at)
+                except _RESPIncomplete:
+                    if len(data) - at <= _REDIS_BUFFER_MAX:
+                        conn.buffers[side] = data[at:]
+                    break
+                except ValueError:
+                    break                    # not Redis's - or the capture started mid-message
+                at = end
+                if side == 0:
+                    self._command(conn, pkt.when, value, inline)
+                else:
+                    self._reply(conn, value)
+
+    def _command(self, conn, when, value, inline):
+        if not isinstance(value, list) or not value or not all(isinstance(a, bytes) for a in value):
+            return
+        args = [a.decode('utf-8', 'replace') for a in value]
+        name = args[0].upper()
+        if not name.replace('_', '').replace('.', '').replace('-', '').isalnum() or len(name) > 40:
+            return
+        conn.known = True
+        if inline:
+            conn.body['inline'] = True
+        if name in _REDIS_SUBCOMMANDS and len(args) > 1:
+            name = f'{name} {args[1].upper()}'
+        body = conn.body
+        commands = body['commands']
+        commands[name] = commands.get(name, 0) + 1
+        verb = name.split()[0]
+        if verb in _REDIS_WRITES:
+            body['changes'] = body.get('changes', 0) + 1
+        if verb not in _REDIS_NO_KEY and verb not in _REDIS_SUBCOMMANDS and len(args) > 1 \
+                and len(conn.keys) < _REDIS_KEYS_MAX:
+            conn.keys.setdefault(args[1][:_REDIS_ARG_MAX], None)
+        if verb == 'AUTH' and len(args) > 1:
+            body['user'] = args[1][:120] if len(args) > 2 else body.get('user', 'default')
+            body['password'] = args[-1][:120]
+        elif verb == 'HELLO' and 'AUTH' in (a.upper() for a in args):
+            at = [a.upper() for a in args].index('AUTH')
+            if len(args) > at + 2:
+                body['user'], body['password'] = args[at + 1][:120], args[at + 2][:120]
+        elif name == 'CLIENT SETNAME' and len(args) > 2:
+            body['client_name'] = args[2][:120]
+        elif name == 'CLIENT SETINFO' and len(args) > 3:
+            library = body.get('client', '').split()
+            library = (library + ['', ''])[:2]
+            library[0 if args[2].upper() == 'LIB-NAME' else 1] = args[3][:60]
+            body['client'] = ' '.join(filter(None, library))
+        elif verb in ('SUBSCRIBE', 'PSUBSCRIBE', 'SSUBSCRIBE'):
+            conn.pubsub = True
+        record = None
+        if verb in _REDIS_ADMIN or (verb == 'CLIENT' and len(args) > 1 and args[1].upper() in _REDIS_CLIENT_ADMIN):
+            record = self._admin(conn, when, name, args)
+        if len(conn.waiting) >= _REDIS_WAITING_MAX:
+            conn.waiting.pop(0)
+        conn.waiting.append((name, args, record))
+
+    @staticmethod
+    def _admin(conn, when, name, args):
+        shown, password = list(args), None
+        upper = [a.upper() for a in args]
+        if name == 'ACL SETUSER':
+            for i, arg in enumerate(shown[3:], 3):
+                if arg[:1] in '><' and len(arg) > 1:
+                    password = password or arg[1:]
+                    shown[i] = arg[0] + '***'
+        elif name == 'CONFIG SET':
+            for i in range(2, len(shown) - 1, 2):
+                if shown[i].lower() in _REDIS_SECRET_SETTINGS:
+                    password = password or shown[i + 1]
+                    shown[i + 1] = '***'
+        elif name.split()[0] == 'MIGRATE':
+            for word, skip in (('AUTH', 1), ('AUTH2', 2)):
+                if word in upper:
+                    at = upper.index(word) + skip
+                    if at < len(shown):
+                        password = password or shown[at]
+                        shown[at] = '***'
+        text = ' '.join(_redis_quote(a) for a in shown)[:_REDIS_COMMAND_MAX]
+        record = conn.commands.get(text)
+        if record is None:
+            if len(conn.commands) >= _REDIS_COMMANDS_MAX:
+                conn.body['commands_not_kept'] = conn.body.get('commands_not_kept', 0) + 1
+                return None
+            body = {'command': text, 'name': name, 'count': 0}
+            if name == 'CONFIG SET' and len(args) > 2:
+                body['settings'] = [s.lower() for s in args[2::2]][:20]
+            elif name.split()[0] in ('SLAVEOF', 'REPLICAOF') and len(args) > 2:
+                if upper[1:3] != ['NO', 'ONE']:
+                    body['master'] = f'{args[1]}:{args[2]}'
+            elif name == 'MODULE LOAD' and len(args) > 2:
+                body['module'] = args[2][:_REDIS_ARG_MAX]
+            if password:
+                body['password'] = password[:120]
+            record = conn.commands[text] = [when, body]
+        record[1]['count'] += 1
+        return record[1]
+
+    def _reply(self, conn, value):
+        if isinstance(value, tuple):                 # a RESP3 push: not an answer
+            return
+        if conn.pubsub and isinstance(value, list) and value and \
+                _resp_text(value[0]).lower() in ('message', 'pmessage', 'smessage'):
+            return
+        if not conn.waiting:
+            return
+        conn.known = True
+        body = conn.body
+        body['answered'] = True
+        name, args, record = conn.waiting.pop(0)
+        verb = name.split()[0]
+        if isinstance(value, _RESPError):
+            code = value.split(' ', 1)[0][:40] or 'ERR'
+            errors = body.setdefault('errors', {})
+            errors[code] = errors.get(code, 0) + 1
+            body['last_error'] = str(value)[:200]
+            if code == 'NOAUTH':
+                body.setdefault('auth', 'required')
+            if verb in ('AUTH', 'HELLO') and code in ('WRONGPASS', 'ERR', 'NOPERM', 'WRONGTYPE') \
+                    and 'password' in body:
+                body['auth'] = 'failed'
+                body['login_failures'] = body.get('login_failures', 0) + 1
+            result = str(value)[:300]
+        else:
+            if verb in ('AUTH', 'HELLO') and 'password' in body:
+                body['auth'] = 'succeeded'
+            elif verb not in ('AUTH', 'HELLO', 'PING', 'QUIT', 'ECHO', 'RESET') and 'auth' not in body:
+                body['auth'] = 'none'
+            if verb == 'INFO' and isinstance(value, bytes):
+                for line in value.split(b'\r\n'):
+                    key, _, val = line.decode('utf-8', 'replace').partition(':')
+                    if key in ('redis_version', 'valkey_version') and val:
+                        body['server_version'] = val[:40]
+                        body.setdefault('server', key.split('_')[0])
+                    elif key == 'server_name' and val:
+                        body['server'] = val[:40]
+                    elif key == 'os' and val:
+                        body['server_os'] = val[:80]
+                    elif key == 'role' and val:
+                        body['role'] = val[:20]
+            elif verb == 'HELLO' and isinstance(value, list):
+                pairs = dict(zip((_resp_text(k) for k in value[::2]), value[1::2]))
+                if pairs.get('version'):
+                    body['server_version'] = _resp_text(pairs['version'])[:40]
+                if pairs.get('server'):
+                    body['server'] = _resp_text(pairs['server'])[:40]
+                if pairs.get('role'):
+                    body['role'] = _resp_text(pairs['role'])[:20]
+            result = value if isinstance(value, str) and len(value) < 40 else \
+                f'{len(value)} items' if isinstance(value, list) else 'ok'
+            result = 'ok' if result == 'OK' else result
+        if record is not None:
+            record.setdefault('result', result)
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            if not conn.known:
+                continue
+            body = dict(conn.body)
+            body.setdefault('answered', False)
+            if conn.keys:
+                body['keys'] = list(conn.keys)
+            records.append((conn.flow, conn.first, 'redis', body))
+            for when, command in conn.commands.values():
+                command = dict(command, result=command.get('result', 'no response'))
+                if 'user' in body:
+                    command['user'] = body['user']
+                records.append((conn.flow, when, 'redis_command', command))
+        return records
+
+
+# ---------------------------------------------------------------- Zabbix
+#
+# Zabbix's agent and server protocol (TCP 10050 to an agent, 10051 to a
+# server or proxy), which Suricata doesn't parse: a server asking an
+# agent for items (passive checks), an agent asking the server which
+# items to send and sending them (active checks, agent data), zabbix_sender
+# pushing values, proxies fetching their configuration and sending their
+# data, and the frontend asking the server to run a script. One item,
+# system.run[...], runs a shell command on the agent - remote code
+# execution by design, and attackers' too, through a stolen server or a
+# rogue one an agent trusts, or zabbix_get against an agent that allows
+# it; an active agent also runs the commands a server sends it. And a
+# proxy's configuration carries its hosts' IPMI and SNMP passwords, TLS
+# PSKs and secret macros, unencrypted unless TLS was set up. Agents open
+# a connection per exchange, every few seconds, so one 'zabbix' record
+# per client, server and request kind - the connections counted: the
+# host name, version, item keys, commands with their output, errors, and
+# which kinds of credentials a configuration carried (never the values).
+# Read from tshark's fields: a message without Zabbix's header (a bare
+# key from netcat, which today's agents refuse) isn't decoded.
+
+_ZABBIX_KEYS_MAX = 20
+_ZABBIX_COMMANDS_MAX = 20
+_ZABBIX_ERRORS_MAX = 10
+_ZABBIX_OUTPUT_MAX = 300
+_ZABBIX_SECRET_FIELDS = frozenset(('ipmi_password', 'tls_psk', 'password', 'privatekey', 'snmp_community', 'community',
+                                   'snmpv3_authpassphrase', 'snmpv3_privpassphrase', 'authpassphrase',
+                                   'privpassphrase', 'http_password', 'ssl_key_password'))
+_ZABBIX_MACRO_SECRET = 1             # a macro's type: secret text
+
+
+def _zabbix_json(text):
+    if not text.startswith(('{', '[')):
+        return None
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _zabbix_command(key):
+    """system.run[<command>,<mode>]'s command, or None for another key."""
+    if not key.startswith('system.run[') or not key.endswith(']'):
+        return None
+    inner = key[len('system.run['):-1]
+    if inner.endswith((',wait', ',nowait')):
+        inner = inner.rsplit(',', 1)[0]
+    if len(inner) > 1 and inner[0] == inner[-1] == '"':
+        inner = inner[1:-1].replace('\\"', '"')
+    return inner
+
+
+def _zabbix_secrets(tree, found, depth=0):
+    """The kinds of credentials a proxy configuration carries: a table's
+    (fields and rows) non-empty secret columns, and secret macros."""
+    if depth > 6:
+        return
+    if isinstance(tree, dict):
+        fields, rows = tree.get('fields'), tree.get('data')
+        if isinstance(fields, list) and isinstance(rows, list):
+            for i, name in enumerate(fields):
+                if name in _ZABBIX_SECRET_FIELDS:
+                    n = sum(1 for row in rows if isinstance(row, list) and i < len(row) and row[i] not in ('', None))
+                    if n:
+                        found[name] = found.get(name, 0) + n
+            if 'macro' in fields and 'type' in fields and 'value' in fields:
+                kind, value = fields.index('type'), fields.index('value')
+                n = sum(1 for row in rows if isinstance(row, list) and len(row) > max(kind, value)
+                        and row[kind] == _ZABBIX_MACRO_SECRET and row[value] not in ('', None))
+                if n:
+                    found['secret_macro'] = found.get('secret_macro', 0) + n
+            return
+        for value in tree.values():
+            _zabbix_secrets(value, found, depth + 1)
+
+
+class _ZabbixGroup:
+    __slots__ = ('flow', 'first', 'body', 'keys', 'commands', 'errors', 'flows')
+
+    def __init__(self, flow, when, kind):
+        self.flow, self.first = flow, when
+        self.body = {'request': kind, 'connections': 0, 'answered': False}
+        self.keys = {}               # item key -> None, in first-seen order
+        self.commands = {}           # (where it came from, command) -> {'command', 'result'}
+        self.errors = {}
+        self.flows = set()
+
+
+class Zabbix:
+    """Zabbix - see the comment above."""
+    event_type = 'zabbix'
+    app_protos = ('zabbix',)
+    fields = ('zabbix.request', 'zabbix.response', 'zabbix.agent.passive', 'zabbix.data', 'zabbix.error',
+              'zabbix.version', 'zabbix.agent.name', 'zabbix.proxy.name', 'zabbix.sender.name')
+
+    def __init__(self):
+        self.groups = {}             # (client, server, server port, kind) -> _ZabbixGroup
+        self.pending = {}            # flow key -> (group, request's JSON or passive key)
+        self.active = {}             # (agent, server, host) -> {'items': itemid -> key, 'commands': id -> entry}
+
+    def _group(self, pkt, kind):
+        flow = pkt.flow
+        key = (flow.client, flow.server, flow.sport, kind)
+        group = self.groups.get(key)
+        if group is None:
+            group = self.groups[key] = _ZabbixGroup(flow, pkt.when, kind)
+        if flow.key not in group.flows:
+            group.flows.add(flow.key)
+            group.body['connections'] += 1
+        return group
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        text = first('zabbix.data')
+        if first('zabbix.request') in ('1', 'True'):
+            message = _zabbix_json(text)
+            passive = first('zabbix.agent.passive') in ('1', 'True')
+            if message is not None and isinstance(message.get('request'), str):
+                kind = message['request'][:40]
+            elif passive or pkt.dport == 10050:
+                kind, message = 'passive check', None
+            else:
+                return
+            group = self._group(pkt, kind)
+            body = group.body
+            host = message.get('host') if message else None
+            host = host if isinstance(host, str) else first('zabbix.agent.name') or first('zabbix.proxy.name') \
+                or first('zabbix.sender.name')
+            if host:
+                body.setdefault('host', host[:120])
+            version = (message or {}).get('version') or first('zabbix.version')
+            if isinstance(version, str) and version:
+                body['version'] = version[:20]
+            self.pending[pkt.flow.key] = (group, message if message is not None else text)
+            self._request(pkt, group, message, text)
+        elif first('zabbix.response') in ('1', 'True'):
+            waiting = self.pending.pop(pkt.flow.key, None)
+            if waiting is None:
+                return
+            group, request = waiting
+            group.body['answered'] = True
+            self._response(pkt, group, request, _zabbix_json(text), text, first('zabbix.error'))
+
+    def _key(self, group, key):
+        if isinstance(key, str) and key and len(group.keys) < _ZABBIX_KEYS_MAX:
+            group.keys.setdefault(key[:250], None)
+
+    def _command(self, group, where, command, result=None):
+        if (where, command) not in group.commands and len(group.commands) >= _ZABBIX_COMMANDS_MAX:
+            return None
+        entry = group.commands.setdefault((where, command), {'command': command[:500], 'via': where})
+        if result is not None:
+            entry['result'] = result
+        return entry
+
+    def _request(self, pkt, group, message, text):
+        body = group.body
+        if message is None:                                # a passive check of one key
+            self._key(group, text)
+            command = _zabbix_command(text)
+            if command is not None:
+                self._command(group, 'system.run', command)
+            return
+        kind = body['request']
+        items = message.get('data') if isinstance(message.get('data'), list) else []
+        state = self.active.get((pkt.flow.client, pkt.flow.server, message.get('host') or body.get('host')))
+        if kind == 'passive checks':
+            for item in items:
+                if isinstance(item, dict):
+                    self._key(group, item.get('key'))
+                    command = _zabbix_command(str(item.get('key', '')))
+                    if command is not None:
+                        self._command(group, 'system.run', command)
+        elif kind in ('agent data', 'sender data'):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get('key') or (state['items'].get(item.get('itemid')) if state else None)
+                self._key(group, key)
+                if state and isinstance(key, str) and _zabbix_command(key) is not None:
+                    entry = state['commands'].get(('item', key))
+                    if entry is not None and 'value' in item:
+                        entry['result'] = str(item['value'])[:_ZABBIX_OUTPUT_MAX]
+            for item in message.get('commands') or ():
+                if isinstance(item, dict) and state:
+                    entry = state['commands'].get(('id', item.get('id')))
+                    if entry is not None:
+                        entry['result'] = str(item.get('value', item.get('error', '')))[:_ZABBIX_OUTPUT_MAX]
+                        if 'error' in item:
+                            entry['refused'] = True
+        elif kind == 'command':                            # the frontend running a script on a host
+            target = ' '.join(f'{k} {message[k]}' for k in ('scriptid', 'hostid', 'eventid') if message.get(k))
+            self._command(group, 'script', target or 'script')
+        if isinstance(message.get('commands'), list) and kind == 'agent data':
+            body['command_results'] = body.get('command_results', 0) + len(message['commands'])
+
+    def _response(self, pkt, group, request, message, text, error):
+        body = group.body
+        status = (message or {}).get('response')
+        if isinstance(status, str):
+            responses = body.setdefault('responses', {})
+            responses[status[:20]] = responses.get(status[:20], 0) + 1
+        info = (message or {}).get('info')
+        if status == 'failed' and isinstance(info, str):
+            self._error(group, info)
+        redirect = (message or {}).get('redirect')
+        if isinstance(redirect, dict) and redirect.get('address'):
+            body['redirect'] = str(redirect['address'])[:80]
+        kind = body['request']
+        if kind == 'passive check' and isinstance(request, str):
+            value = text if not error else None
+            if text == 'ZBX_NOTSUPPORTED' or error:
+                body['not_supported'] = body.get('not_supported', 0) + 1
+                self._error(group, error or 'not supported')
+            if request == 'agent.version' and value:
+                body['version'] = value[:20]
+            command = _zabbix_command(request)
+            if command is not None:
+                self._command(group, 'system.run', command,
+                              f'refused: {error}'[:_ZABBIX_OUTPUT_MAX] if error or value is None else
+                              value[:_ZABBIX_OUTPUT_MAX])
+        elif kind == 'passive checks' and isinstance(request, dict) and message:
+            if isinstance(message.get('version'), str):
+                body['version'] = message['version'][:20]
+            keys = [i.get('key') for i in request.get('data') or () if isinstance(i, dict)]
+            for key, item in zip(keys, message.get('data') or ()):
+                if not isinstance(item, dict):
+                    continue
+                if 'error' in item:
+                    body['not_supported'] = body.get('not_supported', 0) + 1
+                    self._error(group, str(item['error']))
+                command = _zabbix_command(str(key or ''))
+                if command is not None:
+                    self._command(group, 'system.run', command,
+                                  ('refused: ' + str(item['error']) if 'error' in item
+                                   else str(item.get('value', '')))[:_ZABBIX_OUTPUT_MAX])
+        elif kind == 'active checks' and message:
+            host = request.get('host') if isinstance(request, dict) else None
+            state = self.active.setdefault((pkt.flow.client, pkt.flow.server, host or body.get('host')),
+                                           {'items': {}, 'commands': {}})
+            for item in message.get('data') or ():
+                if not isinstance(item, dict) or not isinstance(item.get('key'), str):
+                    continue
+                state['items'][item.get('itemid')] = item['key']
+                self._key(group, item['key'])
+                command = _zabbix_command(item['key'])
+                if command is not None:
+                    entry = self._command(group, 'item', command)
+                    if entry is not None:
+                        state['commands'][('item', item['key'])] = entry
+            for item in message.get('commands') or ():
+                if isinstance(item, dict) and isinstance(item.get('command'), str):
+                    entry = self._command(group, 'remote command', item['command'])
+                    if entry is not None:
+                        state['commands'][('id', item.get('id'))] = entry
+        elif kind == 'command' and message:
+            entry = next(iter(group.commands.values()), None) if group.commands else None
+            if entry is not None:
+                entry['result'] = str(message.get('data') or info or status or '')[:_ZABBIX_OUTPUT_MAX]
+                if status == 'failed':
+                    entry['refused'] = True
+        elif kind in ('proxy config', 'config') and message:
+            found = {}
+            _zabbix_secrets(message, found)
+            if found:
+                credentials = body.setdefault('credentials', {})
+                for name, n in found.items():
+                    credentials[name] = max(credentials.get(name, 0), n)
+
+    @staticmethod
+    def _error(group, text):
+        text = text.strip()[:200]
+        if text not in group.errors and len(group.errors) < _ZABBIX_ERRORS_MAX:
+            group.errors[text] = None
+
+    def finish(self):
+        records = []
+        for group in self.groups.values():
+            body = dict(group.body)
+            if group.keys:
+                body['keys'] = list(group.keys)
+            if group.commands:
+                body['commands'] = [dict(c, result=c.get('result', 'no response')) for c in group.commands.values()]
+            if group.errors:
+                body['errors'] = list(group.errors)
+            records.append((group.flow, group.first, 'zabbix', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -6334,7 +6949,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS, Redis, Zabbix)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

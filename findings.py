@@ -96,6 +96,30 @@ def _tns_statement(b):
     return _join(text if len(text) <= 120 else text[:120] + '...', ('-', b.get('result')))
 
 
+def _redis_command(b):
+    """A Redis admin command for a detail line: its first 120 characters
+    (any password it set already masked in the record), and its answer."""
+    text = str(b.get('command') or '')
+    return _join(text if len(text) <= 120 else text[:120] + '...', ('-', b.get('result')))
+
+
+_REDIS_FILE_SETTINGS = ('dir', 'dbfilename', 'logfile', 'appendfilename', 'appenddirname')
+_REDIS_ACCOUNT = ('ACL SETUSER', 'ACL DELUSER', 'ACL LOAD')
+_REDIS_SCRIPTS = ('EVAL', 'EVALSHA', 'EVAL_RO', 'EVALSHA_RO', 'FCALL', 'FCALL_RO', 'FUNCTION LOAD', 'FUNCTION RESTORE',
+                  'SCRIPT LOAD')
+
+
+def _zabbix_commands(b):
+    """A Zabbix record's commands for a detail line: each with whether the
+    agent ran it, refused it, or wasn't heard from."""
+    def state(c):
+        result = str(c.get('result') or '')
+        return 'refused' if c.get('refused') or result.startswith('refused') else \
+            'no answer' if result == 'no response' else 'answered'
+    return _join(_list(f"{str(c.get('command'))[:80]} ({state(c)})" for c in b.get('commands') or ()),
+                 ('-', b.get('request')), ('for', b.get('host')))
+
+
 _FINS_CONTROL = ('Run', 'Stop', 'Program Area Write', 'Program Area Clear', 'Program Area Protect Clear',
                  'Program Area File Transfer', 'Forced Set/Reset', 'Access Right Forced Acquire', 'Memory Card Format',
                  'File Delete', 'Parameter Area Clear')
@@ -365,6 +389,38 @@ RULES = (
          _tns_statement,
          'A database, table or other object deleted wholesale - what a ransom attack on an open database does '
          'before it leaves its note.'),
+    Rule('zabbix_remote_command', 'high', 'zabbix', 'Zabbix running commands',
+         f"EXISTS (SELECT 1 FROM json_each(json_data, '$.zabbix.commands'))",
+         _zabbix_commands,
+         'system.run, a remote command or a script: Zabbix running a shell command on an agent - remote code '
+         'execution by design, and an attacker\'s once they hold a server, run a rogue one an agent trusts, or '
+         'reach an agent that allows it.'),
+    Rule('redis_replication', 'high', 'redis_command', 'Redis made a replica of another server',
+         f"{_j('redis_command', 'master')} IS NOT NULL",
+         _redis_command,
+         'REPLICAOF (SLAVEOF): the server copies its data from, and takes commands from, the address given - '
+         "a rogue server's way to load a module onto it, and to read everything it holds."),
+    Rule('redis_module_load', 'high', 'redis_command', 'Redis module loaded',
+         f"{_j('redis_command', 'name')} IN ('MODULE LOAD', 'MODULE LOADEX')",
+         _redis_command,
+         'A shared library loaded into the server - native code run as Redis, most often a module a rogue '
+         'replication just wrote to disk.'),
+    Rule('redis_file_write', 'high', 'redis_command', 'Redis told to save where it shouldn\'t',
+         f"{_j('redis_command', 'name')} = 'CONFIG SET' AND {_has('redis_command', 'settings', _REDIS_FILE_SETTINGS)}",
+         _redis_command,
+         "The directory or file name Redis saves its database to changed - then SAVE writes it, with a key "
+         "holding an SSH key, a cron line or a web shell, over a file of the attacker's choosing."),
+    Rule('redis_account_change', 'high', 'redis_command', 'Redis user or password changed',
+         f"({_in('redis_command', 'name', _REDIS_ACCOUNT)} OR ({_j('redis_command', 'name')} = 'CONFIG SET' AND "
+         f"{_has('redis_command', 'settings', ['requirepass', 'masterauth'])}))",
+         _redis_command,
+         'A user created, changed or removed, or the server\'s password set - a way back in, or the owner '
+         'locked out.'),
+    Rule('redis_destroy', 'high', 'redis_command', 'Redis flushed or shut down',
+         _in('redis_command', 'name', ['FLUSHALL', 'FLUSHDB', 'SHUTDOWN']),
+         _redis_command,
+         'Every key deleted, or the server stopped - what a ransom attack on an open Redis does before it '
+         'leaves its note.'),
     Rule('tns_account_change', 'high', 'tns_statement', 'Oracle user or privilege created or granted',
          _in('tns_statement', 'verb', list(_TNS_ACCOUNT)),
          _tns_statement,
@@ -482,6 +538,36 @@ RULES = (
          _tns_statement,
          'Rows inserted, updated or deleted, or a table or other object created or changed. '
          "An application's writes look the same - check who sent them."),
+    Rule('zabbix_file_read', 'medium', 'zabbix', 'Zabbix reading files',
+         # (not an agent's data: its keys are the active checks' it was given)
+         f"{_j('zabbix', 'request')} != 'agent data' AND "
+         "EXISTS (SELECT 1 FROM json_each(json_data, '$.zabbix.keys') "
+         "WHERE value LIKE 'vfs.file.contents[%' OR value LIKE 'vfs.file.get[%')",
+         lambda b: _join(_list(k for k in b.get('keys') or () if k.startswith(('vfs.file.contents[', 'vfs.file.get['))),
+                         ('-', b.get('request')), ('for', b.get('host'))),
+         "An item reading a file's contents from the agent's host - normal for a log or config file, and a "
+         'way to read /etc/shadow or a key with whatever rights the agent has.'),
+    Rule('zabbix_credentials', 'medium', 'zabbix', 'Zabbix credentials sent unencrypted',
+         f"{_j('zabbix', 'credentials')} IS NOT NULL",
+         lambda b: _join(_list(f'{name} ({n})' for name, n in (b.get('credentials') or {}).items()),
+                         ('for', b.get('host'))),
+         "A proxy's configuration, in the clear, carrying its hosts' IPMI or SNMP passwords, TLS pre-shared "
+         'keys or secret macros - readable by anyone who sees the traffic.'),
+    Rule('redis_scripts', 'medium', 'redis_command', 'Redis running Lua',
+         _in('redis_command', 'name', _REDIS_SCRIPTS),
+         _redis_command,
+         'A Lua script run or loaded on the server - routine for some applications, and the way in through '
+         "CVE-2022-0543, Debian's and Ubuntu's sandbox escape."),
+    Rule('redis_no_auth', 'medium', 'redis', 'Redis answering without a password',
+         f"{_j('redis', 'auth')} = 'none'",
+         lambda b: _join(_list(list(b.get('commands') or {})), ('-', b.get('server')), b.get('server_version')),
+         'A Redis server that answered commands with no password asked for - anyone who reaches it can read, '
+         'change or delete its data, and rewrite its configuration.'),
+    Rule('redis_config_change', 'medium', 'redis_command', 'Redis configuration changed',
+         f"{_j('redis_command', 'name')} = 'CONFIG SET' AND NOT {_has('redis_command', 'settings', list(_REDIS_FILE_SETTINGS) + ['requirepass', 'masterauth'])}",
+         _redis_command,
+         'A setting changed on a running server - protected mode off, a module command enabled, persistence '
+         'turned off...'),
     Rule('mysql_password_hashes', 'medium', 'mysql_statement', 'MySQL password hashes read',
          f"lower({_j('mysql_statement', 'statement')}) LIKE '%from mysql.user%' AND "
          f"{_j('mysql_statement', 'result')} = 'ok'",
@@ -616,6 +702,15 @@ RULES = (
          f"{_j('mssql', 'login')} = 'failed'",
          lambda b: _join(b.get('user'), ('from', b.get('client_host')), ('-', b.get('login_error'))),
          'A SQL Server login refused - a mistyped password, or one guess of many (sa is the usual guess).'),
+    Rule('redis_login_failed', 'low', 'redis', 'Redis login failed',
+         f"{_j('redis', 'login_failures')} IS NOT NULL",
+         lambda b: _join(b.get('user'), ('-', _counted(b.get('login_failures'), 'failure'))),
+         'AUTH refused - a mistyped password, or one guess of many.'),
+    Rule('zabbix_refused', 'low', 'zabbix', 'Zabbix agent refused checks',
+         f"{_j('zabbix', 'not_supported')} IS NOT NULL",
+         lambda b: _join(_counted(b.get('not_supported'), 'check'), ('-', _list(b.get('errors')))),
+         "An agent answering ZBX_NOTSUPPORTED - a key it doesn't know or isn't allowed to run: a "
+         'misconfigured template, or someone trying keys with zabbix_get.'),
     Rule('mysql_login_failed', 'low', 'mysql', 'MySQL login failed',
          f"{_j('mysql', 'login')} = 'failed'",
          lambda b: _join(b.get('user'), ('-', b.get('login_error'))),

