@@ -107,6 +107,13 @@
   script - with its output or refusal; and which kinds of credentials a
   proxy's configuration carried, never their values. These were
   connection cards before
+- **IRC** - a record for each connection: the nicknames, the server and
+  network, the channels and their topics, the messages each way, CTCP,
+  DCC file offers and the server's errors, with the passwords and channel
+  keys sent in the clear; messages that read as a bot's commands, and
+  bot-shaped nicknames, are picked out. IRC's whole 6660-6669 range is
+  decoded now, not just 6667, and IRC that opens with a password - which
+  Suricata takes for FTP - keeps its record
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -141,7 +148,10 @@
   or password changed, or flushed, are high; Redis answering without a
   password, Redis running Lua, any other Redis configuration change,
   Zabbix reading files and Zabbix credentials sent unencrypted are
-  medium; a failed Redis login and a Zabbix agent refusing checks are low
+  medium; a failed Redis login and a Zabbix agent refusing checks are low.
+  IRC bot commands are high; a bot-shaped IRC nickname and a DCC file
+  offer are medium; an IRC client connecting, and an IRC password sent in
+  the clear, are low
 
 ### Themes
 

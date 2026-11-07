@@ -67,7 +67,7 @@ SHARK_ARTIFACTS = (SHARK_DB, SHARK_DB + '-wal', SHARK_DB + '-shm', SHARK_DB + '.
 # change here or in shark_protocols changes what a run produces: a
 # shark.db stamped with an older version is rebuilt the next time its
 # status is asked for, so existing analyses pick up the change.
-SHARK_FORMAT_VERSION = 53
+SHARK_FORMAT_VERSION = 54
 
 # The fields every packet is read for, one per column of tshark's
 # tab-separated output, in this order - then each of shark_protocols'
@@ -160,10 +160,16 @@ def shark_db_path(dir_path):
     return os.path.join(dir_path, SHARK_DB)
 
 
+# Ports tshark decodes as a protocol beyond its own defaults: IRC's whole
+# range (tshark takes only 6667), where IRC bots' servers listen as often
+# as on 6667 itself
+_DECODE_AS = ('-d', 'tcp.port==6660-6669,irc')
+
+
 def tshark_command(pcap_path, fields=_FIRST_PASS_FIELDS):
     """The tshark command that dumps these fields (the first pass's by
     default) for every packet."""
-    cmd = ['tshark', '-n', '-r', pcap_path, '--enable-protocol', 'communityid',
+    cmd = ['tshark', '-n', '-r', pcap_path, *_DECODE_AS, '--enable-protocol', 'communityid',
            '-T', 'fields', '-E', 'separator=\t', '-E', 'occurrence=a', '-E', 'aggregator=' + _AGGREGATOR]
     for field in fields:
         cmd += ['-e', field]
@@ -1191,7 +1197,7 @@ def _mostly_recorded(pcap_path):
         try:
             if not pcap_subset.copy_frames(pcap_path, sample, windows):
                 return frozenset()
-            out = subprocess.run(['tshark', '-n', '-r', sample, '-T', 'fields', '-e', 'frame.protocols',
+            out = subprocess.run(['tshark', '-n', '-r', sample, *_DECODE_AS, '-T', 'fields', '-e', 'frame.protocols',
                                   '-e', 'tcp.stream', '-e', 'udp.stream'], capture_output=True, text=True,
                                  errors='replace', timeout=120, preexec_fn=_low_priority).stdout
         except (OSError, subprocess.SubprocessError):
@@ -1854,6 +1860,11 @@ def probe_only_protocols(shark_db):
     return frozenset(app for app, kept in rows if not kept and app not in _ONE_WAY_PROTOCOLS)
 
 
+# Record type -> the protocols Suricata takes that protocol for
+_SURICATA_MISREADS = {p.event_type: frozenset(p.suricata_misreads) for p in PROTOCOLS
+                      if getattr(p, 'suricata_misreads', ())}
+
+
 def merge_rows(shark_rows, identified, probed=frozenset(), tls_records=None):
     """The rows of a shark.db (its stored JSON, one at a time) that belong
     in the analysis's events.db: records of protocols Suricata doesn't
@@ -1863,7 +1874,9 @@ def merge_rows(shark_rows, identified, probed=frozenset(), tls_records=None):
     and backed it with records (by Community ID and time, from
     db.suricata_identified_flows): there Suricata's word stands, as on a
     scanner's HTTP request to an rsh port, which tshark, going by the port,
-    calls rsh. The connections of the protocols in probed
+    calls rsh - unless Suricata named it a protocol it's known to mistake
+    the record's for (a protocol's suricata_misreads: IRC that opens with
+    a password reads to it as FTP). The connections of the protocols in probed
     (probe_only_protocols) share one type, PROBED_CONNECTION_TYPE.
 
     The exception is TLS failures (_TLSFailures): alerts Suricata never
@@ -1874,8 +1887,9 @@ def merge_rows(shark_rows, identified, probed=frozenset(), tls_records=None):
     refused."""
     from db import CONNECTION_TYPE_PREFIX, PROBED_CONNECTION_TYPE
 
-    def suricata_knows(cid, first, last):
-        return any(start - 1 <= last and first <= end + 1 for start, end in identified.get(cid, ()))
+    def suricata_knows(cid, first, last, misreads=()):
+        return any(known[0] - 1 <= last and first <= known[1] + 1 and (known[2:3] or (None,))[0] not in misreads
+                   for known in identified.get(cid, ()))
     failures = []
     for data in shark_rows:
         event = json.loads(data)
@@ -1898,7 +1912,7 @@ def merge_rows(shark_rows, identified, probed=frozenset(), tls_records=None):
             if event_type.replace('_', '-') in SURICATA_RECORDED_APP_PROTOS:
                 continue
             when = _iso_epoch(event.get('timestamp'))
-            if when is not None and suricata_knows(cid, when, when):
+            if when is not None and suricata_knows(cid, when, when, _SURICATA_MISREADS.get(event_type, ())):
                 continue
         yield event
     known = tls_records({e['community_id'] for e in failures if e.get('community_id')}) \

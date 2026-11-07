@@ -389,6 +389,11 @@ RULES = (
          _tns_statement,
          'A database, table or other object deleted wholesale - what a ransom attack on an open database does '
          'before it leaves its note.'),
+    Rule('irc_bot_commands', 'high', 'irc', 'IRC bot commands',
+         f"{_j('irc', 'bot_commands')} IS NOT NULL",
+         lambda b: _join(_list(b.get('bot_commands'), 2), ('-', b.get('nick')), ('in', _list(b.get('channels')))),
+         "Messages or a channel topic that read as a botnet's orders - !download, !ddos.syn, .scan... - on an "
+         'IRC connection: a bot taking commands from its herder, or the herder giving them.'),
     Rule('zabbix_remote_command', 'high', 'zabbix', 'Zabbix running commands',
          f"EXISTS (SELECT 1 FROM json_each(json_data, '$.zabbix.commands'))",
          _zabbix_commands,
@@ -538,6 +543,16 @@ RULES = (
          _tns_statement,
          'Rows inserted, updated or deleted, or a table or other object created or changed. '
          "An application's writes look the same - check who sent them."),
+    Rule('irc_bot_nick', 'medium', 'irc', 'IRC nickname shaped like a bot\'s',
+         f"{_j('irc', 'bot_like_nick')} = 1",
+         lambda b: _join(b.get('nick') or _list(b.get('nicks')), ('on', b.get('network') or b.get('server'))),
+         'A nickname like USA|83621 or [DEU|W10]4821 - a country or OS code and a number, the names IRC bots '
+         'give themselves so their herder can tell them apart.'),
+    Rule('irc_dcc_send', 'medium', 'irc', 'IRC file transfer offered',
+         f"{_j('irc', 'dcc')} IS NOT NULL",
+         lambda b: _list(f"{d.get('file')} from {d.get('from')} to {d.get('to')}" for d in b.get('dcc') or ()),
+         'A DCC SEND offer: a file passed between IRC users directly - how bots receive updates and send '
+         'what they stole.'),
     Rule('zabbix_file_read', 'medium', 'zabbix', 'Zabbix reading files',
          # (not an agent's data: its keys are the active checks' it was given)
          f"{_j('zabbix', 'request')} != 'agent data' AND "
@@ -702,6 +717,20 @@ RULES = (
          f"{_j('mssql', 'login')} = 'failed'",
          lambda b: _join(b.get('user'), ('from', b.get('client_host')), ('-', b.get('login_error'))),
          'A SQL Server login refused - a mistyped password, or one guess of many (sa is the usual guess).'),
+    Rule('irc_connection', 'low', 'irc', 'IRC client connected',
+         f"{_j('irc', 'login')} = 'registered'",
+         lambda b: _join(b.get('nick'), ('on', b.get('network') or b.get('server')), ('in', _list(b.get('channels')))),
+         'A client registered with an IRC server - rare on most networks today, and still how some botnets '
+         'take orders.'),
+    Rule('irc_password', 'low', 'irc', 'IRC password sent in the clear',
+         f"({_j('irc', 'password')} IS NOT NULL OR {_j('irc', 'oper')} IS NOT NULL OR "
+         f"{_j('irc', 'services_password')} IS NOT NULL OR {_j('irc', 'channel_keys')} IS NOT NULL)",
+         lambda b: _join(_list([kind for kind, key in (('server password', 'password'), ('operator password', 'oper'),
+                                                       ('NickServ password', 'services_password'),
+                                                       ('channel key', 'channel_keys')) if b.get(key)], 4),
+                         ('-', b.get('nick'))),
+         "A server, operator or NickServ password, or a channel's key, sent unencrypted - a bot's carry the "
+         "herder's, enough to take over its channel."),
     Rule('redis_login_failed', 'low', 'redis', 'Redis login failed',
          f"{_j('redis', 'login_failures')} IS NOT NULL",
          lambda b: _join(b.get('user'), ('-', _counted(b.get('login_failures'), 'failure'))),

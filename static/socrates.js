@@ -2501,6 +2501,7 @@
                 redis: '#e53935',
                 redis_command: '#ff7043',
                 zabbix: '#d32f2f',
+                irc: '#ab47bc',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -5002,6 +5003,40 @@
             return html;
         }
 
+        // tshark's IRC records (shark_protocols.IRC): one per connection.
+        function renderIrcDetails(e) {
+            const r = e.irc || {};
+            let html = htmlSection('IRC Details', COLORS.EVENT.irc);
+            html += htmlRowText('Nick', r.nick);
+            if ((r.nicks || []).length > 1) html += htmlRowText('Nicks Tried', (r.nicks || []).join(', '));
+            html += htmlRowText('Bot-Like Nick', r.bot_like_nick ? 'yes - a country or OS code and a number, as bots name themselves' : '');
+            html += htmlRowText('User', r.user);
+            html += htmlRowText('Real Name', r.realname);
+            html += htmlRowText('Login', r.login);
+            html += htmlRowText('Server', r.server);
+            html += htmlRowText('Network', r.network);
+            html += htmlRowText('Server Version', r.server_version);
+            html += htmlRowText('Server Password', r.password, 'mono');
+            html += htmlRowText('Channels', (r.channels || []).join(', '));
+            html += htmlRowText('Channel Keys', Object.entries(r.channel_keys || {}).map(([c, k]) => `${c} ${k}`).join(', '), 'mono');
+            for (const [c, t] of Object.entries(r.topics || {})) html += htmlRowText(`Topic ${c}`, t, 'mono');
+            if ((r.bot_commands || []).length) html += htmlRow('Bot Commands', escapeHtml(r.bot_commands.join('\n')), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Messages', `${(r.messages_sent || 0).toLocaleString()} sent, ${(r.messages_received || 0).toLocaleString()} received`);
+            if ((r.messages || []).length) {
+                const lines = r.messages.map(m => `${m.direction === 'sent' ? '→' : '←'} <${m.from}> ${m.to}: ${m.text}`);
+                html += htmlRow('Message Log', escapeHtml(lines.join('\n')), 'mono', 'white-space: pre-wrap');
+            }
+            html += htmlRowText('CTCP', (r.ctcp || []).join('; '));
+            for (const d of r.dcc || []) html += htmlRowText('DCC SEND', `${d.file} (${d.size !== undefined ? d.size.toLocaleString() + ' bytes, ' : ''}${d.address}) from ${d.from} to ${d.to}`, 'mono');
+            if (r.oper) html += htmlRowText('Operator Login', `${r.oper.name} / ${r.oper.password}${r.oper.result ? ' - ' + r.oper.result : ''}`, 'mono');
+            html += htmlRowText('NickServ Password', r.services_password, 'mono');
+            html += htmlRowText('Commands', Object.entries(r.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Errors', Object.entries(r.errors || {}).map(([c, t]) => `${c} ${t}`).join('; '));
+            html += htmlRowText('Quit', r.quit);
+            html += htmlRowText('Closed', r.closed);
+            return html;
+        }
+
         // tshark's SQL Server records (shark_protocols.TDS): a connection, and
         // each distinct statement on it.
         function renderMssqlDetails(e) {
@@ -5774,6 +5809,7 @@
             redis: renderRedisDetails,
             redis_command: renderRedisCommandDetails,
             zabbix: renderZabbixDetails,
+            irc: renderIrcDetails,
             mssql: renderMssqlDetails,
             mssql_statement: renderMssqlStatementDetails,
             fins: renderFinsDetails,
@@ -8912,6 +8948,7 @@
             redis: 'Redis',
             redis_command: 'Redis Commands',
             zabbix: 'Zabbix',
+            irc: 'IRC',
             mssql: 'SQL Server',
             mssql_statement: 'SQL Server Statements',
             goose: 'GOOSE',
@@ -10108,6 +10145,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Command', 'Statement', 'Result', 'Count'];
                 case 'zabbix':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Request', 'Host', 'Version', 'Connections', 'Keys', 'Commands', 'Answered'];
+                case 'irc':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Nick', 'Server', 'Channels', 'Login', 'Sent', 'Received', 'Bot Commands'];
                 case 'ecat':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Slaves', 'State Requests', 'EEPROM Writes', 'FoE', 'Answered'];
                 case 'synphasor':
@@ -10623,6 +10662,7 @@
                 case 'redis':
                 case 'redis_command':
                 case 'zabbix':
+                case 'irc':
                 case 'rsh':
                 case 'openvpn':
                 case 'wireguard':
@@ -13285,7 +13325,13 @@
                 }
                 case 'Search Target': return e.ssdp?.search_target || e.ssdp?.notification_type || '';
                 case 'Location': return e.ssdp?.location || '';
-                case 'Server': return e.ssdp?.server || '';
+                case 'Server': return e.irc ? (e.irc.network || e.irc.server || '') : (e.ssdp?.server || '');
+                // IRC: a connection's
+                case 'Nick': return e.irc?.nick || '';
+                case 'Channels': return (e.irc?.channels || []).join(', ');
+                case 'Sent': return e.irc ? String(e.irc.messages_sent || 0) : '';
+                case 'Received': return e.irc ? String(e.irc.messages_received || 0) : '';
+                case 'Bot Commands': return (e.irc?.bot_commands || []).join(', ');
                 case 'Banner': return e.telnet?.banner || '';
                 // IEC 104: a control action's, or a monitored point's
                 case 'Station': { const r = e.iec104 || e.iec104_point; return r?.station !== undefined ? String(r.station) : ''; }
@@ -13418,7 +13464,7 @@
                 case 'Encryption': return e.mssql?.encryption || '';
                 case 'Collection': return e.mongodb_action?.collection || '';
                 case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || e.rsh?.password || '';
-                case 'Login': return e.telnet?.login || e.mongodb?.login || e.tns?.login || e.mysql?.login || e.mssql?.login || '';
+                case 'Login': return e.telnet?.login || e.mongodb?.login || e.tns?.login || e.mysql?.login || e.mssql?.login || e.irc?.login || '';
                 case 'Area': return e.fins_action?.area || e.s7comm?.items?.[0]?.area || '';
                 case 'Error': return e.s7comm?.response?.error_class || '';
                 case 'Host': return e.http?.hostname || e.syslog?.hostname || e.zabbix?.host || '';

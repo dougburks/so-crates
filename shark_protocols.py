@@ -4943,6 +4943,254 @@ class Zabbix:
         return records
 
 
+# ---------------------------------------------------------------- IRC
+#
+# IRC (TCP 6667, and the 6660-6669 range shark_analyzer has tshark decode
+# as IRC), which Suricata doesn't parse: chat, and still a botnet's way to
+# take orders - a bot with a nickname like USA|83621 joins its herder's
+# channel, often with a key, and reads commands from the topic or the
+# channel: !download a URL, !ddos.syn a target, .scan a range. One 'irc'
+# record per connection: the nicknames tried and the one the server
+# registered, the user and real name, the server's name, network and
+# version, the channels joined and their topics, the messages each way
+# (the first ones kept, with who sent them and to whom), CTCP requests and
+# replies (a client's VERSION), DCC file offers, and the server's errors.
+# The server, channel, operator and NickServ passwords go in the clear and
+# are kept in their own fields (a NickServ IDENTIFY's masked in the
+# message). Read from the messages' bytes, a line at a time; a message
+# that looks like a bot's command - !, . or @ and a verb bots use - is
+# noted apart.
+
+_IRC_MESSAGES_MAX = 50
+_IRC_TEXT_MAX = 300
+_IRC_LIST_MAX = 20
+_IRC_LINE_MAX = 8192            # bytes of a line split across packets held for the rest
+_IRC_BOT_VERBS = frozenset('download dl get update upd exec execute cmd sh shell run system ddos flood syn synflood '
+                           'udp udpflood tcp tcpflood ack http httpflood slowloris icmp ping scan scanner advscan '
+                           'portscan spread kill die remove uninstall visit open sniff keylog stealer botkill '
+                           'socks proxy'.split())
+_IRC_BOT_PREFIXES = '!.@$'
+# Nicknames bots generate: a country or OS code and a number (USA|83621,
+# [USA|XP|8732], {DEU-W10}123456), or a bracket or pipe and a long number
+_IRC_BOT_NICK = re.compile(r'^(?:[\[{(]?[A-Z]{2,4}[|\-_\]})][^\s]*\d{3,}|[^\s]*[|\[\]{}][^\s]*\d{4,})')
+_IRC_ERROR_CODES = range(400, 600)
+
+
+def _irc_split(line):
+    """An IRC line's (prefix, command, params) - the trailing parameter
+    last, whole."""
+    prefix = ''
+    if line.startswith('@'):                        # IRCv3 message tags
+        line = line.partition(' ')[2]
+    if line.startswith(':'):
+        prefix, _, line = line[1:].partition(' ')
+    line, _, trailing = line.partition(' :')
+    words = line.split()
+    if not words:
+        return prefix, '', []
+    params = words[1:] + ([trailing] if _ else [])
+    return prefix, words[0].upper(), params
+
+
+def _irc_bot_command(text):
+    """Whether a message reads as a bot's command: !, ., @ or $ and a verb
+    bots use (!ddos.syn, .download, @update...)."""
+    if len(text) < 2 or text[0] not in _IRC_BOT_PREFIXES:
+        return False
+    verb = text[1:].split(None, 1)[0].lower() if text[1:].strip() else ''
+    return verb.split('.')[0] in _IRC_BOT_VERBS
+
+
+class _IRCConnection:
+    __slots__ = ('flow', 'first', 'body', 'buffers', 'nicks', 'channels', 'pending_oper', 'nick')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'messages_sent': 0, 'messages_received': 0}
+        self.buffers = [b'', b'']   # a line still to come: from the client, from the server
+        self.nicks = {}             # nicknames tried, in order
+        self.channels = {}          # channels joined, in order
+        self.pending_oper = False
+        self.nick = None            # the client's nickname, once the server registered it
+
+
+class IRC:
+    """IRC - see the comment above."""
+    event_type = 'irc'
+    app_protos = ('irc',)
+    fields = ('@irc',)
+    # A client that opens with PASS and USER reads to Suricata as FTP (it
+    # logs FTP records of the IRC commands), which mustn't keep this out
+    suricata_misreads = ('ftp',)
+
+    def __init__(self):
+        self.connections = {}       # flow key -> _IRCConnection
+
+    def feed(self, pkt, v):
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _IRCConnection(pkt.flow, pkt.when)
+        side = 0 if (pkt.src, pkt.sport) == (pkt.flow.client, pkt.flow.cport) else 1
+        for raw in v['@irc']:
+            data = conn.buffers[side] + _hex(raw)
+            lines = data.split(b'\n')
+            rest = lines.pop()
+            conn.buffers[side] = rest if len(rest) <= _IRC_LINE_MAX else b''
+            for line in lines:
+                text = line.rstrip(b'\r').decode('utf-8', 'replace')
+                if text:
+                    (self._client if side == 0 else self._server)(conn, text)
+
+    @staticmethod
+    def _add(body, key, value, limit=_IRC_LIST_MAX):
+        items = body.setdefault(key, [])
+        if value not in items and len(items) < limit:
+            items.append(value)
+
+    def _message(self, conn, sent, sender, target, text):
+        body = conn.body
+        body['messages_sent' if sent else 'messages_received'] += 1
+        if len(text) > 1 and text[0] == text[-1] == '\x01':           # CTCP
+            ctcp = text[1:-1]
+            if ctcp.upper().startswith('DCC SEND'):
+                # DCC SEND <file> <address> <port> [<size>]: the address an
+                # IPv4 one as a number, or an IPv6 one as text
+                words = ctcp.split()
+                sized = len(words) >= 6
+                if len(words) >= 5 and len(body.get('dcc', [])) < _IRC_LIST_MAX:
+                    address, port = words[-3:-1] if sized else words[-2:]
+                    try:
+                        address = socket.inet_ntoa(struct.pack('!I', int(address))) if address.isdigit() else address
+                    except (OverflowError, struct.error):
+                        pass
+                    offer = {'file': ' '.join(words[2:-3] if sized else words[2:-2]).strip('"')[:200],
+                             'address': f'{address}:{port}', 'direction': 'sent' if sent else 'received',
+                             'from': sender or conn.nick or '', 'to': target}
+                    if sized and _int(words[-1]) is not None:
+                        offer['size'] = _int(words[-1])
+                    body.setdefault('dcc', []).append(offer)
+            else:
+                self._add(body, 'ctcp', f"{'sent' if sent else 'received'}: {ctcp}"[:_IRC_TEXT_MAX])
+            return
+        if sent and target.lower() == 'nickserv' and text.upper().startswith('IDENTIFY'):
+            words = text.split()
+            if len(words) > 1:
+                body['services_password'] = words[-1][:120]
+                text = ' '.join(words[:-1] + ['***'])
+        if _irc_bot_command(text):
+            self._add(body, 'bot_commands', text[:_IRC_TEXT_MAX])
+        messages = body.setdefault('messages', [])
+        if len(messages) < _IRC_MESSAGES_MAX:
+            messages.append({'direction': 'sent' if sent else 'received', 'from': sender or conn.nick or '',
+                             'to': target, 'text': text[:_IRC_TEXT_MAX]})
+
+    def _client(self, conn, line):
+        prefix, command, params = _irc_split(line)
+        if not command or not command.isalnum() or len(command) > 20:
+            return
+        body = conn.body
+        body['commands'][command] = body['commands'].get(command, 0) + 1
+        if command == 'PASS' and params:
+            body['password'] = params[-1][:120]
+        elif command == 'NICK' and params:
+            if len(conn.nicks) < _IRC_LIST_MAX:
+                conn.nicks.setdefault(params[0][:60], None)
+        elif command == 'USER' and params:
+            body['user'] = params[0][:60]
+            if len(params) > 3:
+                body['realname'] = params[-1][:120]
+        elif command == 'JOIN' and params:
+            keys = params[1].split(',') if len(params) > 1 else []
+            for channel, key in zip(params[0].split(','), keys):
+                if key:
+                    body.setdefault('channel_keys', {})[channel[:60]] = key[:120]
+        elif command == 'MODE' and len(params) > 2 and params[1].startswith('+') and 'k' in params[1]:
+            body.setdefault('channel_keys', {})[params[0][:60]] = params[-1][:120]
+        elif command == 'TOPIC' and len(params) > 1:
+            self._topic(conn, params[0], params[1])
+        elif command in ('PRIVMSG', 'NOTICE') and len(params) > 1:
+            self._message(conn, True, conn.nick, params[0][:60], params[1])
+        elif command == 'OPER' and len(params) > 1:
+            body['oper'] = {'name': params[0][:60], 'password': params[1][:120]}
+            conn.pending_oper = True
+        elif command == 'QUIT':
+            body['quit'] = (params[-1] if params else '')[:_IRC_TEXT_MAX]
+
+    def _topic(self, conn, channel, text):
+        topics = conn.body.setdefault('topics', {})
+        if channel in topics or len(topics) < _IRC_LIST_MAX:
+            topics[channel[:60]] = text[:_IRC_TEXT_MAX]
+        if _irc_bot_command(text):
+            self._add(conn.body, 'bot_commands', text[:_IRC_TEXT_MAX])
+
+    def _server(self, conn, line):
+        prefix, command, params = _irc_split(line)
+        if not command:
+            return
+        body = conn.body
+        sender = prefix.split('!', 1)[0]
+        if command == '001' and params:
+            body['login'] = 'registered'
+            conn.nick = body['nick'] = params[0][:60]
+            body['server'] = prefix[:120]
+        elif command == '004' and len(params) > 2:
+            body['server_version'] = params[2][:80]
+        elif command == '005':
+            for param in params[1:]:
+                if param.upper().startswith('NETWORK='):
+                    body['network'] = param.split('=', 1)[1][:80]
+        elif command == '332' and len(params) > 2:
+            self._topic(conn, params[1], params[2])
+        elif command == 'TOPIC' and len(params) > 1:
+            self._topic(conn, params[0], params[1])
+        elif command == 'JOIN' and params and (conn.nick is None or sender == conn.nick):
+            for channel in params[0].split(','):
+                if len(conn.channels) < _IRC_LIST_MAX:
+                    conn.channels.setdefault(channel[:60], None)
+        elif command == 'NICK' and params and sender == conn.nick:
+            conn.nick = body['nick'] = params[0][:60]
+        elif command in ('PRIVMSG', 'NOTICE') and len(params) > 1 and '!' in prefix:
+            self._message(conn, False, sender[:60], params[0][:60], params[1])
+        elif command == '381':
+            if 'oper' in body:
+                body['oper']['result'] = 'succeeded'
+            conn.pending_oper = False
+        elif command == 'ERROR':
+            body['closed'] = (params[-1] if params else '')[:_IRC_TEXT_MAX]
+            if 'login' not in body:
+                body['login'] = 'failed' if 'password' in body['closed'].lower() else 'refused'
+        elif command.isdigit() and int(command) in _IRC_ERROR_CODES:
+            text = (params[-1] if params else '')[:200]
+            if command in ('464', '491') and conn.pending_oper:
+                body['oper']['result'] = 'failed: ' + text
+                conn.pending_oper = False
+            elif command == '464' and 'login' not in body:
+                body['login'] = 'failed'
+            errors = body.setdefault('errors', {})
+            if command in errors or len(errors) < _IRC_LIST_MAX:
+                errors[command] = text
+        elif command == 'PING':
+            body['pings'] = body.get('pings', 0) + 1
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            body = dict(conn.body)
+            if not body['commands'] and 'login' not in body:
+                continue                                    # nothing of IRC's
+            if conn.nicks:
+                body['nicks'] = list(conn.nicks)
+            if conn.channels:
+                body['channels'] = list(conn.channels)
+            body.setdefault('login', 'not registered')
+            if conn.nicks:
+                body.setdefault('nick', list(conn.nicks)[-1])     # (unregistered: the last one tried)
+            if _IRC_BOT_NICK.match(body.get('nick', '')):
+                body['bot_like_nick'] = True
+            records.append((conn.flow, conn.first, 'irc', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -6949,7 +7197,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS, Redis, Zabbix)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS, Redis, Zabbix, IRC)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).
