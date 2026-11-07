@@ -3671,7 +3671,7 @@ class TACACS:
             body['args'] = args[:32]
             # (a command and its arguments, each its own cmd= or cmd-arg= -
             # '*' instead of '=' marks one optional - and <cr> ending it)
-            words = [re.split('[=*]', a, 1)[1] for a in args if re.match(r'cmd(-arg)?[=*]', a)]
+            words = [re.split('[=*]', a, maxsplit=1)[1] for a in args if re.match(r'cmd(-arg)?[=*]', a)]
             words = [w for w in words if w and w != '<cr>']
             if kind == 2 and words:
                 command = ' '.join(words)

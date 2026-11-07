@@ -16,7 +16,7 @@ python3 -m unittest discover -v
 Twenty-two test files serve as executable specifications:
 
 - **test_socrates_server.py** - Server-side: validation, security, API endpoints, SQLite, Suricata config
-- **test_socrates_ui.py** - UI-side: HTML structure, CSS, JS functions, syntax, filtering, accessibility, performance
+- **test_socrates_ui.py** - UI-side: HTML structure, CSS, JS functions, syntax, filtering, accessibility, performance, and that a record's strings - which came from a capture, so from whoever sent its packets - render as text: every tshark record type, from the protocol fixtures, with every string replaced by markup that tries to break out of an element or attribute or by a `javascript:` URL, through its row, detail panel and Findings row
 - **test_socrates_db.py** - Database: SQLite schema, bulk loading, query functions
 - **test_sigma_db.py** - Sigma alerts table: insert/query, severity filtering, search, stats, log event import
 - **test_sigma_analyzer.py** - Zircolite/Sigma pipeline: log type detection, result parsing, importing Zircolite output into SQLite

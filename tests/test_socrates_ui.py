@@ -23753,5 +23753,128 @@ class TestTrafficMap(unittest.TestCase):
         self.assertIn("e.target.tagName !== 'SELECT'", guard)
 
 
+@unittest.skipUnless(__import__('shutil').which('tshark'), 'tshark not installed')
+class TestHostileRecordRendering(unittest.TestCase):
+    """Every string a tshark record carries came from a capture, so from
+    whoever sent its packets: a row, a detail panel and a Findings row
+    must show it as text, never run it as HTML. Real records of every
+    type tshark makes - every protocol fixture run through it - with every
+    string value and object key replaced by markup that tries to break out
+    of an element or an attribute, or a javascript: URL, then rendered:
+    no element or handler of the markup's may come out, and no link may
+    lead to script."""
+
+    MARKUP = '"\'><img src=x class=xss-probe onerror=window.__xss=1><svg class=xss-probe onload=window.__xss=1>'
+    PER_TYPE = 3
+
+    @classmethod
+    def _poison(cls, value, keys_from, depth=0, n=None):
+        """value with every string replaced by MARKUP (every seventh by a
+        javascript: URL), and the keys of objects keys_from deep or deeper -
+        a record's data, like its commands or errors by name - too. A
+        record's own fields keep their names, and its event_type stays, so
+        it still reaches its renderer."""
+        n = n if n is not None else [0]
+        if isinstance(value, dict):
+            out = {}
+            for key, item in value.items():
+                n[0] += 1
+                if depth == 0 and key == 'event_type':
+                    out[key] = item
+                    continue
+                name = f'{key}{cls.MARKUP}{n[0]}' if depth >= keys_from else key
+                out[name] = cls._poison(item, keys_from, depth + 1, n)
+            return out
+        if isinstance(value, list):
+            return [cls._poison(item, keys_from, depth + 1, n) for item in value]
+        if isinstance(value, str):
+            n[0] += 1
+            return 'javascript:window.__xss=1' if n[0] % 7 == 0 else value[:8] + cls.MARKUP
+        return value
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        import findings
+        import shark_analyzer
+        import tests.protocol_fixtures as fixtures
+        from tests.test_findings import MATCHES
+        records = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            for attr in sorted(dir(fixtures)):
+                if not (attr.startswith('write_') and attr.endswith('_pcap')) or attr == 'write_pcap':
+                    continue
+                path = os.path.join(tmp, attr + '.pcap')
+                getattr(fixtures, attr)(path)
+                for record in shark_analyzer.run_tshark(path):
+                    kept = records.setdefault(record['event_type'], [])
+                    if len(kept) < cls.PER_TYPE:
+                        kept.append(record)
+        cls.types = sorted(records)
+        # Each record twice: its values replaced, and its values and its
+        # data's keys (2 deep: a protocol's {'AUTH': 1}) replaced
+        hostile = [cls._poison(r, keys_from) for t in cls.types for r in records[t] for keys_from in (99, 2)]
+        cls.records = [dict(r, id=i + 1) for i, r in enumerate(hostile)]
+        # A Findings row per rule: its detail line made from a poisoned record
+        # that matches it, as the server would
+        cls.findings = []
+        for i, rule in enumerate(findings.RULES):
+            event_type, body = MATCHES[rule.id]
+            body = cls._poison(body, 99)
+            event = {'id': 100000 + i, 'event_type': event_type, 'timestamp': '2026-01-01T00:00:00',
+                     'src_ip': '10.0.0.1', 'dest_ip': '10.0.0.2', 'dest_port': 80, event_type: body}
+            cls.findings.append({'rule': rule.id, 'severity': rule.severity, 'title': cls.MARKUP,
+                                 'detail': rule.detail(body), 'event': event, 'count': 1, 'sources': 1,
+                                 'first': '2026-01-01T00:00:00', 'last': '2026-01-01T00:00:00'})
+        cls.rules = [{'id': r.id, 'title': cls.MARKUP, 'severity': r.severity, 'event_type': r.event_type,
+                      'why': cls.MARKUP, 'count': 2, 'groups': 1} for r in findings.RULES]
+
+    def test_the_fixtures_give_every_tshark_record_type(self):
+        """(so a type with no fixture can't slip past the next test)"""
+        import shark_protocols
+        made = {p.event_type for p in shark_protocols.PROTOCOLS + shark_protocols.STRUCTURED_PROTOCOLS}
+        self.assertEqual(made - set(self.types), set())
+
+    def test_hostile_strings_render_as_text(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(f"""
+            var records = {json.dumps(self.records)};
+            var findingsList = {json.dumps(self.findings)};
+            var rules = {json.dumps(self.rules)};
+            var bad = [];
+            function check(where, html) {{
+                var box = document.createElement('div');
+                box.innerHTML = html;
+                var probes = box.querySelectorAll('.xss-probe, [onerror], [onload]').length;
+                var links = [...box.querySelectorAll('[href], [src]')].filter(function(el) {{
+                    return /^\\s*javascript:/i.test(el.getAttribute('href') || el.getAttribute('src') || '');
+                }}).length;
+                if (probes || links) bad.push(where + ': ' + probes + ' elements, ' + links + ' script links');
+            }}
+            records.forEach(function(e) {{
+                var where = e.event_type + ' #' + e.id;
+                try {{
+                    check(where + ' row', '<table><tbody>' + buildRowForEvent(e) + '</tbody></table>');
+                    check(where + ' details', formatEvent(e));
+                }} catch (err) {{
+                    bad.push(where + ' threw ' + err);
+                }}
+            }});
+            findingsList.forEach(function(f) {{
+                try {{
+                    check('finding ' + f.rule, '<table><tbody>' + findingRowHtml(f) + '</tbody></table>');
+                }} catch (err) {{
+                    bad.push('finding ' + f.rule + ' threw ' + err);
+                }}
+            }});
+            check('findings card', findingsInfoCardHtml(rules));
+            window.__jsdom_result = {{bad: bad, rendered: records.length, findings: findingsList.length,
+                                     ran: !!window.__xss}};
+        """)
+        self.assertEqual(result['bad'], [])
+        self.assertFalse(result['ran'], 'no injected handler ran')
+        self.assertEqual((result['rendered'], result['findings']), (len(self.records), len(self.findings)))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
