@@ -302,6 +302,24 @@ Before cutting a release:
    capturing it; the container has both, so confirm the script's own output
    says "captured playbook", not a "no playbook available" warning.
 
+   **Then make the release's social videos**, against the same container:
+   `python3 scripts/social_video/capture.py --base-url
+   http://127.0.0.1:<port>/socrates.html` uploads `attack-lab.pcap` (real
+   attacks on Redis, MySQL, SQL Server, a Zabbix agent and an IRC server,
+   run in containers) and captures its Findings and an IRC record into
+   `~/Videos/so-crates-<version>-social/shots`; first update
+   `scripts/social_video/video.html` for the release - the version, the
+   scenes' text, the protocol wall and the "Also in" stats (its header
+   comment lists them). `python3 scripts/social_video/render.py` then
+   renders a 16:9 cut for X, Mastodon and Bluesky and a 1:1 cut for
+   LinkedIn, 60 seconds each, with posters (`--stills 13 36 45` saves
+   frames to check first; the module docstrings say more). If the UI moved
+   a card or a Findings row, the highlight boxes miss - `positions.py
+   <lab md5>` prints where they belong now. The post text for each platform
+   (`posts.md`, with each platform's limit and the video's alt text) is
+   written by hand in the same folder, starting from the last release's;
+   neither it nor the videos are committed.
+
    Stop and remove this container (`podman rm -f <container>`) once both
    captures succeed - it's served its purpose; step 9 builds and
    smoke-tests a fresh one at the very end as the final pre-push gate.
