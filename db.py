@@ -2019,6 +2019,12 @@ AGGREGATION_DEFAULTS = {
     ('flow', 'Pkts ←'): '0',
     ('flow', 'Bytes →'): '0',
     ('flow', 'Bytes ←'): '0',
+    # counts tshark's records leave out until there's one: extractValue
+    # shows them as 0
+    ('wireguard', 'Keepalives'): '0',
+    ('ecat', 'EEPROM Writes'): '0',
+    ('synphasor', 'Data Frames'): '0',
+    ('synphasor', 'Not Synced'): '0',
 }
 
 # SUBSTR truncation matching extractValue's .slice() calls exactly.
@@ -2031,6 +2037,7 @@ AGGREGATION_TRUNCATE = {
     ('tls', 'Subject'): 40,
     ('tls', 'Issuer'): 40,
     ('dtls', 'Subject'): 40,
+    ('openvpn', 'Subject'): 40,
     ('tls_failure', 'Subject'): 40,
     ('tls_failure', 'Issuer'): 40,
     ('tns_statement', 'Statement'): 200,

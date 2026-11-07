@@ -172,6 +172,15 @@
   their event types' colors, and a fun theme's corner brackets on the
   active card
 
+### Fixes
+
+- **tshark's records stuck waiting** - with a server left running while
+  its code was updated (a git pull), tshark - which runs the code on disk
+  - built its records in a newer format than the server's, and the server
+  threw them away and queued them again, over and over, the status saying
+  it was waiting on something else to finish. A newer build is now used
+  as it is
+
 ## 5.2.0
 
 ### Traffic Map

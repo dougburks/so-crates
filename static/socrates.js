@@ -5133,6 +5133,7 @@
             html += htmlRowText('Service', t.service);
             html += htmlRowText('Privilege', t.privilege !== undefined ? String(t.privilege) : '');
             html += htmlRowText('Command', t.command, 'mono');
+            html += htmlRowText('Command Secret', t.command_secret, 'mono');
             html += htmlRowText('Record', t.record);
             html += htmlRowText('Arguments', (t.args || []).join(' '), 'mono');
             html += htmlRowText('Result', t.result);

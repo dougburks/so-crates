@@ -369,7 +369,7 @@ Before cutting a release:
    this pointed at port 8000. If a full run ever reports a handful of
    failures you can't otherwise explain, check for a listener on
    `JSDOM_TEST_ORIGIN`'s port before assuming a real regression. This run
-   can legitimately take 10+ minutes for the full suite (2000+ tests across
+   can legitimately take 10+ minutes for the full suite (3000+ tests across
    every `tests/test_*.py` module) - give it a generous timeout rather than
    killing it early and mistaking a still-running suite for a hang.
 9. **Build the container image locally and smoke-test it, one more time.**

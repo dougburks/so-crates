@@ -3897,6 +3897,64 @@ class TestHostileInput(unittest.TestCase):
         self.assertEqual(len(llmnr.unanswered_keys), 99)
 
 
+class TestHostileProtocolInput(unittest.TestCase):
+    """A parser that raises loses the analysis every tshark record, and one
+    that loops stalls it to its timeout: bytes a sender chose mustn't do
+    either. Found in the 5.3.0 review."""
+
+    def test_a_negative_memcached_size_doesnt_loop(self):
+        from shark_protocols import Memcache, _MemcacheExchange
+        for line, from_client in ((b'set k 0 0 -17\r\n', True), (b'VALUE k 0 -9\r\n', False)):
+            exchange = _MemcacheExchange(None, 0)
+            Memcache()._chunk(exchange, line, from_client)
+            self.assertEqual(exchange.skip, [0, 0])
+
+    def test_nested_resp_attributes_are_refused_not_recursed(self):
+        from shark_protocols import _resp_value
+        with self.assertRaises(ValueError):
+            _resp_value(b'|0\r\n' * 2000 + b'+OK\r\n', 0)
+
+    def test_a_truncated_tds_rpc(self):
+        from shark_protocols import _tds_rpc
+        self.assertEqual(_tds_rpc(b'\xff\xff\x0a\x00\x00\x00\x00\x00\xe7'), ('sp_executesql', None))
+        self.assertEqual(_tds_rpc(b'\xff\xff\x0a\x00\x00\x00\x00\x00\xe7\x10\x00' + bytes(8)), ('sp_executesql', None))
+
+    def test_zabbix_json_of_the_wrong_types(self):
+        from shark_protocols import Packet, Zabbix
+        flow = shark_analyzer._Flow(('k',), 'TCP', 4, '10.0.0.5', '10.0.0.9', 50000, 10051, 1.0, '0')
+        packet = Packet(1, 1.0, flow, 50000, 10051, 'zabbix', '10.0.0.5', '10.0.0.9')
+        empty = {f: [] for f in Zabbix.fields}
+        for request, response in (({'request': 'active checks', 'host': ['x']},
+                                   {'response': 'success', 'data': [{'key': 'k', 'itemid': [1]}], 'commands': 5}),
+                                  ({'request': 'agent data', 'host': 'h', 'data': 5, 'commands': 7}, {'response': 'success'}),
+                                  ({'request': 'passive checks', 'data': 3}, {'data': 4})):
+            zabbix = Zabbix()
+            zabbix.feed(packet, dict(empty, **{'zabbix.request': ['True'], 'zabbix.data': [json.dumps(request)]}))
+            zabbix.feed(packet, dict(empty, **{'zabbix.response': ['True'], 'zabbix.data': [json.dumps(response)]}))
+            self.assertEqual(len(zabbix.finish()), 1)
+
+    def test_digits_int_cant_read(self):
+        """'\u00b2' is a digit to str.isdigit(), not to int()."""
+        from shark_protocols import IRC, Packet
+        flow = shark_analyzer._Flow(('k',), 'TCP', 4, '10.0.0.5', '10.0.0.9', 50000, 6667, 1.0, '0')
+        lines = ':srv \u00b2 x\r\n:a!b@c PRIVMSG x :\x01DCC SEND f \u00b2 5 6\x01\r\n'
+        irc = IRC()
+        irc.feed(Packet(1, 1.0, flow, 6667, 50000, 'irc', '10.0.0.9', '10.0.0.5'), {'@irc': [lines.encode().hex()]})
+        self.assertEqual(irc.connections[flow.key].body['dcc'][0]['address'], '\u00b2:5')
+
+    def test_passwords_a_statement_or_command_gives_are_masked(self):
+        from shark_protocols import _TACACS_SECRET, _sql_password
+        for statement, shown, password in (
+                ("EXEC sp_addlogin 'eve', 'Secr3t!'", "EXEC sp_addlogin 'eve', ***", 'Secr3t!'),
+                ("EXEC sp_password 'Old1','N3w!','sa'", "EXEC sp_password ***,***,'sa'", 'Old1'),
+                ("EXEC sp_password NULL,'N3w!','sa'", "EXEC sp_password NULL,***,'sa'", 'N3w!'),
+                ("ALTER LOGIN sa WITH PASSWORD='n' OLD_PASSWORD='o'", 'ALTER LOGIN sa WITH PASSWORD=*** OLD_PASSWORD=***', 'n'),
+                ('ALTER USER x IDENTIFIED BY newpw REPLACE oldpw', 'ALTER USER x IDENTIFIED BY *** REPLACE ***', 'newpw')):
+            self.assertEqual(_sql_password(statement), (shown, password))
+        self.assertEqual(_TACACS_SECRET.sub(r'\1***', 'username admin password 0 Cisco123'), 'username admin password 0 ***')
+        self.assertEqual(_TACACS_SECRET.sub(r'\1***', 'show running-config'), 'show running-config')
+
+
 class TestMergeRows(unittest.TestCase):
     """Which of a shark.db's rows join Suricata's in events.db."""
     SURICATA = {'1:http': [(1767225600.0, 1767225620.0)]}     # a flow Suricata called HTTP, 00:00:00-00:00:20

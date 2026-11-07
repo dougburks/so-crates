@@ -2422,11 +2422,8 @@ class RShell:
 # handshake's certificates and cipher suite, and the data packets each
 # way. tshark recognizes OpenVPN on port 1194 only.
 
-_OPENVPN_OPCODES = {1: 'P_CONTROL_HARD_RESET_CLIENT_V1', 2: 'P_CONTROL_HARD_RESET_SERVER_V1',
-                    3: 'P_CONTROL_SOFT_RESET_V1', 4: 'P_CONTROL_V1', 5: 'P_ACK_V1', 6: 'P_DATA_V1',
-                    7: 'P_CONTROL_HARD_RESET_CLIENT_V2', 8: 'P_CONTROL_HARD_RESET_SERVER_V2', 9: 'P_DATA_V2',
-                    10: 'P_CONTROL_HARD_RESET_CLIENT_V3', 11: 'P_CONTROL_WKC_V1'}
 _OPENVPN_CLIENT_RESETS, _OPENVPN_SERVER_RESETS = {1, 7, 10}, {2, 8}
+_OPENVPN_SESSIONS_MAX = 1000       # client session IDs counted per connection (a flood's stop there)
 _OPENVPN_DATA = {6, 9}
 _OPENVPN_STAGES = ('client reset only', 'server answered', 'TLS handshake', 'established')
 
@@ -2467,7 +2464,7 @@ class OpenVPN:
                 session.client = pkt.src
                 body['client_resets'] += 1
                 body['version'] = 'V3 (tls-crypt-v2)' if opcode == 10 else 'V2' if opcode == 7 else 'V1'
-                if i < len(v['openvpn.sessionid']):
+                if i < len(v['openvpn.sessionid']) and len(session.sessions) < _OPENVPN_SESSIONS_MAX:
                     session.sessions.add(v['openvpn.sessionid'][i])
             elif opcode in _OPENVPN_SERVER_RESETS:
                 session.stage = max(session.stage, 1)
@@ -2537,6 +2534,7 @@ class OpenVPN:
 # addressed to one receiver index more than once.
 
 _WG_STAGES = ('initiation only', 'handshake', 'established')
+_WG_RECEIVERS_MAX = 4096           # receiver indexes tracked per connection (a flood's stop there)
 
 
 class _WireGuardSession:
@@ -2592,7 +2590,8 @@ class WireGuard:
             if v['wg.keepalive']:
                 body['keepalives'] = body.get('keepalives', 0) + 1
             index = (pkt.src, _first(v['wg.receiver']))
-            session.receivers[index] = session.receivers.get(index, 0) + 1
+            if index in session.receivers or len(session.receivers) < _WG_RECEIVERS_MAX:
+                session.receivers[index] = session.receivers.get(index, 0) + 1
         if kind in (1, 2) and _first(v['wg.mac2']).strip('0:'):
             body['under_load'] = True
 
@@ -2636,12 +2635,22 @@ _TNS_SQL = re.compile(r'\s*(SELECT|WITH|INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|
 _TNS_OBJECT_VERBS = ('CREATE', 'ALTER', 'DROP', 'TRUNCATE')
 _TNS_ORA = re.compile(rb'ORA-(\d{5}): ?([^\x00\n]*)')
 # A password a statement sets: Oracle's and MySQL's IDENTIFIED BY (MySQL's
-# also WITH <plugin> BY and BY PASSWORD), MySQL's SET PASSWORD, and SQL
-# Server's PASSWORD = '...' (CREATE and ALTER LOGIN)
+# also WITH <plugin> BY and BY PASSWORD), MySQL's SET PASSWORD, SQL
+# Server's PASSWORD = '...' (CREATE and ALTER LOGIN) - and the old one
+# changing it gives, and SQL Server's sp_addlogin and sp_password
 _SQL_PASSWORDS = (re.compile(r'(\bIDENTIFIED\s+(?:WITH\s+\S+\s+)?(?:BY|AS)\s+(?:PASSWORD\s+)?)'
                              r'(\'[^\']*\'|"[^"]*"|[^\s;,]+)', re.I),
                   re.compile(r'(\bSET\s+PASSWORD\b[^=]*=\s*(?:PASSWORD\s*\(\s*)?)(\'[^\']*\'|"[^"]*")', re.I),
-                  re.compile(r"(\bPASSWORD\s*=\s*N?)('[^']*')", re.I))
+                  re.compile(r"(\bPASSWORD\s*=\s*N?)('[^']*')", re.I),
+                  # ALTER LOGIN's OLD_PASSWORD, Oracle's IDENTIFIED BY ... REPLACE <old>
+                  re.compile(r"(\bOLD_PASSWORD\s*=\s*N?)('[^']*')", re.I),
+                  re.compile(r'(\bIDENTIFIED\s+BY\s+\S+\s+REPLACE\s+)(\'[^\']*\'|"[^"]*"|[^\s;,]+)', re.I),
+                  # sp_addlogin's password (its second argument), sp_password's
+                  # old and new ones (its first and second)
+                  re.compile(r"(\bsp_addlogin\s+(?:@\w+\s*=\s*)?N?'[^']*'\s*,\s*(?:@\w+\s*=\s*)?N?)('[^']*')", re.I),
+                  re.compile(r"(\bsp_password\s+(?:@\w+\s*=\s*)?N?)('[^']*')", re.I),
+                  re.compile(r"(\bsp_password\s+(?:@\w+\s*=\s*)?(?:N?'[^']*'|NULL|\*\*\*)\s*,\s*(?:@\w+\s*=\s*)?N?)('[^']*')",
+                             re.I))
 
 
 def _sql_password(statement):
@@ -2856,7 +2865,7 @@ class TNS:
             # (a listener answers a command with a refuse - ERR=0 when it's done)
             body['result'] = 'answered' if body.get('command') and error in (None, '0') else 'refused'
             if error and error != '0':
-                body['error'] = f'ORA-{int(error):05d}' if error.isdigit() else error
+                body['error'] = f'ORA-{int(error):05d}' if error.isascii() and error.isdigit() else error
             version = _tns_vsnnum(refuse)
             if version:
                 body['listener_version'] = version
@@ -3103,7 +3112,7 @@ class Memcache:
                 body['last_error'] = ' '.join(words)[:120]
             elif reply in ('NOT_FOUND', 'EN', 'NF'):
                 body['not_found'] = body.get('not_found', 0) + 1
-        if size:
+        if size and size > 0:                   # (a negative size would step back onto this line)
             value_end = next_at + size + 2
             exchange.skip[side] = max(0, value_end - len(data))
             return min(value_end, len(data))
@@ -3589,6 +3598,10 @@ class RakNet:
 # accounting, and the password.
 
 _TACACS_TYPES = {1: 'authentication', 2: 'authorization', 3: 'accounting'}
+# A secret a command sets (username x password 0 <it>, enable secret 5
+# <it>, snmp-server community <it>, key-string <it>): masked in the
+# command, which Findings shows, and kept beside it
+_TACACS_SECRET = re.compile(r'(\b(?:password|secret|key-string|key|community)\s+(?:\d\s+)?)(\S+)', re.I)
 
 
 class _TACACSSession:
@@ -3661,7 +3674,11 @@ class TACACS:
             words = [re.split('[=*]', a, 1)[1] for a in args if re.match(r'cmd(-arg)?[=*]', a)]
             words = [w for w in words if w and w != '<cr>']
             if kind == 2 and words:
-                body['command'] = ' '.join(words)[:300]
+                command = ' '.join(words)
+                secret = _TACACS_SECRET.search(command)
+                if secret:
+                    body['command_secret'] = secret.group(2)[:120]
+                body['command'] = _TACACS_SECRET.sub(r'\1***', command)[:300]
         if kind == 3:
             body['record'] = ', '.join(name for name, field in (('start', 'tacplus.acct.flags.start'),
                                                                    ('stop', 'tacplus.acct.flags.stop'),
@@ -3971,7 +3988,6 @@ class ECAT:
 
 _MYSQL_STATEMENTS_MAX = 500
 _MYSQL_STATEMENT_MAX = 2000
-_MYSQL_ATTRS = ('program_name', '_client_name', '_client_version', '_os', '_platform', '_pid')
 
 
 class _MySQLConnection:
@@ -4160,6 +4176,8 @@ def _tds_rpc(data):
         kind = data[at] if at < len(data) else 0
         if kind not in (0xe7, 0xef, 0xa7, 0xaf):
             break                             # (past the strings - a type this doesn't size)
+        if at + 8 > len(data):
+            break                             # (cut short)
         size = struct.unpack('<H', data[at + 1:at + 3])[0]
         at += 1 + 2 + 5
         if size == 0xffff:                    # PLP: a total length, then chunks to an empty one
@@ -4173,6 +4191,8 @@ def _tds_rpc(data):
                 value += data[at:at + chunk]
                 at += chunk
         else:
+            if at + 2 > len(data):
+                break
             length = struct.unpack('<H', data[at:at + 2])[0]
             at += 2
             value = b'' if length == 0xffff else data[at:at + length]
@@ -4426,7 +4446,7 @@ def _resp_value(data, at, depth=0):
             if len(items) < 256:
                 items.append(item)
         if kind == b'|':                     # an attribute: the reply itself follows
-            return _resp_value(data, at, depth)
+            return _resp_value(data, at, depth + 1)
         return (('push', items) if kind == b'>' else items), at
     raise ValueError('not RESP')
 
@@ -4694,6 +4714,20 @@ def _zabbix_json(text):
     return value if isinstance(value, dict) else None
 
 
+def _zabbix_list(value):
+    """A message's list - or none, for anything else in its place."""
+    return value if isinstance(value, list) else ()
+
+
+def _zabbix_id(value):
+    """An item's or command's ID - None for one that can't be a key."""
+    return value if isinstance(value, (str, int)) and not isinstance(value, bool) else None
+
+
+def _zabbix_text(value):
+    return value if isinstance(value, str) else None
+
+
 def _zabbix_command(key):
     """system.run[<command>,<mode>]'s command, or None for another key."""
     if not key.startswith('system.run[') or not key.endswith(']'):
@@ -4818,8 +4852,9 @@ class Zabbix:
                 self._command(group, 'system.run', command)
             return
         kind = body['request']
-        items = message.get('data') if isinstance(message.get('data'), list) else []
-        state = self.active.get((pkt.flow.client, pkt.flow.server, message.get('host') or body.get('host')))
+        items = _zabbix_list(message.get('data'))
+        host = _zabbix_text(message.get('host')) or body.get('host')
+        state = self.active.get((pkt.flow.client, pkt.flow.server, host))
         if kind == 'passive checks':
             for item in items:
                 if isinstance(item, dict):
@@ -4831,15 +4866,15 @@ class Zabbix:
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                key = item.get('key') or (state['items'].get(item.get('itemid')) if state else None)
+                key = item.get('key') or (state['items'].get(_zabbix_id(item.get('itemid'))) if state else None)
                 self._key(group, key)
                 if state and isinstance(key, str) and _zabbix_command(key) is not None:
                     entry = state['commands'].get(('item', key))
                     if entry is not None and 'value' in item:
                         entry['result'] = str(item['value'])[:_ZABBIX_OUTPUT_MAX]
-            for item in message.get('commands') or ():
+            for item in _zabbix_list(message.get('commands')):
                 if isinstance(item, dict) and state:
-                    entry = state['commands'].get(('id', item.get('id')))
+                    entry = state['commands'].get(('id', _zabbix_id(item.get('id'))))
                     if entry is not None:
                         entry['result'] = str(item.get('value', item.get('error', '')))[:_ZABBIX_OUTPUT_MAX]
                         if 'error' in item:
@@ -4878,8 +4913,8 @@ class Zabbix:
         elif kind == 'passive checks' and isinstance(request, dict) and message:
             if isinstance(message.get('version'), str):
                 body['version'] = message['version'][:20]
-            keys = [i.get('key') for i in request.get('data') or () if isinstance(i, dict)]
-            for key, item in zip(keys, message.get('data') or ()):
+            keys = [i.get('key') for i in _zabbix_list(request.get('data')) if isinstance(i, dict)]
+            for key, item in zip(keys, _zabbix_list(message.get('data'))):
                 if not isinstance(item, dict):
                     continue
                 if 'error' in item:
@@ -4891,24 +4926,25 @@ class Zabbix:
                                   ('refused: ' + str(item['error']) if 'error' in item
                                    else str(item.get('value', '')))[:_ZABBIX_OUTPUT_MAX])
         elif kind == 'active checks' and message:
-            host = request.get('host') if isinstance(request, dict) else None
+            host = _zabbix_text(request.get('host')) if isinstance(request, dict) else None
             state = self.active.setdefault((pkt.flow.client, pkt.flow.server, host or body.get('host')),
                                            {'items': {}, 'commands': {}})
-            for item in message.get('data') or ():
+            for item in _zabbix_list(message.get('data')):
                 if not isinstance(item, dict) or not isinstance(item.get('key'), str):
                     continue
-                state['items'][item.get('itemid')] = item['key']
+                if _zabbix_id(item.get('itemid')) is not None:
+                    state['items'][item['itemid']] = item['key']
                 self._key(group, item['key'])
                 command = _zabbix_command(item['key'])
                 if command is not None:
                     entry = self._command(group, 'item', command)
                     if entry is not None:
                         state['commands'][('item', item['key'])] = entry
-            for item in message.get('commands') or ():
+            for item in _zabbix_list(message.get('commands')):
                 if isinstance(item, dict) and isinstance(item.get('command'), str):
                     entry = self._command(group, 'remote command', item['command'])
-                    if entry is not None:
-                        state['commands'][('id', item.get('id'))] = entry
+                    if entry is not None and _zabbix_id(item.get('id')) is not None:
+                        state['commands'][('id', item['id'])] = entry
         elif kind == 'command' and message:
             entry = next(iter(group.commands.values()), None) if group.commands else None
             if entry is not None:
@@ -5060,7 +5096,8 @@ class IRC:
                 if len(words) >= 5 and len(body.get('dcc', [])) < _IRC_LIST_MAX:
                     address, port = words[-3:-1] if sized else words[-2:]
                     try:
-                        address = socket.inet_ntoa(struct.pack('!I', int(address))) if address.isdigit() else address
+                        address = socket.inet_ntoa(struct.pack('!I', int(address))) \
+                            if address.isascii() and address.isdigit() else address
                     except (OverflowError, struct.error):
                         pass
                     offer = {'file': ' '.join(words[2:-3] if sized else words[2:-2]).strip('"')[:200],
@@ -5159,7 +5196,7 @@ class IRC:
             body['closed'] = (params[-1] if params else '')[:_IRC_TEXT_MAX]
             if 'login' not in body:
                 body['login'] = 'failed' if 'password' in body['closed'].lower() else 'refused'
-        elif command.isdigit() and int(command) in _IRC_ERROR_CODES:
+        elif command.isascii() and command.isdigit() and int(command) in _IRC_ERROR_CODES:
             text = (params[-1] if params else '')[:200]
             if command in ('464', '491') and conn.pending_oper:
                 body['oper']['result'] = 'failed: ' + text
