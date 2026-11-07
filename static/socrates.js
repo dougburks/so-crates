@@ -2494,6 +2494,10 @@
                 tacacs: '#5c6bc0',
                 synphasor: '#ffca28',
                 ecat: '#ec407a',
+                mysql: '#4fc3f7',
+                mysql_statement: '#ffb74d',
+                mssql: '#ef5350',
+                mssql_statement: '#ff8a65',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -4895,6 +4899,80 @@
             return html;
         }
 
+        // tshark's MySQL records (shark_protocols.MySQL): a connection, and each
+        // distinct statement on it.
+        function renderMysqlDetails(e) {
+            const m = e.mysql || {};
+            let html = htmlSection('MySQL Details', COLORS.EVENT.mysql);
+            html += htmlRowText('Server Version', m.server_version);
+            html += htmlRowText('SSL', m.ssl ? 'yes - the login and everything after it are encrypted' : '');
+            html += htmlRowText('User', m.user);
+            html += htmlRowText('Database', m.database);
+            html += htmlRowText('Password Sent', m.password_sent === undefined ? '' : (m.password_sent ? 'yes' : 'no - an empty password'));
+            html += htmlRowText('Auth Plugin', m.auth_plugin);
+            html += htmlRowText('Client', m.client);
+            html += htmlRowText('Client OS', m.client_os);
+            html += htmlRowText('Login', m.login);
+            html += htmlRowText('Login Error', m.login_error);
+            html += htmlRowText('Commands', Object.entries(m.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Statements', m.statements ? m.statements.toLocaleString() + (m.statements_not_kept ? ` (${m.statements_not_kept.toLocaleString()} past the ones kept)` : '') : '');
+            html += htmlRowText('Errors', Object.entries(m.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            return html;
+        }
+
+        function renderMysqlStatementDetails(e) {
+            const st = e.mysql_statement || {};
+            let html = htmlSection('MySQL Statement Details', COLORS.EVENT.mysql_statement);
+            html += htmlRowText('Verb', st.verb);
+            html += htmlRow('Statement', escapeHtml(st.statement || ''), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Result', st.result);
+            html += htmlRowText('Rows Affected', st.rows_affected !== undefined ? st.rows_affected.toLocaleString() : '');
+            html += htmlRowText('Count', st.count !== undefined ? st.count.toLocaleString() : '');
+            html += htmlRowText('Password', st.password, 'mono');
+            html += htmlRowText('User', st.user);
+            html += htmlRowText('Database', st.database);
+            return html;
+        }
+
+        // tshark's SQL Server records (shark_protocols.TDS): a connection, and
+        // each distinct statement on it.
+        function renderMssqlDetails(e) {
+            const m = e.mssql || {};
+            let html = htmlSection('SQL Server Details', COLORS.EVENT.mssql);
+            html += htmlRowText('Product', m.product);
+            html += htmlRowText('Server Version', m.server_version);
+            html += htmlRowText('Encryption', m.encryption === 'none' ? 'none - the login and its password in the clear' : m.encryption);
+            html += htmlRowText('Client Encryption', m.client_encryption);
+            html += htmlRowText('Server Encryption', m.server_encryption);
+            html += htmlRowText('User', m.user);
+            html += htmlRowText('Password', m.password, 'mono');
+            html += htmlRowText('Database', m.database);
+            html += htmlRowText('Application', m.application);
+            html += htmlRowText('Client Host', m.client_host);
+            html += htmlRowText('Library', m.library);
+            html += htmlRowText('Server Name', m.server_name);
+            html += htmlRowText('Login', m.login);
+            html += htmlRowText('Login Error', m.login_error);
+            html += htmlRowText('Statements', m.statements ? m.statements.toLocaleString() + (m.statements_not_kept ? ` (${m.statements_not_kept.toLocaleString()} past the ones kept)` : '') : '');
+            html += htmlRowText('Errors', Object.entries(m.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            return html;
+        }
+
+        function renderMssqlStatementDetails(e) {
+            const st = e.mssql_statement || {};
+            let html = htmlSection('SQL Server Statement Details', COLORS.EVENT.mssql_statement);
+            html += htmlRowText('Verb', st.verb);
+            html += htmlRow('Statement', escapeHtml(st.statement || ''), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Procedure', st.procedure);
+            html += htmlRowText('Result', st.result);
+            html += htmlRowText('Rows', st.rows !== undefined ? st.rows.toLocaleString() : '');
+            html += htmlRowText('Count', st.count !== undefined ? st.count.toLocaleString() : '');
+            html += htmlRowText('Password', st.password, 'mono');
+            html += htmlRowText('User', st.user);
+            html += htmlRowText('Database', st.database);
+            return html;
+        }
+
         // tshark's EtherCAT records (shark_protocols.ECAT): one per master.
         function renderEcatDetails(e) {
             const c = e.ecat || {};
@@ -5623,6 +5701,10 @@
             tacacs: renderTacacsDetails,
             synphasor: renderSynphasorDetails,
             ecat: renderEcatDetails,
+            mysql: renderMysqlDetails,
+            mysql_statement: renderMysqlStatementDetails,
+            mssql: renderMssqlDetails,
+            mssql_statement: renderMssqlStatementDetails,
             fins: renderFinsDetails,
             fins_action: renderFinsActionDetails,
             hart_ip: renderHartIpDetails,
@@ -8754,6 +8836,10 @@
             tacacs: 'TACACS+',
             synphasor: 'C37.118',
             ecat: 'EtherCAT',
+            mysql: 'MySQL',
+            mysql_statement: 'MySQL Statements',
+            mssql: 'SQL Server',
+            mssql_statement: 'SQL Server Statements',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -9934,6 +10020,14 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Host Type', 'Session', 'Commands', 'Tags', 'Answered'];
                 case 'hart_ip_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Device', 'Data', 'Result'];
+                case 'mysql':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Database', 'Client', 'Server Version', 'Login', 'Statements', 'SSL'];
+                case 'mysql_statement':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Verb', 'Statement', 'Result', 'Count'];
+                case 'mssql':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Database', 'Application', 'Client Host', 'Encryption', 'Login', 'Statements'];
+                case 'mssql_statement':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Verb', 'Statement', 'Result', 'Count'];
                 case 'ecat':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Slaves', 'State Requests', 'EEPROM Writes', 'FoE', 'Answered'];
                 case 'synphasor':
@@ -10442,6 +10536,10 @@
                 case 'tacacs':
                 case 'synphasor':
                 case 'ecat':
+                case 'mysql':
+                case 'mysql_statement':
+                case 'mssql':
+                case 'mssql_statement':
                 case 'rsh':
                 case 'openvpn':
                 case 'wireguard':
@@ -13114,13 +13212,13 @@
                     if (r?.value !== undefined) return String(r.value);
                     return e.opcua_action?.arguments ? e.opcua_action.arguments.join(', ') : '';
                 }
-                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || e.tns?.result || e.tns_statement?.result || e.fins_action?.result || e.hart_ip_action?.result || e.tacacs?.result || '';
+                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || e.tns?.result || e.tns_statement?.result || e.mysql_statement?.result || e.mssql_statement?.result || e.fins_action?.result || e.hart_ip_action?.result || e.tacacs?.result || '';
                 case 'Updates': return e.iec104_point?.updates !== undefined ? String(e.iec104_point.updates) : '';
                 case 'Last Value': { const r = e.iec104_point || e.bacnet_property; return r?.last_value !== undefined ? String(r.last_value) : ''; }
                 // BACnet: an action's, a read/notification summary's, a device's
                 case 'Object': return e.bacnet?.object || e.bacnet_property?.object || e.mms_action?.object || '';
                 case 'Property': return e.bacnet?.property || e.bacnet_property?.property || '';
-                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp || e.pn_dcp || e.pn_device || e.mongodb_action || e.tns_statement; return r?.count !== undefined ? String(r.count) : ''; }
+                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp || e.pn_dcp || e.pn_device || e.mongodb_action || e.tns_statement || e.mysql_statement || e.mssql_statement; return r?.count !== undefined ? String(r.count) : ''; }
                 // LLDP and CDP: a neighbor's announcements
                 case 'System Name': return e.lldp?.system_name || '';
                 case 'Chassis ID': return e.lldp?.chassis_id || '';
@@ -13162,7 +13260,7 @@
                 // OPC UA: a connection's, an action's
                 case 'Endpoint': return e.opcua?.endpoint || '';
                 case 'Security': return e.opcua?.security_policy || '';
-                case 'Application': return e.opcua?.client_application || '';
+                case 'Application': return e.mssql ? (e.mssql.application || '') : (e.opcua?.client_application || '');
                 case 'Activation': return e.opcua?.activation || '';
                 case 'Node': {
                     if (e.fins) return e.fins.node !== undefined ? String(e.fins.node) : '';
@@ -13195,11 +13293,11 @@
                 case 'Unanswered': return e.wireguard?.unanswered !== undefined ? String(e.wireguard.unanswered) : '';
                 case 'Keepalives': return e.wireguard ? String(e.wireguard.keepalives || 0) : '';
                 case 'Databases': return (e.mongodb?.databases || []).join(', ');
-                case 'Database': return e.mongodb_action?.database || '';
+                case 'Database': return e.mongodb_action?.database || e.mysql?.database || e.mssql?.database || '';
                 // Oracle TNS: a connection's, a statement's
-                case 'DB User': return (e.tns || e.tns_statement)?.db_user || '';
+                case 'DB User': return (e.tns || e.tns_statement)?.db_user || (e.mysql || e.mysql_statement || e.mssql || e.mssql_statement)?.user || '';
                 case 'OS User': return e.tns?.os_user || e.tns?.client_user || '';
-                case 'Statements': return e.tns?.statements !== undefined ? String(e.tns.statements) : '';
+                case 'Statements': { const r = e.tns || e.mysql || e.mssql; return r?.statements !== undefined ? String(r.statements) : ''; }
                 // memcached: a connection's or UDP exchange's
                 case 'Commands': return Object.keys((e.memcache || e.fins || e.hart_ip || e.synphasor || e.ecat)?.commands || {}).join(', ');
                 // EtherCAT: a master's
@@ -13225,11 +13323,12 @@
                 case 'Req Bytes': return e.memcache ? String(e.memcache.request_bytes || 0) : '';
                 case 'Resp Bytes': return e.memcache ? String(e.memcache.response_bytes || 0) : '';
                 case 'Amplification': return e.memcache?.amplification !== undefined ? String(e.memcache.amplification) : '';
-                case 'Verb': return e.tns_statement?.verb || '';
-                case 'Statement': return (e.tns_statement?.statement || '').slice(0, 200);
+                case 'Verb': return (e.tns_statement || e.mysql_statement || e.mssql_statement)?.verb || '';
+                case 'Statement': return ((e.tns_statement || e.mysql_statement || e.mssql_statement)?.statement || '').slice(0, 200);
+                case 'Encryption': return e.mssql?.encryption || '';
                 case 'Collection': return e.mongodb_action?.collection || '';
                 case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || e.rsh?.password || '';
-                case 'Login': return e.telnet?.login || e.mongodb?.login || e.tns?.login || '';
+                case 'Login': return e.telnet?.login || e.mongodb?.login || e.tns?.login || e.mysql?.login || e.mssql?.login || '';
                 case 'Area': return e.fins_action?.area || e.s7comm?.items?.[0]?.area || '';
                 case 'Error': return e.s7comm?.response?.error_class || '';
                 case 'Host': return e.http?.hostname || e.syslog?.hostname || '';
@@ -13281,7 +13380,7 @@
                 case 'Cipher': return e.ipmi?.cipher_accepted?.authentication || e.ipmi?.cipher_requested?.authentication || '';
                 case 'Weaknesses': return (e.ipmi?.weaknesses || []).join(', ');
                 // L2TP: who each end of a control connection said it was
-                case 'Client Host': return e.l2tp?.client_host_name || '';
+                case 'Client Host': return e.mssql ? (e.mssql.client_host || '') : (e.l2tp?.client_host_name || '');
                 case 'Firmware': return e.l2tp?.client_firmware || '';
                 case 'Server Host': return e.l2tp?.server_host_name || e.xdmcp?.server_host_name || '';
                 case 'Calls': return e.l2tp?.calls ? String(e.l2tp.calls) : '';
@@ -13416,7 +13515,8 @@
                     return e.ftp?.command || '';
                 }
                 case 'Rows': return e.pgsql?.response?.data_rows !== undefined ? String(e.pgsql.response.data_rows) : '';
-                case 'SSL': return e.pgsql?.response?.ssl_accepted !== undefined ? (e.pgsql.response.ssl_accepted ? 'Yes' : 'No') : '';
+                case 'SSL': if (e.mysql) return e.mysql.ssl ? 'yes' : 'no';
+                    return e.pgsql?.response?.ssl_accepted !== undefined ? (e.pgsql.response.ssl_accepted ? 'Yes' : 'No') : '';
                 case 'SNI': return e.quic?.sni || '';
                 case 'QUIC Version': return e.quic?.version || '';
                 case 'JA3': return e.quic?.ja3?.hash || '';
@@ -13440,6 +13540,7 @@
                 }
                 case 'Server Version': {
                     if (e.mongodb) return e.mongodb.server_version || '';
+                    if (e.mysql) return e.mysql.server_version || '';
                     if (e.memcache) return e.memcache.version || '';
                     if (e.event_type === 'rfb') {
                         const spv = e.rfb?.server_protocol_version;
@@ -13447,7 +13548,7 @@
                     }
                     return e.ssh?.server?.software_version || '';
                 }
-                case 'Client': return e.krb5?.cname || '';
+                case 'Client': return e.mysql ? (e.mysql.client || '') : (e.krb5?.cname || '');
                 case 'Service': {
                     if (e.event_type === 'nbns') return e.nbns?.service || '';
                     if (e.event_type === 'bacnet') return e.bacnet?.service || '';

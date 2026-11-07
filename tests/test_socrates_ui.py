@@ -23278,6 +23278,18 @@ class TestTsharkUI(unittest.TestCase):
         'hart_ip_action': {'event_type': 'hart_ip_action', 'hart_ip_action': {'command': 'Perform Device Reset', 'number': 42,
                                                                               'device': '264e0000d2', 'data': '',
                                                                               'result': 'access restricted'}},
+        'mssql': {'event_type': 'mssql', 'mssql': {'user': 'sa', 'database': 'master', 'application': 'SQLCMD',
+                                                  'client_host': 'attacker', 'encryption': 'none', 'login': 'succeeded',
+                                                  'statements': 8}},
+        'mssql_statement': {'event_type': 'mssql_statement', 'mssql_statement': {'user': 'sa', 'verb': 'EXEC',
+                                                                                 'statement': "EXEC xp_cmdshell 'whoami'",
+                                                                                 'result': 'ok', 'count': 1}},
+        'mysql': {'event_type': 'mysql', 'mysql': {'user': 'app', 'database': 'shop', 'client': 'mysql libmariadb 3.4.9',
+                                                  'server_version': '11.8.6-MariaDB', 'login': 'succeeded',
+                                                  'statements': 9, 'ssl': False}},
+        'mysql_statement': {'event_type': 'mysql_statement', 'mysql_statement': {'user': 'app', 'verb': 'DROP DATABASE',
+                                                                                 'statement': 'DROP DATABASE shop',
+                                                                                 'result': 'ok', 'count': 1}},
         'ecat': {'event_type': 'ecat', 'ecat': {'commands': {'BRD': 3, 'FPWR': 2}, 'slaves': 3,
                                                 'state_requests': {'INIT': 1, 'OP': 1}, 'eeprom_writes': 1,
                                                 'foe': ['write firmware.efw'], 'answered': True}},
@@ -23378,6 +23390,10 @@ class TestTsharkUI(unittest.TestCase):
         'fins_action': ['Memory Area Write', 'DM : Word contents', '0x0064', '', 'ffff', 'ok'],
         'hart_ip': ['primary master', 'accepted', 'Session Initiate, Read Primary Variable', 'PT-101', 'yes'],
         'hart_ip_action': ['Perform Device Reset', '264e0000d2', '', 'access restricted'],
+        'mssql': ['sa', 'master', 'SQLCMD', 'attacker', 'none', 'succeeded', '8'],
+        'mssql_statement': ['sa', 'EXEC', "EXEC xp_cmdshell 'whoami'", 'ok', '1'],
+        'mysql': ['app', 'shop', 'mysql libmariadb 3.4.9', '11.8.6-MariaDB', 'succeeded', '9', 'no'],
+        'mysql_statement': ['app', 'DROP DATABASE', 'DROP DATABASE shop', 'ok', '1'],
         'ecat': ['BRD, FPWR', '3', 'INIT, OP', '1', 'write firmware.efw', 'yes'],
         'synphasor': ['Substation B PMU', '1410', '30 per second', 'send CFG-2 frame, data transmission on', '45', '2'],
         'tacacs': ['authorization', 'admin', 'write erase', 'vty0', '10.9.9.9', 'FAIL', 'no'],
@@ -23429,6 +23445,7 @@ class TestTsharkUI(unittest.TestCase):
                            'bacnet_device': 'BACnet Device', 'opcua_action': 'OPC UA Action', 'mms_action': 'MMS Action',
                            'pn_dcp': 'PROFINET DCP', 'pn_device': 'PROFINET Device', 'mongodb_action': 'MongoDB Action', 'rsh': 'Remote Shell',
                            'fins_action': 'Omron FINS Action', 'hart_ip_action': 'HART-IP Action',
+                           'mysql_statement': 'MySQL Statement', 'mssql_statement': 'SQL Server Statement',
                            'tls_failure': 'TLS Failure'}.get(t, r['label'])
                 self.assertIn(f'{section} Details', r['detail'])
 
@@ -23469,7 +23486,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'raknet', 'tacacs', 'synphasor', 'ecat', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'raknet', 'tacacs', 'synphasor', 'ecat', 'mysql', 'mysql_statement', 'mssql', 'mssql_statement', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 

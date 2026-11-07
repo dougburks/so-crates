@@ -738,6 +738,135 @@ class TestMMS(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestTDS(unittest.TestCase):
+    """tests/protocol_fixtures.write_mssql_pcap: one record per SQL Server
+    connection and per distinct statement - with what Suricata 8.0.8
+    logged for the capture (tests/data/mssql_fixture.eve.json): flows it
+    gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_mssql_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'mssql.pcap')
+        write_mssql_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['mssql'] for r in cls.records if r['event_type'] == 'mssql'}
+        cls.statements = {r['mssql_statement']['statement']: r['mssql_statement'] for r in cls.records
+                          if r['event_type'] == 'mssql_statement'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_unencrypted_login(self):
+        c = self.connections[42401]
+        self.assertEqual({k: c.get(k) for k in ('encryption', 'server_version', 'user', 'password', 'application',
+                                                'client_host', 'database', 'library', 'product', 'login', 'statements',
+                                                'errors')},
+                         {'encryption': 'none', 'server_version': '16.0.4305', 'user': 'sa', 'password': 'Str0ng!Passw0rd',
+                          'application': 'SQLCMD', 'client_host': 'attacker', 'database': 'master',
+                          'library': 'Python TDS Library', 'product': 'Microsoft SQL Server', 'login': 'succeeded',
+                          'statements': 8, 'errors': {'15281': 1}},
+                         "the password as tshark unobfuscates it; the server's pre-login answer in a response packet")
+        self.assertEqual((self.connections[42400]['login'], self.connections[42400]['login_error']),
+                         ('failed', "Error 18456: Login failed for user 'sa'."))
+
+    def test_statements_batches_and_rpc(self):
+        self.assertEqual(self.statements['CREATE LOGIN backdoor WITH PASSWORD = ***, CHECK_POLICY = OFF']['password'],
+                         'Bd00r!x9z')
+        self.assertEqual(self.statements['ALTER SERVER ROLE sysadmin ADD MEMBER backdoor']['verb'], 'ALTER SERVER ROLE')
+        self.assertEqual(self.statements["EXEC xp_cmdshell 'whoami'"]['result'],
+                         "Error 15281: SQL Server blocked access to procedure 'sys.xp_cmdshell'.")
+        self.assertEqual(self.statements['SELECT name FROM sys.databases WHERE name = @P1']['procedure'], 'sp_executesql',
+                         "sp_executesql's statement, from its chunked (PLP) parameter")
+        self.assertEqual(self.statements['EXEC dbo.p_GetOrders']['procedure'], 'dbo.p_GetOrders')
+
+    def test_encrypted_logins(self):
+        self.assertEqual({k: self.connections[42402].get(k) for k in ('encryption', 'login', 'user', 'statements')},
+                         {'encryption': 'login only', 'login': 'succeeded', 'user': None, 'statements': 1})
+        self.assertEqual((self.connections[42403]['encryption'], self.connections[42403]['login']), ('everything', 'encrypted'))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('mssql_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (4, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'mssql_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'mssql.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('mssql'), counts.get('mssql_statement')), (4, 9))
+        self.assertNotIn('conn_tds', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestMySQL(unittest.TestCase):
+    """tests/protocol_fixtures.write_mysql_pcap: one record per MySQL
+    connection and per distinct statement - with what Suricata 8.0.8
+    logged for the capture (tests/data/mysql_fixture.eve.json): flows it
+    gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_mysql_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'mysql.pcap')
+        write_mysql_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['mysql'] for r in cls.records if r['event_type'] == 'mysql'}
+        cls.statements = {r['mysql_statement']['statement']: r['mysql_statement'] for r in cls.records
+                          if r['event_type'] == 'mysql_statement'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_logins(self):
+        self.assertEqual({k: self.connections[42301].get(k) for k in ('server_version', 'user', 'database', 'auth_plugin',
+                                                                      'password_sent', 'client', 'client_os', 'login',
+                                                                      'statements', 'errors')},
+                         {'server_version': '11.8.6-MariaDB-0+deb13u1', 'user': 'app', 'database': 'shop',
+                          'auth_plugin': 'mysql_native_password', 'password_sent': True, 'client': 'mysql libmariadb 3.4.9',
+                          'client_os': 'Linux x86_64', 'login': 'succeeded', 'statements': 9, 'errors': {'1146': 1}})
+        self.assertEqual((self.connections[42300]['login'], self.connections[42300]['login_error']),
+                         ('failed', "ERROR 1045: Access denied for user 'app'@'10.1.0.10' (using password: YES)"))
+        self.assertEqual((self.connections[42302]['user'], self.connections[42302]['password_sent'],
+                          self.connections[42302]['login']), ('root', False, 'succeeded'))
+        self.assertEqual(self.connections[42303], {'statements': 0, 'server_version': '11.8.6-MariaDB-0+deb13u1', 'ssl': True})
+
+    def test_statements(self):
+        self.assertEqual(self.statements["CREATE USER 'backdoor'@'%' IDENTIFIED BY ***"]['password'], 'Bd00r!')
+        self.assertEqual(self.statements["SET PASSWORD FOR 'app'@'%' = PASSWORD(***)"]['password'], 'n3wPass')
+        self.assertEqual((self.statements['SELECT * FROM customers']['count'],
+                          self.statements['SELECT * FROM customers']['result']), (2, 'ok'))
+        self.assertEqual(self.statements['SELECT * FROM nosuchtable']['result'],
+                         "ERROR 1146: Table 'shop.nosuchtable' doesn't exist")
+        self.assertEqual((self.statements['DROP DATABASE shop']['verb'], self.statements['DROP DATABASE shop']['rows_affected']),
+                         ('DROP DATABASE', 1))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('mysql_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (4, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'mysql_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'mysql.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('mysql'), counts.get('mysql_statement')), (4, 9))
+        self.assertNotIn('conn_mysql', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestECAT(unittest.TestCase):
     """tests/protocol_fixtures.write_ecat_pcap: one record per EtherCAT
     master - with what Suricata 8.0.8 logged for the capture

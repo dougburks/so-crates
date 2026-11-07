@@ -80,6 +80,12 @@ def _list(values, limit=3):
 
 
 _TNS_ACCOUNT = ('CREATE USER', 'ALTER USER', 'DROP USER', 'GRANT', 'CREATE ROLE', 'ALTER ROLE', 'DROP ROLE')
+_MYSQL_ACCOUNT = ('CREATE USER', 'ALTER USER', 'DROP USER', 'RENAME USER', 'GRANT', 'SET', 'CREATE ROLE', 'DROP ROLE')
+_MYSQL_WRITES = ('INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'REVOKE', 'RENAME', 'LOAD')
+_MSSQL_ACCOUNT = ('CREATE LOGIN', 'ALTER LOGIN', 'DROP LOGIN', 'CREATE USER', 'ALTER USER', 'DROP USER', 'GRANT',
+                  'ALTER SERVER ROLE', 'CREATE SERVER ROLE', 'ALTER ROLE', 'CREATE ROLE', 'CREATE APPLICATION ROLE')
+_MSSQL_ACCOUNT_PROCS = ('sp_addsrvrolemember', 'sp_addrolemember', 'sp_addlogin', 'sp_grantlogin', 'sp_password')
+_MSSQL_WRITES = ('INSERT', 'UPDATE', 'DELETE', 'MERGE', 'REVOKE', 'DENY', 'BULK')
 _TNS_WRITES = ('INSERT', 'UPDATE', 'DELETE', 'MERGE', 'REVOKE', 'RENAME', 'COMMENT', 'AUDIT', 'NOAUDIT', 'FLASHBACK')
 
 
@@ -316,6 +322,49 @@ RULES = (
                          ('-', 'answered' if b.get('answered') else 'no answer')),
          'Every item in the cache dropped, or the server stopped - what an application does rarely, and '
          'anyone who reaches an open memcached can do.'),
+    Rule('mssql_os_command', 'high', 'mssql_statement', 'SQL Server running operating-system commands',
+         f"(lower({_j('mssql_statement', 'statement')}) LIKE '%xp_cmdshell%' "
+         f"OR lower({_j('mssql_statement', 'statement')}) LIKE '%sp_oacreate%' "
+         f"OR lower({_j('mssql_statement', 'statement')}) LIKE '%sp_execute_external_script%')",
+         _tns_statement,
+         'xp_cmdshell, OLE Automation or an external script - SQL Server running commands on its host, as its '
+         'service account: the usual way from a database login to the server.'),
+    Rule('mssql_cleartext_login', 'high', 'mssql', 'SQL Server login sent unencrypted',
+         f"{_j('mssql', 'encryption')} = 'none' AND {_j('mssql', 'password')} IS NOT NULL",
+         lambda b: _join(b.get('user'), ('from', b.get('client_host')), ('-', b.get('application'))),
+         'A SQL Server login with encryption turned off on both sides - its password only obfuscated, '
+         'readable by anyone on the path.'),
+    Rule('mssql_account_change', 'high', 'mssql_statement', 'SQL Server login or role created or granted',
+         f"({_in('mssql_statement', 'verb', list(_MSSQL_ACCOUNT))} OR "
+         + ' OR '.join(f"lower({_j('mssql_statement', 'statement')}) LIKE '%{p}%'" for p in _MSSQL_ACCOUNT_PROCS) + ')',
+         _tns_statement,
+         'A login, user or role created, changed or given more rights - sysadmin, most often - or a password '
+         'set: a way back in that outlasts the session.'),
+    Rule('mssql_destroy', 'high', 'mssql_statement', 'SQL Server database or table dropped',
+         f"({_j('mssql_statement', 'verb')} LIKE 'DROP %' OR {_j('mssql_statement', 'verb')} LIKE 'TRUNCATE%') "
+         f"AND NOT {_in('mssql_statement', 'verb', ['DROP LOGIN', 'DROP USER'])}",
+         _tns_statement,
+         'A database, table or other object deleted wholesale.'),
+    Rule('mysql_file_access', 'high', 'mysql_statement', 'MySQL reading or writing server files',
+         f"(upper({_j('mysql_statement', 'statement')}) LIKE '%INTO OUTFILE%' "
+         f"OR upper({_j('mysql_statement', 'statement')}) LIKE '%INTO DUMPFILE%' "
+         f"OR upper({_j('mysql_statement', 'statement')}) LIKE '%LOAD_FILE(%' "
+         f"OR upper({_j('mysql_statement', 'statement')}) LIKE '%LOAD DATA%INFILE%')",
+         _tns_statement,
+         "SQL writing a file on the database server - a web shell, most often, through INTO OUTFILE - or "
+         'reading one (LOAD_FILE, LOAD DATA INFILE): a way from the database onto the server.'),
+    Rule('mysql_account_change', 'high', 'mysql_statement', 'MySQL user or privilege created or granted',
+         f"({_in('mysql_statement', 'verb', [v for v in _MYSQL_ACCOUNT if v != 'SET'])} "
+         f"OR upper({_j('mysql_statement', 'statement')}) LIKE 'SET PASSWORD%')",
+         _tns_statement,
+         'A database user or role created, changed or given more rights, or a password set - a way back in '
+         'that outlasts the session.'),
+    Rule('mysql_destroy', 'high', 'mysql_statement', 'MySQL database or table dropped',
+         f"({_j('mysql_statement', 'verb')} LIKE 'DROP %' OR {_j('mysql_statement', 'verb')} LIKE 'TRUNCATE%') "
+         f"AND NOT {_in('mysql_statement', 'verb', ['DROP USER', 'DROP ROLE'])}",
+         _tns_statement,
+         'A database, table or other object deleted wholesale - what a ransom attack on an open database does '
+         'before it leaves its note.'),
     Rule('tns_account_change', 'high', 'tns_statement', 'Oracle user or privilege created or granted',
          _in('tns_statement', 'verb', list(_TNS_ACCOUNT)),
          _tns_statement,
@@ -416,6 +465,41 @@ RULES = (
          lambda b: _join(_list(list(b.get('state_requests') or {})), 'every slave at once' if b.get('broadcast_state_change') else None),
          "A master asked EtherCAT slaves to change state - routine when it starts the machine (INIT, PRE-OP, "
          'SAFE-OP, OP), and out of OP, its outputs stop: a running machine halted.'),
+    Rule('mssql_configuration', 'medium', 'mssql_statement', 'SQL Server configuration changed',
+         f"lower({_j('mssql_statement', 'statement')}) LIKE '%sp_configure%,%'",
+         _tns_statement,
+         "A server option set with sp_configure - turning on what's off by default (advanced options, "
+         'xp_cmdshell, OLE Automation, CLR) is the step before using it.'),
+    Rule('mssql_password_hashes', 'medium', 'mssql_statement', 'SQL Server password hashes read',
+         f"(lower({_j('mssql_statement', 'statement')}) LIKE '%sql_logins%' "
+         f"OR lower({_j('mssql_statement', 'statement')}) LIKE '%syslogins%') "
+         f"AND lower({_j('mssql_statement', 'statement')}) LIKE '%password%' AND {_j('mssql_statement', 'result')} = 'ok'",
+         _tns_statement,
+         "The server's logins read with their password hashes - to crack offline."),
+    Rule('mssql_change', 'medium', 'mssql_statement', 'SQL Server write or change',
+         f"({_in('mssql_statement', 'verb', list(_MSSQL_WRITES))} OR {_j('mssql_statement', 'verb')} LIKE 'CREATE %' "
+         f"OR {_j('mssql_statement', 'verb')} LIKE 'ALTER %') AND NOT {_in('mssql_statement', 'verb', list(_MSSQL_ACCOUNT))}",
+         _tns_statement,
+         'Rows inserted, updated or deleted, or a table or other object created or changed. '
+         "An application's writes look the same - check who sent them."),
+    Rule('mysql_password_hashes', 'medium', 'mysql_statement', 'MySQL password hashes read',
+         f"lower({_j('mysql_statement', 'statement')}) LIKE '%from mysql.user%' AND "
+         f"{_j('mysql_statement', 'result')} = 'ok'",
+         _tns_statement,
+         "The server's own table of users read, with their password hashes - to crack offline, or to log in "
+         'with where the hash alone is enough.'),
+    Rule('mysql_no_password', 'medium', 'mysql', 'MySQL login with no password',
+         f"{_j('mysql', 'login')} = 'succeeded' AND {_j('mysql', 'password_sent')} = 0",
+         lambda b: _join(b.get('user'), ('to', b.get('database')), ('-', b.get('client'))),
+         'A database login that sent an empty password and was let in - an account anyone who reaches the '
+         'server can use.'),
+    Rule('mysql_change', 'medium', 'mysql_statement', 'MySQL write or change',
+         f"({_in('mysql_statement', 'verb', list(_MYSQL_WRITES))} OR {_j('mysql_statement', 'verb')} LIKE 'CREATE %' "
+         f"OR {_j('mysql_statement', 'verb')} LIKE 'ALTER %') "
+         f"AND NOT {_in('mysql_statement', 'verb', list(_MYSQL_ACCOUNT))}",
+         _tns_statement,
+         'Rows inserted, updated or deleted, or a table or other object created or changed. '
+         "An application's writes look the same - check who sent them."),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),
@@ -528,6 +612,14 @@ RULES = (
          lambda b: _join(_list(list(b.get('commands') or {})), ('-', _counted(b.get('slaves'), 'slave'))),
          "EtherCAT slaves answering frames that came over UDP - a fieldbus that belongs inside a machine, "
          'reachable from an IP network.'),
+    Rule('mssql_login_failed', 'low', 'mssql', 'SQL Server login failed',
+         f"{_j('mssql', 'login')} = 'failed'",
+         lambda b: _join(b.get('user'), ('from', b.get('client_host')), ('-', b.get('login_error'))),
+         'A SQL Server login refused - a mistyped password, or one guess of many (sa is the usual guess).'),
+    Rule('mysql_login_failed', 'low', 'mysql', 'MySQL login failed',
+         f"{_j('mysql', 'login')} = 'failed'",
+         lambda b: _join(b.get('user'), ('-', b.get('login_error'))),
+         'A database login refused - a mistyped password, or one guess of many.'),
     Rule('tns_login_failed', 'low', 'tns', 'Oracle login failed',
          f"{_j('tns', 'login')} = 'failed'",
          lambda b: _join(b.get('db_user'), ('-', b.get('login_error'))),

@@ -2634,7 +2634,25 @@ _TNS_SQL = re.compile(r'\s*(SELECT|WITH|INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|
                       r'ROLLBACK|SAVEPOINT|SET\s+(?:ROLE|TRANSACTION|CONSTRAINTS?))\b', re.I)
 _TNS_OBJECT_VERBS = ('CREATE', 'ALTER', 'DROP', 'TRUNCATE')
 _TNS_ORA = re.compile(rb'ORA-(\d{5}): ?([^\x00\n]*)')
-_TNS_IDENTIFIED = re.compile(r'(\bIDENTIFIED\s+BY\s+)("[^"]*"|[^\s;]+)', re.I)
+# A password a statement sets: Oracle's and MySQL's IDENTIFIED BY (MySQL's
+# also WITH <plugin> BY and BY PASSWORD), MySQL's SET PASSWORD, and SQL
+# Server's PASSWORD = '...' (CREATE and ALTER LOGIN)
+_SQL_PASSWORDS = (re.compile(r'(\bIDENTIFIED\s+(?:WITH\s+\S+\s+)?(?:BY|AS)\s+(?:PASSWORD\s+)?)'
+                             r'(\'[^\']*\'|"[^"]*"|[^\s;,]+)', re.I),
+                  re.compile(r'(\bSET\s+PASSWORD\b[^=]*=\s*(?:PASSWORD\s*\(\s*)?)(\'[^\']*\'|"[^"]*")', re.I),
+                  re.compile(r"(\bPASSWORD\s*=\s*N?)('[^']*')", re.I))
+
+
+def _sql_password(statement):
+    """A statement with any password it sets masked (***), and that
+    password, or None."""
+    password = None
+    for pattern in _SQL_PASSWORDS:
+        match = pattern.search(statement)
+        if match and password is None:
+            password = match.group(2).strip('\'"')
+        statement = pattern.sub(r'\1***', statement)
+    return statement, password
 _TNS_NO_DATA = '01403'                  # a fetch's end, not a failure
 _TNS_LOGIN_KEYS = {'AUTH_TERMINAL': 'terminal', 'AUTH_PROGRAM_NM': 'program', 'AUTH_MACHINE': 'machine',
                    'AUTH_PID': 'pid', 'AUTH_SID': 'os_user'}
@@ -2762,6 +2780,8 @@ def _tns_verb(statement):
     words = statement.upper().split()
     if words[0] in _TNS_OBJECT_VERBS and len(words) > 1:
         rest = words[1:4] if words[1:3] == ['OR', 'REPLACE'] else words[1:2]
+        if rest in (['SERVER'], ['APPLICATION']) and len(words) > 2:
+            rest = words[1:3]                 # (SQL Server's SERVER ROLE, SERVER AUDIT, APPLICATION ROLE)
         if rest and rest[-1] in ('PUBLIC', 'GLOBAL', 'UNIQUE', 'BITMAP') and len(words) > len(rest) + 1:
             rest = words[1:len(rest) + 2]
         return ' '.join([words[0]] + rest)
@@ -2867,12 +2887,11 @@ class TNS:
                 body['statements_not_kept'] = body.get('statements_not_kept', 0) + 1
                 conn.waiting = None
                 return
-            shown = _TNS_IDENTIFIED.sub(r'\1***', statement)
+            shown, password = _sql_password(statement)
             record = conn.statements[statement] = [when, {'statement': shown[:_TNS_STATEMENT_MAX],
                                                           'verb': _tns_verb(statement), 'count': 0}]
-            password = _TNS_IDENTIFIED.search(statement)
             if password:
-                record[1]['password'] = password.group(2).strip('"')
+                record[1]['password'] = password
         record[1]['count'] += 1
         conn.waiting = record[1]
 
@@ -3933,6 +3952,379 @@ class ECAT:
             body = dict(master.sent if master.sent['commands'] else master.returned, **master.body)
             body.setdefault('answered', False)
             records.append((master.flow, master.first, 'ecat', body))
+        return records
+
+
+# ---------------------------------------------------------------- MySQL
+#
+# MySQL and MariaDB (TCP 3306), which Suricata doesn't parse. The server
+# greets with its version; the client logs in - its user, the database,
+# the auth plugin, and attributes naming its program and library - unless
+# it asks for TLS first, which hides the rest; then SQL, in the clear,
+# answered OK (with rows affected), with a result set, or with an error.
+# Two record types, as for Oracle TNS: 'mysql', one per connection, and
+# 'mysql_statement', one per distinct statement on it - counted. A
+# password a statement sets is masked in it and kept beside it; the
+# login's own is a hash of a challenge, not the password, and only
+# whether one was sent is kept.
+
+_MYSQL_STATEMENTS_MAX = 500
+_MYSQL_STATEMENT_MAX = 2000
+_MYSQL_ATTRS = ('program_name', '_client_name', '_client_version', '_os', '_platform', '_pid')
+
+
+class _MySQLConnection:
+    __slots__ = ('flow', 'first', 'body', 'statements', 'waiting', 'logging_in')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'statements': 0}
+        self.statements = {}      # statement -> [when, body]
+        self.waiting = None       # the statement whose answer is next
+        self.logging_in = False
+
+
+class MySQL:
+    """MySQL - see the comment above."""
+    event_type = 'mysql'
+    app_protos = ('mysql',)
+    fields = ('mysql.version', 'mysql.thread_id', 'mysql.login_request', 'mysql.user', 'mysql.schema', 'mysql.passwd',
+              'mysql.caps.sl', 'mysql.client_auth_plugin', 'mysql.connattrs.name', 'mysql.connattrs.value',
+              'vals(mysql.command)', 'mysql.query', 'mysql.response_code', 'mysql.error_code', 'mysql.error.message',
+              'mysql.affected_rows')
+
+    def __init__(self):
+        self.connections = {}     # flow key -> _MySQLConnection
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _MySQLConnection(pkt.flow, pkt.when)
+        body = conn.body
+        if first('mysql.version'):
+            body.setdefault('server_version', first('mysql.version')[:80])
+        if v['mysql.login_request']:
+            self._login(conn, v)
+        elif v['mysql.query'] or first('vals(mysql.command)'):
+            self._command(conn, pkt.when, v)
+        code = first('mysql.response_code')
+        if code:
+            self._reply(conn, code, v)
+
+    @staticmethod
+    def _login(conn, v):
+        first = lambda name: _first(v[name])
+        body = conn.body
+        if first('mysql.caps.sl') in ('1', 'True') and not first('mysql.user'):
+            body['ssl'] = True                # (TLS from here on: the login is inside it)
+            return
+        for field, key in (('mysql.user', 'user'), ('mysql.schema', 'database'),
+                           ('mysql.client_auth_plugin', 'auth_plugin')):
+            if first(field):
+                body.setdefault(key, first(field)[:120])
+        body['password_sent'] = bool(_hex(first('mysql.passwd')).strip(b'\x00'))
+        attrs = dict(zip(v['mysql.connattrs.name'], v['mysql.connattrs.value']))
+        client = ' '.join(filter(None, (attrs.get('program_name'), attrs.get('_client_name'),
+                                        attrs.get('_client_version'))))
+        if client:
+            body['client'] = client[:120]
+        if attrs.get('_os') or attrs.get('_platform'):
+            body['client_os'] = ' '.join(filter(None, (attrs.get('_os'), attrs.get('_platform'))))[:80]
+        conn.logging_in = True
+
+    @staticmethod
+    def _command(conn, when, v):
+        body = conn.body
+        name = _first(v['vals(mysql.command)'])
+        if name:
+            commands = body.setdefault('commands', {})
+            commands[name] = commands.get(name, 0) + 1
+        statement = ' '.join(_first(v['mysql.query']).split())
+        if not statement:
+            conn.waiting = None
+            return
+        body['statements'] += 1
+        record = conn.statements.get(statement)
+        if record is None:
+            if len(conn.statements) >= _MYSQL_STATEMENTS_MAX:
+                body['statements_not_kept'] = body.get('statements_not_kept', 0) + 1
+                conn.waiting = None
+                return
+            shown, password = _sql_password(statement)
+            record = conn.statements[statement] = [when, {'statement': shown[:_MYSQL_STATEMENT_MAX],
+                                                          'verb': _tns_verb(statement), 'count': 0}]
+            if password:
+                record[1]['password'] = password
+        record[1]['count'] += 1
+        conn.waiting = record[1]
+
+    @staticmethod
+    def _reply(conn, code, v):
+        body = conn.body
+        error = None
+        if code == '0xff' or _first(v['mysql.error_code']):
+            error = f"ERROR {_first(v['mysql.error_code'])}: {_first(v['mysql.error.message'])}".strip()[:300]
+            errors = body.setdefault('errors', {})
+            key = _first(v['mysql.error_code']) or '?'
+            errors[key] = errors.get(key, 0) + 1
+        if conn.logging_in and code in ('0x00', '0xff'):
+            conn.logging_in = False
+            body['login'] = 'succeeded' if code == '0x00' else 'failed'
+            if error:
+                body['login_error'] = error
+            return
+        if conn.waiting is not None:
+            statement = conn.waiting
+            statement.setdefault('result', error or 'ok')
+            rows = _int(_first(v['mysql.affected_rows']))
+            if code == '0x00' and rows:
+                statement['rows_affected'] = statement.get('rows_affected', 0) + rows
+            conn.waiting = None
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            body = dict(conn.body)
+            if conn.logging_in:
+                body['login'] = 'no response'
+            records.append((conn.flow, conn.first, 'mysql', body))
+            for when, statement in conn.statements.values():
+                statement = dict(statement, result=statement.get('result', 'no response'))
+                for key in ('user', 'database'):
+                    if key in body:
+                        statement[key] = body[key]
+                records.append((conn.flow, when, 'mysql_statement', statement))
+        return records
+
+
+# ---------------------------------------------------------------- Microsoft SQL Server (TDS)
+#
+# SQL Server's Tabular Data Stream (TCP 1433), which Suricata doesn't
+# parse. A pre-login says whether to encrypt: not at all (the login and
+# everything after it in the clear - its password only obfuscated, which
+# tshark reverses), the login only (the usual: TLS for the login, the SQL
+# after it in the clear), or everything. Then SQL batches and RPC calls -
+# sp_executesql's statement, or a stored procedure by name - answered
+# with row counts or errors. Two record types, as for Oracle and MySQL:
+# 'mssql', one per connection, and 'mssql_statement', one per distinct
+# statement on it, counted. tshark 4.4 leaves TDS 7.2+ batches and RPC
+# parameters undecoded, so they're read from the packet's bytes; the
+# login, pre-login, errors and row counts from tshark's fields.
+
+_TDS_ENCRYPTION = {0: 'off', 1: 'on', 2: 'not supported', 3: 'required'}
+_TDS_PROCS = {1: 'sp_cursor', 2: 'sp_cursoropen', 3: 'sp_cursorprepare', 4: 'sp_cursorexecute',
+              5: 'sp_cursorprepexec', 6: 'sp_cursorunprepare', 7: 'sp_cursorfetch', 8: 'sp_cursoroption',
+              9: 'sp_cursorclose', 10: 'sp_executesql', 11: 'sp_prepare', 12: 'sp_execute', 13: 'sp_prepexec',
+              14: 'sp_prepexecrpc', 15: 'sp_unprepare'}
+_TDS_STATEMENTS_MAX = 500
+_TDS_STATEMENT_MAX = 2000
+
+
+def _tds_body(data):
+    """A batch's or RPC call's body without its ALL_HEADERS (TDS 7.2 on):
+    a total length, then headers each led by its own."""
+    if len(data) >= 10:
+        total, first = struct.unpack('<II', data[:8])
+        if 8 <= total <= len(data) and 4 <= first <= total - 4:
+            return data[total:]
+    return data
+
+
+def _tds_text(data):
+    try:
+        return data.decode('utf-16-le').strip('\x00')
+    except UnicodeDecodeError:
+        return ''
+
+
+def _tds_rpc(data):
+    """An RPC call's procedure, and the first of its string parameters that
+    reads as SQL - sp_executesql's or sp_prepexec's statement - or None."""
+    data, at = _tds_body(data), 2
+    if len(data) < 4:
+        return None, None
+    length = struct.unpack('<H', data[:2])[0]
+    if length == 0xffff:
+        proc = _TDS_PROCS.get(struct.unpack('<H', data[2:4])[0], f'procedure {struct.unpack("<H", data[2:4])[0]}')
+        at = 4
+    else:
+        proc = _tds_text(data[2:2 + 2 * length])
+        at = 2 + 2 * length
+    at += 2                                   # option flags
+    for _ in range(8):                        # (the statement comes in the first few)
+        if at + 2 > len(data):
+            break
+        at += 1 + 2 * data[at] + 1            # name, status
+        kind = data[at] if at < len(data) else 0
+        if kind not in (0xe7, 0xef, 0xa7, 0xaf):
+            break                             # (past the strings - a type this doesn't size)
+        size = struct.unpack('<H', data[at + 1:at + 3])[0]
+        at += 1 + 2 + 5
+        if size == 0xffff:                    # PLP: a total length, then chunks to an empty one
+            at += 8
+            value = bytearray()
+            while at + 4 <= len(data):
+                chunk = struct.unpack('<I', data[at:at + 4])[0]
+                at += 4
+                if not chunk:
+                    break
+                value += data[at:at + chunk]
+                at += chunk
+        else:
+            length = struct.unpack('<H', data[at:at + 2])[0]
+            at += 2
+            value = b'' if length == 0xffff else data[at:at + length]
+            at += 0 if length == 0xffff else length
+        text = _tds_text(bytes(value)) if kind in (0xe7, 0xef) else bytes(value).decode('latin-1')
+        if _TNS_SQL.match(text) or text.strip().upper().startswith(('EXEC', 'DECLARE', 'IF ', 'USE ')):
+            return proc, text
+    return proc, None
+
+
+class _TDSConnection:
+    __slots__ = ('flow', 'first', 'body', 'statements', 'waiting', 'logging_in', 'client')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'statements': 0}
+        self.statements = {}      # statement -> [when, body]
+        self.waiting = None
+        self.logging_in = False
+        self.client = None
+
+
+class TDS:
+    """Microsoft SQL Server's TDS - see the comment above."""
+    event_type = 'mssql'
+    app_protos = ('tds',)
+    fields = ('tds.type', 'tds.prelogin.option.encryption', 'tds.prelogin.option.version', 'tds.7login.username',
+              'tds.7login.password', 'tds.7login.appname', 'tds.7login.clientname', 'tds.7login.databasename',
+              'tds.7login.libraryname', 'tds.7login.servername', 'tds.loginack.progname', 'tds.query', 'tds.rpc.name',
+              'tds.error.number', 'tds.error.msgtext', 'tds.done.donerowcount', '@tds')
+
+    def __init__(self):
+        self.connections = {}     # flow key -> _TDSConnection
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        kind = _int(first('tds.type'))
+        if kind is None:
+            return
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _TDSConnection(pkt.flow, pkt.when)
+        body = conn.body
+        if v['tds.prelogin.option.encryption']:
+            self._prelogin(conn, kind == 4, v)     # (the server answers in a response packet)
+        elif kind == 0x10:
+            conn.client = pkt.src
+            for field, key in (('tds.7login.username', 'user'), ('tds.7login.password', 'password'),
+                               ('tds.7login.appname', 'application'), ('tds.7login.clientname', 'client_host'),
+                               ('tds.7login.databasename', 'database'), ('tds.7login.libraryname', 'library'),
+                               ('tds.7login.servername', 'server_name')):
+                if first(field):
+                    body[key] = first(field)[:120]
+            conn.logging_in = True
+        elif kind in (1, 3):
+            conn.client = conn.client or pkt.src
+            self._request(conn, pkt.when, kind, v)
+        elif kind == 4:
+            self._reply(conn, v)
+
+    @staticmethod
+    def _prelogin(conn, from_server, v):
+        body = conn.body
+        encryption = _int(_first(v['tds.prelogin.option.encryption']))
+        if encryption is None:
+            return
+        if not from_server:
+            body['client_encryption'] = _TDS_ENCRYPTION.get(encryption, str(encryption))
+            return
+        body['server_encryption'] = _TDS_ENCRYPTION.get(encryption, str(encryption))
+        version = _int(_first(v['tds.prelogin.option.version']))
+        if version:
+            body['server_version'] = f'{version >> 24}.{version >> 16 & 0xff}.{version & 0xffff}'
+        client = body.get('client_encryption')
+        if encryption in (1, 3) or client in ('on', 'required'):
+            body['encryption'] = 'everything'
+        elif encryption == 2 or client == 'not supported':
+            body['encryption'] = 'none'
+        else:
+            body['encryption'] = 'login only'
+        if body['encryption'] != 'none':
+            conn.logging_in = True            # (inside TLS: what's next is its answer)
+
+    def _request(self, conn, when, kind, v):
+        body = conn.body
+        data = _hex(_first(v['@tds']))[8:]
+        if kind == 1:
+            statement = _first(v['tds.query']) or _tds_text(_tds_body(data))
+            proc = None
+        else:
+            proc, statement = _tds_rpc(data)
+            proc = proc or _first(v['tds.rpc.name'])
+            if not statement and proc and not proc.startswith('sp_'):
+                statement = f'EXEC {proc}'
+        statement = ' '.join((statement or '').split())
+        if not statement:
+            conn.waiting = None
+            return
+        body['statements'] += 1
+        record = conn.statements.get(statement)
+        if record is None:
+            if len(conn.statements) >= _TDS_STATEMENTS_MAX:
+                body['statements_not_kept'] = body.get('statements_not_kept', 0) + 1
+                conn.waiting = None
+                return
+            shown, password = _sql_password(statement)
+            record = conn.statements[statement] = [when, {'statement': shown[:_TDS_STATEMENT_MAX],
+                                                          'verb': _tns_verb(statement), 'count': 0}]
+            if proc:
+                record[1]['procedure'] = proc
+            if password:
+                record[1]['password'] = password
+        record[1]['count'] += 1
+        conn.waiting = record[1]
+
+    @staticmethod
+    def _reply(conn, v):
+        body = conn.body
+        errors = [f'Error {n}: {m}'[:300] for n, m in zip(v['tds.error.number'], v['tds.error.msgtext'] + [''] * 8)]
+        for number in v['tds.error.number']:
+            counts = body.setdefault('errors', {})
+            counts[number] = counts.get(number, 0) + 1
+        if _first(v['tds.loginack.progname']):
+            body['product'] = _first(v['tds.loginack.progname'])[:80]
+        if conn.logging_in:
+            if v['tds.loginack.progname']:
+                body['login'] = 'succeeded'
+                conn.logging_in = False
+            elif errors:
+                body['login'], body['login_error'] = 'failed', errors[0]
+                conn.logging_in = False
+            return
+        if conn.waiting is not None:
+            statement = conn.waiting
+            statement.setdefault('result', errors[0] if errors else 'ok')
+            rows = sum(_int(n, 0) for n in v['tds.done.donerowcount'])
+            if rows and not errors:
+                statement['rows'] = statement.get('rows', 0) + rows
+            conn.waiting = None
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            body = dict(conn.body)
+            if conn.logging_in and 'login' not in body:
+                body['login'] = 'encrypted' if body.get('encryption') == 'everything' else 'no response'
+            records.append((conn.flow, conn.first, 'mssql', body))
+            for when, statement in conn.statements.values():
+                statement = dict(statement, result=statement.get('result', 'no response'))
+                for key in ('user', 'database'):
+                    if key in body:
+                        statement[key] = body[key]
+                records.append((conn.flow, when, 'mssql_statement', statement))
         return records
 
 
@@ -5942,7 +6334,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

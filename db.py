@@ -1804,6 +1804,38 @@ AGGREGATION_JSON_PATHS = {
         'Resp Bytes': ['$.memcache.response_bytes'],
         'Amplification': ['$.memcache.amplification'],
     },
+    'mssql': {
+        'DB User': ['$.mssql.user'],
+        'Database': ['$.mssql.database'],
+        'Application': ['$.mssql.application'],
+        'Client Host': ['$.mssql.client_host'],
+        'Encryption': ['$.mssql.encryption'],
+        'Login': ['$.mssql.login'],
+        'Statements': ['$.mssql.statements'],
+    },
+    'mssql_statement': {
+        'DB User': ['$.mssql_statement.user'],
+        'Verb': ['$.mssql_statement.verb'],
+        'Statement': ['$.mssql_statement.statement'],
+        'Result': ['$.mssql_statement.result'],
+        'Count': ['$.mssql_statement.count'],
+    },
+    'mysql': {
+        'DB User': ['$.mysql.user'],
+        'Database': ['$.mysql.database'],
+        'Client': ['$.mysql.client'],
+        'Server Version': ['$.mysql.server_version'],
+        'Login': ['$.mysql.login'],
+        'Statements': ['$.mysql.statements'],
+        'SSL': ['$.mysql.ssl'],
+    },
+    'mysql_statement': {
+        'DB User': ['$.mysql_statement.user'],
+        'Verb': ['$.mysql_statement.verb'],
+        'Statement': ['$.mysql_statement.statement'],
+        'Result': ['$.mysql_statement.result'],
+        'Count': ['$.mysql_statement.count'],
+    },
     'tns': {
         'Service': ['$.tns.service_name', '$.tns.sid'],
         'DB User': ['$.tns.db_user'],
@@ -1968,6 +2000,8 @@ AGGREGATION_TRUNCATE = {
     ('tls_failure', 'Subject'): 40,
     ('tls_failure', 'Issuer'): 40,
     ('tns_statement', 'Statement'): 200,
+    ('mysql_statement', 'Statement'): 200,
+    ('mssql_statement', 'Statement'): 200,
 }
 
 # Value transforms beyond plain extraction, matching extractValue's own
@@ -1978,6 +2012,7 @@ AGGREGATION_VALUE_TRANSFORMS = {
     ('memcache', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('fins', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('hart_ip', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('mysql', 'SSL'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
     ('ecat', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('tacacs', 'Encrypted'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",

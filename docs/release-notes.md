@@ -88,6 +88,13 @@
   slaves answered, the states it asked them for, EEPROM writes, and the
   mailbox traffic - FoE files read or written, CoE objects. These were
   connection cards before
+- **MySQL** and **SQL Server** - like Oracle's: a record for each
+  connection (the server version; the user, database, client and
+  whether the login succeeded; SSL or TDS encryption; for SQL Server
+  with encryption off, the login's password) and one for each distinct
+  statement - a SQL Server RPC call's too - with its result and how many
+  times it was sent; a password a statement sets is masked in it. These
+  were connection cards before
 - **Findings** - an MMS control command, program change or domain
   download is high; any other MMS write or definition change is medium.
   A PROFINET device renamed, readdressed or reset is high; a DCP Identify
@@ -112,7 +119,12 @@
   low. A PMU told to stop sending data is medium; a PMU that lost time
   sync, and a PMU's configuration read, are low. A file or EEPROM written
   to an EtherCAT slave is high; EtherCAT slaves sent to another state is
-  medium; EtherCAT answering over IP is low
+  medium; EtherCAT answering over IP is low. A MySQL or SQL Server account
+  created or granted, a database dropped, MySQL writing or reading server
+  files, SQL Server running operating-system commands, and a SQL Server
+  login sent unencrypted are high; any other write, password hashes read,
+  a MySQL login with no password and a SQL Server configuration change
+  are medium; a failed login is low
 
 ### Themes
 
