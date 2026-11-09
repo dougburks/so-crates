@@ -8423,6 +8423,34 @@ class TestRunCapped(unittest.TestCase):
         with self.assertRaises(sp.TimeoutExpired):
             server._run_capped(['sleep', '30'], max_bytes=1000, timeout=1)
 
+    def test_cap_reached_when_the_process_refuses_signals(self):
+        """REGRESSION: Debian's and Ubuntu's AppArmor profile for tcpdump
+        has no signal rules, so killing a confined tcpdump that's still
+        running fails with EPERM - and the transcript of any flow past its
+        carve limit was a 500 whenever tcpdump hadn't already finished
+        (a flaky test under load, every time on a big capture). The cap
+        still holds: closing the pipe stops a writer that can't be killed."""
+        import subprocess as sp
+        writer = ['python3', '-c', 'import sys\nwhile True: sys.stdout.buffer.write(b"x" * 65536)']
+        start = time.monotonic()
+        with unittest.mock.patch.object(sp.Popen, 'kill', side_effect=PermissionError(13, 'Permission denied')):
+            rc, out, truncated = server._run_capped(writer, max_bytes=1000, timeout=30)
+        self.assertTrue(truncated)
+        self.assertEqual(len(out), 1000)
+        self.assertLess(time.monotonic() - start, 10, 'it stopped when the pipe closed')
+        self.assertIsNotNone(rc, 'the writer exited on its own')
+
+    def test_timeout_when_the_process_refuses_signals(self):
+        """A process that can't be signaled and never writes again (tcpdump
+        still filtering a big capture) times out on time, left to a
+        background reaper - the request isn't held until it finishes."""
+        import subprocess as sp
+        start = time.monotonic()
+        with unittest.mock.patch.object(sp.Popen, 'kill', side_effect=PermissionError(13, 'Permission denied')):
+            with self.assertRaises(sp.TimeoutExpired):
+                server._run_capped(['sleep', '6'], max_bytes=1000, timeout=1)
+        self.assertLess(time.monotonic() - start, 5)
+
 
 class TestCSPEnforced(unittest.TestCase):
     """The enforced CSP has no inline-script carve-out (all handlers are
@@ -8576,9 +8604,9 @@ with socrates.ThreadedTCPServer(('127.0.0.1', 0), socrates.Handler) as httpd:
         self.assertEqual(rc, 0)
         self.assertLess(elapsed, 3)
 
-    def test_pending_run_capped_timer_does_not_delay_exit(self):
-        """A stream request's _run_capped timeout timer still pending at
-        shutdown must not hold the process open until it fires."""
+    def test_pending_run_capped_does_not_delay_exit(self):
+        """A stream request's _run_capped still waiting on its command at
+        shutdown must not hold the process open until it finishes."""
         proc, port = self._start(extra=(
             "threading.Thread(target=socrates._run_capped, args=(['sleep', '20'], 1024, 20), daemon=True).start()"))
         time.sleep(0.5)

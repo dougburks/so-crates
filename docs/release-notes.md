@@ -187,6 +187,13 @@
   skipped and why. Fuzzing every parser turned up the packets that did
   this - in OPC UA, MMS, MongoDB, PROFINET DCP, ONC RPC and C37.118, and in
   the new parsers before release - and each is fixed
+- **A big flow's transcript, hexdump or download failing** - where
+  tcpdump runs under the AppArmor profile Debian and Ubuntu ship for it
+  (SO-CRATES run outside a container), that profile lets nothing signal
+  tcpdump, so stopping it at a size limit or a timeout failed, and the
+  request with it - an "Internal server error" for the ASCII transcript of
+  a flow too big to carve whole. A tcpdump that can't be stopped is now
+  stopped by closing its output, and a timeout no longer waits on it
 
 ## 5.2.0
 
