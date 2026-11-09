@@ -35,7 +35,7 @@ THEMES = [
     'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord',
     'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue',
     'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine',
-    'solitude', 'one-dark', 'thermal', 'big-board',
+    'solitude', 'one-dark', 'thermal', 'war-room',
 ]
 
 DEFAULT_VIEWPORT = {'width': 1600, 'height': 1000}

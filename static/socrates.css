@@ -1159,11 +1159,11 @@
             --tag-green-text: #ffe14d;
             --help-icon-color: #ffe14d;
         }
-        /* Big Board: a 1980s command center's wall display - near-black
+        /* War Room: a 1980s command center's wall display - near-black
            navy, cyan vector linework and labels, white for values, red and
-           amber kept for threats (the severity colors). --map-outline turns
-           the Traffic Map's coastlines and graticule into vector lines. */
-        [data-theme="big-board"] {
+           amber kept for threats (the severity colors). --map-outline draws
+           the Traffic Map's country borders and grid in bright cyan. */
+        [data-theme="war-room"] {
             --bg-primary: #050b16;
             --bg-secondary: #0a1628;
             --bg-tertiary: #0e1e36;
@@ -1374,7 +1374,7 @@
             display: inline-block;
             vertical-align: middle;
         }
-        .code-rain-canvas, .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .big-board-tracks-canvas {
+        .code-rain-canvas, .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .war-room-tracks-canvas {
             position: fixed;
             top: 0;
             left: 0;
@@ -1476,9 +1476,9 @@
         [data-theme="thermal"] .thermal-heat-canvas {
             opacity: 0.5;
         }
-        /* Grid and tracks for Big Board - thin lines, which need more
+        /* Grid and tracks for War Room - thin lines, which need more
            opacity than a filled effect to read at all */
-        [data-theme="big-board"] .big-board-tracks-canvas {
+        [data-theme="war-room"] .war-room-tracks-canvas {
             opacity: 0.6;
         }
         .code-rain-canvas ~ * {
@@ -1499,7 +1499,7 @@
            viewport - a real regression, caught after the header/footer
            visibly broke (see git history on .block-rain-canvas's
            introduction). */
-        .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .big-board-tracks-canvas {
+        .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .war-room-tracks-canvas {
             position: fixed;
             z-index: 0;
         }
@@ -2426,12 +2426,12 @@
             filter: drop-shadow(0 0 3px rgba(255, 113, 206, 1)) drop-shadow(0 0 10px rgba(255, 113, 206, 0.7)) drop-shadow(0 0 20px rgba(1, 205, 254, 0.5));
         }
 
-        /* Big Board: a faint phosphor glow on the wall's panels */
-        [data-theme="big-board"] .app-header {
+        /* War Room: a faint phosphor glow on the wall's panels */
+        [data-theme="war-room"] .app-header {
             box-shadow: 0 2px 12px rgba(79, 209, 255, 0.18);
         }
-        [data-theme="big-board"] .stat-card.tab-active,
-        [data-theme="big-board"] .stat-card:hover {
+        [data-theme="war-room"] .stat-card.tab-active,
+        [data-theme="war-room"] .stat-card:hover {
             box-shadow: 0 0 10px rgba(79, 209, 255, 0.35);
         }
         /* Amber: same neon-outline treatment again, single-toned like

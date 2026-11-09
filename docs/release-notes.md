@@ -153,6 +153,13 @@
   offer are medium; an IRC client connecting, and an IRC password sent in
   the clear, are low
 
+### Traffic Map
+
+- **Country borders and a latitude/longitude grid** - the map draws each
+  country's outline and a faint graticule over its dots, in the theme's
+  muted color, so it's plain where one country ends and the next begins.
+  War Room draws them in bright cyan
+
 ### Themes
 
 - **Four new themes from Omarchy** - Jade Horse, Last Horizon and
@@ -162,9 +169,10 @@
 - **One Dark** - the Atom editor's dark theme, blue-gray with soft blue
   accents
 - **Two new Fun themes** - Thermal, a thermal camera view with heat
-  signatures drifting behind the page, and Big Board, a 1980s command
+  signatures drifting behind the page, and War Room, a 1980s command
   center's wall display with tracks plotted across a faint grid and the
-  Traffic Map drawn in vector lines. Each has its own loading messages
+  Traffic Map's borders and grid in bright cyan. Each has its own loading
+  messages
 - **The Themes modal is wider** - six themes a row, so it still fits a
   1080p window without scrolling
 - **The Themes modal's preview matches today's layout** - stat cards in

@@ -33,7 +33,7 @@ FAVICON_KANAGAWA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 FAVICON_MIASMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-miasma.svg')
 FAVICON_NORD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-nord.svg')
 FAVICON_THERMAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-thermal.svg')
-FAVICON_BIG_BOARD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-big-board.svg')
+FAVICON_WAR_ROOM_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-war-room.svg')
 FAVICON_ONE_DARK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-one-dark.svg')
 FAVICON_OSAKA_JADE_PATH =FAVICON_OSAKA_JADE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-osaka-jade.svg')
 FAVICON_JADE_HORSE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-jade-horse.svg')
@@ -273,9 +273,9 @@ class TestHTMLStructure(unittest.TestCase):
         """static/favicon-thermal.svg must exist on disk."""
         self.assertTrue(os.path.exists(FAVICON_THERMAL_PATH), 'static/favicon-thermal.svg must exist')
 
-    def test_favicon_big_board_file_exists(self):
-        """static/favicon-big-board.svg must exist on disk."""
-        self.assertTrue(os.path.exists(FAVICON_BIG_BOARD_PATH), 'static/favicon-big-board.svg must exist')
+    def test_favicon_war_room_file_exists(self):
+        """static/favicon-war-room.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_WAR_ROOM_PATH), 'static/favicon-war-room.svg must exist')
 
     def test_favicon_one_dark_file_exists(self):
         """static/favicon-one-dark.svg must exist on disk."""
@@ -343,7 +343,7 @@ class TestHTMLStructure(unittest.TestCase):
         """updateFavicon() must point faviconLink at the per-theme SVG that
         exists in static/ (plain favicon.svg for the default dark theme)."""
         from tests.jsdom_helper import js_statements
-        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark', 'thermal', 'big-board']
+        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark', 'thermal', 'war-room']
         result = js_statements(f'''
             var link = document.getElementById('faviconLink');
             var out = {{}};
@@ -2358,7 +2358,7 @@ class TestThemeAndMenu(unittest.TestCase):
         handlers no longer exist to assert on - the preview behavior
         itself is covered by the hover tests in this class."""
         from tests.jsdom_helper import js_statements
-        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark', 'thermal', 'big-board']
+        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark', 'thermal', 'war-room']
         result = js_statements(f'''
             var div = document.createElement('div');
             div.innerHTML = renderThemesModalGrid();
@@ -2958,7 +2958,7 @@ class TestThemeAndMenu(unittest.TestCase):
         osaka_jade_block = CSS_CONTENT.split('[data-theme="osaka-jade"] {')[1].split('}')[0]
         one_dark_block = CSS_CONTENT.split('[data-theme="one-dark"] {')[1].split('}')[0]
         thermal_block = CSS_CONTENT.split('[data-theme="thermal"] {')[1].split('}')[0]
-        big_board_block = CSS_CONTENT.split('[data-theme="big-board"] {')[1].split('}')[0]
+        war_room_block = CSS_CONTENT.split('[data-theme="war-room"] {')[1].split('}')[0]
         jade_horse_block = CSS_CONTENT.split('[data-theme="jade-horse"] {')[1].split('}')[0]
         last_horizon_block = CSS_CONTENT.split('[data-theme="last-horizon"] {')[1].split('}')[0]
         lupine_block = CSS_CONTENT.split('[data-theme="lupine"] {')[1].split('}')[0]
@@ -3009,8 +3009,8 @@ class TestThemeAndMenu(unittest.TestCase):
                       'One Dark theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', thermal_block,
                       'Thermal theme must define --help-icon-color')
-        self.assertIn('--help-icon-color:', big_board_block,
-                      'Big Board theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', war_room_block,
+                      'War Room theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', jade_horse_block,
                       'Jade Horse theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', last_horizon_block,
@@ -3280,9 +3280,9 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn('[data-theme="thermal"]', CSS_CONTENT,
                       'CSS must have a Thermal theme override block')
 
-    def test_big_board_theme_override_exists(self):
-        self.assertIn('[data-theme="big-board"]', CSS_CONTENT,
-                      'CSS must have a Big Board theme override block')
+    def test_war_room_theme_override_exists(self):
+        self.assertIn('[data-theme="war-room"]', CSS_CONTENT,
+                      'CSS must have a War Room theme override block')
 
     def test_one_dark_theme_override_exists(self):
         self.assertIn('[data-theme="one-dark"]', CSS_CONTENT,
@@ -3404,15 +3404,15 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn('id="thermalHeat"', HTML_CONTENT,
                       'HTML must include a heat-blob canvas for Thermal')
 
-    def test_big_board_canvas_exists(self):
-        self.assertIn('id="bigBoardTracks"', HTML_CONTENT,
-                      'HTML must include a tracks canvas for Big Board')
+    def test_war_room_canvas_exists(self):
+        self.assertIn('id="warRoomTracks"', HTML_CONTENT,
+                      'HTML must include a tracks canvas for War Room')
 
     def test_block_rain_wired_everywhere_code_rain_is(self):
         """updateCodeRain, updateBlockRain, updateVaporwaveGrid,
         updateDosDefrag, updateCgaStarfield, updateBreadbinSprites,
         updateDigitalFrontier, updateLunaBliss, updateAmberBootLog,
-        updateMp3Visualizer, updateThermalHeat, and updateBigBoardTracks
+        updateMp3Visualizer, updateThermalHeat, and updateWarRoomTracks
         (the twelve ambient per-theme canvas backgrounds)
         must be started/stopped/resized together everywhere - setTheme,
         applyCustomTheme, init, the resize listener, and the
@@ -3428,7 +3428,7 @@ class TestThemeAndMenu(unittest.TestCase):
         forEach - so "wired everywhere" is now verified as "present in the
         shared array" plus "the shared helper is actually called from
         every site", rather than counting individual per-effect calls."""
-        all_twelve = ('CodeRain', 'BlockRain', 'VaporwaveGrid', 'DosDefrag', 'CgaStarfield', 'BreadbinSprites', 'DigitalFrontier', 'LunaBliss', 'AmberBootLog', 'Mp3Visualizer', 'ThermalHeat', 'BigBoardTracks')
+        all_twelve = ('CodeRain', 'BlockRain', 'VaporwaveGrid', 'DosDefrag', 'CgaStarfield', 'BreadbinSprites', 'DigitalFrontier', 'LunaBliss', 'AmberBootLog', 'Mp3Visualizer', 'ThermalHeat', 'WarRoomTracks')
 
         updaters_array = JS_CONTENT.split('const AMBIENT_THEME_UPDATERS = [')[1].split(']')[0]
         for name in all_twelve:
@@ -3462,7 +3462,7 @@ class TestThemeAndMenu(unittest.TestCase):
         large empty gap). Must stay pinned regardless of which ambient
         background canvas (if any) is active."""
         from tests.jsdom_helper import js_statements
-        for theme in (None, 'hacker', 'retro-handheld', 'vaporwave', 'dos-blue', 'cga', 'breadbin-blue', 'digital-frontier', 'luna-blue', 'amber', 'mp3-player', 'thermal', 'big-board'):
+        for theme in (None, 'hacker', 'retro-handheld', 'vaporwave', 'dos-blue', 'cga', 'breadbin-blue', 'digital-frontier', 'luna-blue', 'amber', 'mp3-player', 'thermal', 'war-room'):
             setup = f"document.documentElement.setAttribute('data-theme', '{theme}');" if theme else ''
             result = js_statements(f'''
                 {setup}
@@ -3614,9 +3614,9 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn("'thermal':", JS_CONTENT,
                       'THEMES registry must include the thermal theme')
 
-    def test_big_board_theme_in_registry(self):
-        self.assertIn("'big-board':", JS_CONTENT,
-                      'THEMES registry must include the big-board theme')
+    def test_war_room_theme_in_registry(self):
+        self.assertIn("'war-room':", JS_CONTENT,
+                      'THEMES registry must include the war-room theme')
 
     def test_one_dark_theme_in_registry(self):
         self.assertIn("'one-dark':", JS_CONTENT,
@@ -4229,7 +4229,7 @@ class TestThemeAndMenu(unittest.TestCase):
             }
             window.__jsdom_result = { order: order };
         ''')
-        self.assertEqual(result['order'], ['monokai', 'nord', 'ohmydebn', 'one-dark', 'osaka-jade', 'retro-82', 'ristretto', 'solarized-dark', 'solitude', 'tokyo-night', 'vantablack', 'catppuccin-latte', 'flexoki-light', 'lupine', 'rose-pine', 'sguil', 'white', 'amber', 'big-board', 'breadbin-blue', 'cga', 'digital-frontier', 'dos-blue', 'hacker', 'luna-blue', 'mp3-player', 'retro-handheld', 'thermal', 'vaporwave', 'catppuccin', 'dracula', 'ethereal', 'everforest', 'gruvbox', 'hackerman', 'jade-horse', 'kanagawa', 'last-horizon', 'lumon', 'matte-black', 'miasma', 'dark'],
+        self.assertEqual(result['order'], ['monokai', 'nord', 'ohmydebn', 'one-dark', 'osaka-jade', 'retro-82', 'ristretto', 'solarized-dark', 'solitude', 'tokyo-night', 'vantablack', 'catppuccin-latte', 'flexoki-light', 'lupine', 'rose-pine', 'sguil', 'white', 'amber', 'breadbin-blue', 'cga', 'digital-frontier', 'dos-blue', 'hacker', 'luna-blue', 'mp3-player', 'retro-handheld', 'thermal', 'vaporwave', 'war-room', 'catppuccin', 'dracula', 'ethereal', 'everforest', 'gruvbox', 'hackerman', 'jade-horse', 'kanagawa', 'last-horizon', 'lumon', 'matte-black', 'miasma', 'dark'],
                          "'>' hotkey cycle order must match menu order")
 
     def test_theme_hotkey_reverse_matches_menu_order_backwards(self):
@@ -4245,7 +4245,7 @@ class TestThemeAndMenu(unittest.TestCase):
             }
             window.__jsdom_result = { order: order };
         ''')
-        expected_reverse = ['miasma', 'matte-black', 'lumon', 'last-horizon', 'kanagawa', 'jade-horse', 'hackerman', 'gruvbox', 'everforest', 'ethereal', 'dracula', 'catppuccin', 'vaporwave', 'thermal', 'retro-handheld', 'mp3-player', 'luna-blue', 'hacker', 'dos-blue', 'digital-frontier', 'cga', 'breadbin-blue', 'big-board', 'amber', 'white', 'sguil', 'rose-pine', 'lupine', 'flexoki-light', 'catppuccin-latte', 'vantablack', 'tokyo-night', 'solitude', 'solarized-dark', 'ristretto', 'retro-82', 'osaka-jade', 'one-dark', 'ohmydebn', 'nord', 'monokai', 'dark']
+        expected_reverse = ['miasma', 'matte-black', 'lumon', 'last-horizon', 'kanagawa', 'jade-horse', 'hackerman', 'gruvbox', 'everforest', 'ethereal', 'dracula', 'catppuccin', 'war-room', 'vaporwave', 'thermal', 'retro-handheld', 'mp3-player', 'luna-blue', 'hacker', 'dos-blue', 'digital-frontier', 'cga', 'breadbin-blue', 'amber', 'white', 'sguil', 'rose-pine', 'lupine', 'flexoki-light', 'catppuccin-latte', 'vantablack', 'tokyo-night', 'solitude', 'solarized-dark', 'ristretto', 'retro-82', 'osaka-jade', 'one-dark', 'ohmydebn', 'nord', 'monokai', 'dark']
         self.assertEqual(result['order'], expected_reverse,
                          "'<' hotkey cycle order must be the exact reverse of '>'")
 
@@ -5615,7 +5615,7 @@ class TestThemedLoadingMessages(unittest.TestCase):
             'Measuring the delta-T...', 'Switching to white-hot...', 'Scanning for warm bodies...',
             'Focusing the germanium lens...', 'Reading the temperature scale...', 'Finding the overheating server...',
         ],
-        'big-board': [
+        'war-room': [
             'Raising the readiness level...', 'Computing trajectories...', 'Plotting the tracks...',
             'Updating the big board...', 'Correlating the radar returns...', 'Polling the early-warning sites...',
             'Confirming the launch detection...', 'Checking the sensor feeds...', 'Projecting the impact points...',
@@ -5673,8 +5673,8 @@ class TestThemedLoadingMessages(unittest.TestCase):
     def test_thermal_gets_themed_messages(self):
         self._assert_themed_pool_drawn_from('thermal')
 
-    def test_big_board_gets_themed_messages(self):
-        self._assert_themed_pool_drawn_from('big-board')
+    def test_war_room_gets_themed_messages(self):
+        self._assert_themed_pool_drawn_from('war-room')
 
     def test_every_fun_theme_has_a_joke_set(self):
         """Every theme in THEMES's 'fun' group must have an entry in
@@ -23529,6 +23529,18 @@ class TestTrafficMap(unittest.TestCase):
     """The Traffic Map panel: collapsed until opened, only for a capture,
     its clicks toggling country: search terms, and the map's panels built
     from its data (escaped). The canvases are stubbed - JSDOM can't draw."""
+
+    def test_outlines_and_graticule_drawn_for_every_theme(self):
+        """Country outlines and a graticule are drawn on every theme -
+        faintly in --text-muted by default, in --map-outline's color when a
+        theme sets one (War Room) - not only for themes that set it."""
+        read = JS_CONTENT.split('function readColors() {')[1].split('\n            }')[0]
+        self.assertIn("colors.outline = outline ? d3.rgb(outline) : colors.muted;", read)
+        draw = JS_CONTENT.split('function drawBg() {')[1].split('\n            }\n')[0]
+        self.assertIn('if (graticulePath) {', draw)
+        self.assertIn('if (outlinePath) {', draw)
+        self.assertNotIn('colors.outline &&', draw)
+        self.assertIn('--map-outline: #4fd1ff;', CSS_CONTENT.split('[data-theme="war-room"] {')[1].split('}')[0])
 
     STUBS = r"""
         localStorage.setItem('socrates_hideHelp', 'true');

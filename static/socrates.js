@@ -200,7 +200,7 @@
             'monokai': { label: 'Monokai', group: 'dark' },
             'mp3-player': { label: 'MP3 Player', group: 'fun' },
             'thermal': { label: 'Thermal', group: 'fun' },
-            'big-board': { label: 'Big Board', group: 'fun' },
+            'war-room': { label: 'War Room', group: 'fun' },
         };
 
         const THEME_GROUP_LABELS = { dark: 'Dark Themes', fun: 'Fun Themes', light: 'Light Themes' };
@@ -1975,24 +1975,24 @@
             }
         }
 
-        // Command-center wall display for Big Board - a faint plotting
+        // Command-center wall display for War Room - a faint plotting
         // grid, and tracks drawn across it a stroke at a time: an arc from
         // a launch point to a target, its head leading the line, a ring
         // opening where it lands, a track number at its start - held, then
         // faded out while the next ones are plotted. One in five is red.
-        let bigBoardTracksCtx = null;
-        let bigBoardTracksAnimationId = null;
-        let bigBoardTracksLastDraw = 0;
-        let bigBoardTracks = [];
-        let bigBoardNextTrack = 0;
-        const BIG_BOARD_GRID_MINOR = 24;
-        const BIG_BOARD_GRID_MAJOR = 120;
-        const BIG_BOARD_MAX_TRACKS = 4;
-        const BIG_BOARD_DRAW_MS = 3000;
-        const BIG_BOARD_HOLD_MS = 3500;
-        const BIG_BOARD_FADE_MS = 1500;
+        let warRoomTracksCtx = null;
+        let warRoomTracksAnimationId = null;
+        let warRoomTracksLastDraw = 0;
+        let warRoomTracks = [];
+        let warRoomNextTrack = 0;
+        const WAR_ROOM_GRID_MINOR = 24;
+        const WAR_ROOM_GRID_MAJOR = 120;
+        const WAR_ROOM_MAX_TRACKS = 4;
+        const WAR_ROOM_DRAW_MS = 3000;
+        const WAR_ROOM_HOLD_MS = 3500;
+        const WAR_ROOM_FADE_MS = 1500;
 
-        function makeBigBoardTrack(width, height, now) {
+        function makeWarRoomTrack(width, height, now) {
             const margin = 60;
             const x1 = margin + Math.random() * Math.max(1, width - 2 * margin);
             const y1 = 120 + Math.random() * Math.max(1, height - 220);
@@ -2009,9 +2009,9 @@
             return { x1, y1, cx, cy, x2, y2, red, label, start: now };
         }
 
-        function drawBigBoardGrid(ctx, width, height) {
+        function drawWarRoomGrid(ctx, width, height) {
             ctx.lineWidth = 1;
-            [[BIG_BOARD_GRID_MINOR, 'rgba(79, 209, 255, 0.05)'], [BIG_BOARD_GRID_MAJOR, 'rgba(79, 209, 255, 0.12)']].forEach(([step, color]) => {
+            [[WAR_ROOM_GRID_MINOR, 'rgba(79, 209, 255, 0.05)'], [WAR_ROOM_GRID_MAJOR, 'rgba(79, 209, 255, 0.12)']].forEach(([step, color]) => {
                 ctx.strokeStyle = color;
                 ctx.beginPath();
                 for (let x = 0.5; x < width; x += step) {
@@ -2026,17 +2026,17 @@
             });
         }
 
-        function bigBoardPoint(track, t) {
+        function warRoomPoint(track, t) {
             const u = 1 - t;
             return [u * u * track.x1 + 2 * u * t * track.cx + t * t * track.x2,
                 u * u * track.y1 + 2 * u * t * track.cy + t * t * track.y2];
         }
 
-        function drawBigBoardTrack(ctx, track, timestamp) {
+        function drawWarRoomTrack(ctx, track, timestamp) {
             const age = timestamp - track.start;
-            const progress = Math.min(1, age / BIG_BOARD_DRAW_MS);
-            const fadeStart = BIG_BOARD_DRAW_MS + BIG_BOARD_HOLD_MS;
-            const alpha = age < fadeStart ? 1 : Math.max(0, 1 - (age - fadeStart) / BIG_BOARD_FADE_MS);
+            const progress = Math.min(1, age / WAR_ROOM_DRAW_MS);
+            const fadeStart = WAR_ROOM_DRAW_MS + WAR_ROOM_HOLD_MS;
+            const alpha = age < fadeStart ? 1 : Math.max(0, 1 - (age - fadeStart) / WAR_ROOM_FADE_MS);
             const rgb = track.red ? '255, 77, 77' : '79, 209, 255';
             ctx.strokeStyle = `rgba(${rgb}, ${0.8 * alpha})`;
             ctx.lineWidth = 1.4;
@@ -2044,7 +2044,7 @@
             ctx.moveTo(track.x1, track.y1);
             const steps = Math.max(1, Math.round(60 * progress));
             for (let i = 1; i <= steps; i++) {
-                const [x, y] = bigBoardPoint(track, (i / steps) * progress);
+                const [x, y] = warRoomPoint(track, (i / steps) * progress);
                 ctx.lineTo(x, y);
             }
             ctx.stroke();
@@ -2055,14 +2055,14 @@
             ctx.font = '11px "Courier New", monospace';
             ctx.fillText(track.label, track.x1 + 6, track.y1 + 14);
             if (progress < 1) {
-                const [hx, hy] = bigBoardPoint(track, progress);
+                const [hx, hy] = warRoomPoint(track, progress);
                 ctx.fillStyle = `rgba(234, 247, 255, ${alpha})`;
                 ctx.beginPath();
                 ctx.arc(hx, hy, 2.5, 0, Math.PI * 2);
                 ctx.fill();
             } else {
                 // a ring opening at the target, then holding
-                const ring = Math.min(1, (age - BIG_BOARD_DRAW_MS) / 600);
+                const ring = Math.min(1, (age - WAR_ROOM_DRAW_MS) / 600);
                 ctx.strokeStyle = `rgba(${rgb}, ${0.8 * alpha})`;
                 ctx.beginPath();
                 ctx.arc(track.x2, track.y2, 4 + 10 * ring, 0, Math.PI * 2);
@@ -2070,75 +2070,75 @@
             }
         }
 
-        function drawBigBoardTracks(timestamp) {
-            const canvas = document.getElementById('bigBoardTracks');
-            if (!canvas || getCurrentTheme() !== 'big-board') return;
-            if (!bigBoardTracksCtx) resizeBigBoardTracks();
-            if (!bigBoardTracksCtx) return;
+        function drawWarRoomTracks(timestamp) {
+            const canvas = document.getElementById('warRoomTracks');
+            if (!canvas || getCurrentTheme() !== 'war-room') return;
+            if (!warRoomTracksCtx) resizeWarRoomTracks();
+            if (!warRoomTracksCtx) return;
 
-            const dt = timestamp - bigBoardTracksLastDraw;
+            const dt = timestamp - warRoomTracksLastDraw;
             if (dt < 50) {
-                bigBoardTracksAnimationId = requestAnimationFrame(drawBigBoardTracks);
+                warRoomTracksAnimationId = requestAnimationFrame(drawWarRoomTracks);
                 return;
             }
-            bigBoardTracksLastDraw = timestamp;
+            warRoomTracksLastDraw = timestamp;
 
             const width = window.innerWidth;
             const height = window.innerHeight;
-            const lifetime = BIG_BOARD_DRAW_MS + BIG_BOARD_HOLD_MS + BIG_BOARD_FADE_MS;
-            bigBoardTracks = bigBoardTracks.filter(t => timestamp - t.start < lifetime);
-            if (timestamp >= bigBoardNextTrack && bigBoardTracks.length < BIG_BOARD_MAX_TRACKS) {
-                bigBoardTracks.push(makeBigBoardTrack(width, height, timestamp));
-                bigBoardNextTrack = timestamp + 2000 + Math.random() * 1500;
+            const lifetime = WAR_ROOM_DRAW_MS + WAR_ROOM_HOLD_MS + WAR_ROOM_FADE_MS;
+            warRoomTracks = warRoomTracks.filter(t => timestamp - t.start < lifetime);
+            if (timestamp >= warRoomNextTrack && warRoomTracks.length < WAR_ROOM_MAX_TRACKS) {
+                warRoomTracks.push(makeWarRoomTrack(width, height, timestamp));
+                warRoomNextTrack = timestamp + 2000 + Math.random() * 1500;
             }
 
-            const ctx = bigBoardTracksCtx;
+            const ctx = warRoomTracksCtx;
             ctx.clearRect(0, 0, width, height);
-            drawBigBoardGrid(ctx, width, height);
-            bigBoardTracks.forEach(t => drawBigBoardTrack(ctx, t, timestamp));
+            drawWarRoomGrid(ctx, width, height);
+            warRoomTracks.forEach(t => drawWarRoomTrack(ctx, t, timestamp));
 
-            bigBoardTracksAnimationId = requestAnimationFrame(drawBigBoardTracks);
+            warRoomTracksAnimationId = requestAnimationFrame(drawWarRoomTracks);
         }
 
-        function resizeBigBoardTracks() {
-            const canvas = document.getElementById('bigBoardTracks');
+        function resizeWarRoomTracks() {
+            const canvas = document.getElementById('warRoomTracks');
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
             if (!ctx) return;
-            bigBoardTracksCtx = ctx;
+            warRoomTracksCtx = ctx;
             const dpr = window.devicePixelRatio || 1;
             canvas.width = window.innerWidth * dpr;
             canvas.height = window.innerHeight * dpr;
-            bigBoardTracksCtx.scale(dpr, dpr);
+            warRoomTracksCtx.scale(dpr, dpr);
             // tracks plotted for the old size could now run off the board
-            bigBoardTracks = [];
+            warRoomTracks = [];
         }
 
-        function startBigBoardTracks() {
-            if (bigBoardTracksAnimationId) return;
-            resizeBigBoardTracks();
-            if (!bigBoardTracksCtx) return;
-            bigBoardTracksLastDraw = performance.now();
-            bigBoardNextTrack = bigBoardTracksLastDraw;
-            bigBoardTracksAnimationId = requestAnimationFrame(drawBigBoardTracks);
+        function startWarRoomTracks() {
+            if (warRoomTracksAnimationId) return;
+            resizeWarRoomTracks();
+            if (!warRoomTracksCtx) return;
+            warRoomTracksLastDraw = performance.now();
+            warRoomNextTrack = warRoomTracksLastDraw;
+            warRoomTracksAnimationId = requestAnimationFrame(drawWarRoomTracks);
         }
 
-        function stopBigBoardTracks() {
-            if (bigBoardTracksAnimationId) {
-                cancelAnimationFrame(bigBoardTracksAnimationId);
-                bigBoardTracksAnimationId = null;
+        function stopWarRoomTracks() {
+            if (warRoomTracksAnimationId) {
+                cancelAnimationFrame(warRoomTracksAnimationId);
+                warRoomTracksAnimationId = null;
             }
-            const canvas = document.getElementById('bigBoardTracks');
-            if (canvas && bigBoardTracksCtx) {
-                bigBoardTracksCtx.clearRect(0, 0, canvas.width, canvas.height);
+            const canvas = document.getElementById('warRoomTracks');
+            if (canvas && warRoomTracksCtx) {
+                warRoomTracksCtx.clearRect(0, 0, canvas.width, canvas.height);
             }
         }
 
-        function updateBigBoardTracks() {
-            if (getCurrentTheme() === 'big-board') {
-                startBigBoardTracks();
+        function updateWarRoomTracks() {
+            if (getCurrentTheme() === 'war-room') {
+                startWarRoomTracks();
             } else {
-                stopBigBoardTracks();
+                stopWarRoomTracks();
             }
         }
 
@@ -2168,9 +2168,9 @@
         // below need to reach every effect too. Adding a new ambient
         // theme now only means adding one entry to each of these three
         // arrays, rather than a new call in 4+ separate places.
-        const AMBIENT_THEME_RESIZERS = [resizeCodeRain, resizeBlockRain, resizeVaporwaveGrid, resizeDosDefrag, resizeCgaStarfield, resizeBreadbinSprites, resizeDigitalFrontier, resizeLunaBliss, resizeAmberBootLog, resizeMp3Visualizer, resizeThermalHeat, resizeBigBoardTracks];
-        const AMBIENT_THEME_UPDATERS = [updateCodeRain, updateBlockRain, updateVaporwaveGrid, updateDosDefrag, updateCgaStarfield, updateBreadbinSprites, updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, updateMp3Visualizer, updateThermalHeat, updateBigBoardTracks];
-        const AMBIENT_THEME_STOPPERS = [stopCodeRain, stopBlockRain, stopVaporwaveGrid, stopDosDefrag, stopCgaStarfield, stopBreadbinSprites, stopDigitalFrontier, stopLunaBliss, stopAmberBootLog, stopMp3Visualizer, stopThermalHeat, stopBigBoardTracks];
+        const AMBIENT_THEME_RESIZERS = [resizeCodeRain, resizeBlockRain, resizeVaporwaveGrid, resizeDosDefrag, resizeCgaStarfield, resizeBreadbinSprites, resizeDigitalFrontier, resizeLunaBliss, resizeAmberBootLog, resizeMp3Visualizer, resizeThermalHeat, resizeWarRoomTracks];
+        const AMBIENT_THEME_UPDATERS = [updateCodeRain, updateBlockRain, updateVaporwaveGrid, updateDosDefrag, updateCgaStarfield, updateBreadbinSprites, updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, updateMp3Visualizer, updateThermalHeat, updateWarRoomTracks];
+        const AMBIENT_THEME_STOPPERS = [stopCodeRain, stopBlockRain, stopVaporwaveGrid, stopDosDefrag, stopCgaStarfield, stopBreadbinSprites, stopDigitalFrontier, stopLunaBliss, stopAmberBootLog, stopMp3Visualizer, stopThermalHeat, stopWarRoomTracks];
 
         function updateAllAmbientThemes() {
             AMBIENT_THEME_UPDATERS.forEach(fn => fn());
@@ -9444,15 +9444,19 @@
             // an alert's color key - any severity, a custom rule's priority:9 included
             const sevKind = sev => COLORS.SEVERITY[sev] ? 's' + sev : 'sdefault';
 
+            // strength of the default outlines and graticule - faint enough to stay under the traffic on every theme
+            const TM_GRID_ALPHA = 0.15, TM_LAND_ALPHA = 0.45;
             function readColors() {
                 const cs = getComputedStyle(document.documentElement);
                 const c = (name, fallback) => d3.rgb(cs.getPropertyValue(name).trim() || fallback);
                 colors = { bg: c('--bg-secondary', '#161b22'), bg2: c('--bg-tertiary', '#21262d'), muted: c('--text-muted', '#8b949e'),
                     bright: c('--text-bright', '#f0f6fc'), flow: c('--accent', '#58a6ff') };
                 colors.accent = colors.flow;
-                // a theme that sets --map-outline gets coastlines and a graticule drawn as vector lines
+                // Country outlines and a graticule are drawn faintly in the muted text color;
+                // a theme that sets --map-outline gets them in that color, and stronger
                 const outline = cs.getPropertyValue('--map-outline').trim();
-                colors.outline = outline ? d3.rgb(outline) : null;
+                colors.outline = outline ? d3.rgb(outline) : colors.muted;
+                colors.outlineAlpha = outline ? { grid: 0.12, land: 0.55 } : { grid: TM_GRID_ALPHA, land: TM_LAND_ALPHA };
                 for (const s in COLORS.SEVERITY) colors['s' + s] = d3.rgb(COLORS.SEVERITY[s]);
                 light = d3.hsl(colors.bg).l > 0.55;
                 colors.dot = d3.rgb(d3.interpolateRgb(colors.bg, colors.muted)(light ? 0.3 : 0.34));
@@ -9528,8 +9532,8 @@
                 const g = bgx.createRadialGradient(W / 2, H * 0.45, 0, W / 2, H * 0.45, Math.max(W, H) * 0.7);
                 g.addColorStop(0, rgba(colors.accent, light ? 0.05 : 0.07)); g.addColorStop(1, rgba(colors.accent, 0));
                 bgx.fillStyle = g; bgx.fillRect(0, 0, W, H);
-                if (colors.outline && graticulePath) {
-                    bgx.strokeStyle = rgba(colors.outline, 0.12); bgx.lineWidth = 0.6; bgx.stroke(graticulePath);
+                if (graticulePath) {
+                    bgx.strokeStyle = rgba(colors.outline, colors.outlineAlpha.grid); bgx.lineWidth = 0.6; bgx.stroke(graticulePath);
                 }
                 const LEVELS = 14, heat = {}, lmax = Math.log1p(maxTotal);
                 for (const cc in cum) heat[cc] = Math.log1p(cum[cc].src + cum[cc].dst) / lmax;
@@ -9546,8 +9550,8 @@
                         : rgba(d3.rgb(mix(0.25 + 0.75 * lv / LEVELS)), 0.55 + 0.45 * lv / LEVELS);
                     bgx.fill(path);
                 });
-                if (colors.outline && outlinePath) {
-                    bgx.strokeStyle = rgba(colors.outline, 0.55); bgx.lineWidth = 0.8; bgx.stroke(outlinePath);
+                if (outlinePath) {
+                    bgx.strokeStyle = rgba(colors.outline, colors.outlineAlpha.land); bgx.lineWidth = 0.8; bgx.stroke(outlinePath);
                 }
                 for (const cc in places) {
                     if (!anchors[cc] || !(cum[cc] || highlighted.has(cc))) continue;
@@ -16362,7 +16366,7 @@
                 'Measuring the delta-T...', 'Switching to white-hot...', 'Scanning for warm bodies...',
                 'Focusing the germanium lens...', 'Reading the temperature scale...', 'Finding the overheating server...'
             ],
-            'big-board': [
+            'war-room': [
                 'Raising the readiness level...', 'Computing trajectories...', 'Plotting the tracks...',
                 'Updating the big board...', 'Correlating the radar returns...', 'Polling the early-warning sites...',
                 'Confirming the launch detection...', 'Checking the sensor feeds...', 'Projecting the impact points...',
