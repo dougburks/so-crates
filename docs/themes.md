@@ -80,14 +80,14 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
 
 ## Fun Themes
 
-Each Fun theme also swaps the plain loading messages shown while a file is analyzed for its own - Thermal's and Blueprint's included. The Dark and Light themes keep the plain ones.
+Each Fun theme also swaps the plain loading messages shown while a file is analyzed for its own - Thermal's and Big Board's included. The Dark and Light themes keep the plain ones.
 
 Every theme on this page (Fun or otherwise) can also be switched to by typing its name anywhere outside a text field and pressing Enter (if what you've typed also matches another theme, arrow to the right one first) - see [Command Palette](usage/keyboard-and-menus.md#command-palette).
 
 - **Amber CRT** - monochrome amber phosphor on black, like a VT100/DEC-style business terminal, with a faint scanline overlay for the CRT effect
   <br><img loading="lazy" src="../images/themes/amber.png" width="360" height="225" alt="Amber CRT theme">
-- **Blueprint** - white linework on blueprint blue, like a technical drawing, with a faint drafting grid behind the page where dimensioned rectangles and circles are drafted a stroke at a time
-  <br><img loading="lazy" src="../images/themes/blueprint.png" width="360" height="225" alt="Blueprint theme">
+- **Big Board** - a 1980s command center's wall display: cyan vector linework and labels on near-black navy, with tracks plotted across a faint grid behind the page, a stroke at a time, from a launch point to a ring at the target. The Traffic Map draws its coastlines and a graticule as vector lines
+  <br><img loading="lazy" src="../images/themes/big-board.png" width="360" height="225" alt="Big Board theme">
 - **Breadbin Blue** - Commodore 64 blue-on-blue aesthetic (named for the C64's "breadbin" case), using the real Pepto/VICE C64 16-color palette (blue background, light-blue border/text/accent, cyan interactive highlight)
   <br><img loading="lazy" src="../images/themes/breadbin-blue.png" width="360" height="225" alt="Breadbin Blue theme">
 - **CGA** - black background with the classic 4-color CGA Palette 1 High-Intensity hues (cyan, magenta, white)

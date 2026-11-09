@@ -200,7 +200,7 @@
             'monokai': { label: 'Monokai', group: 'dark' },
             'mp3-player': { label: 'MP3 Player', group: 'fun' },
             'thermal': { label: 'Thermal', group: 'fun' },
-            'blueprint': { label: 'Blueprint', group: 'fun' },
+            'big-board': { label: 'Big Board', group: 'fun' },
         };
 
         const THEME_GROUP_LABELS = { dark: 'Dark Themes', fun: 'Fun Themes', light: 'Light Themes' };
@@ -1975,77 +1975,43 @@
             }
         }
 
-        // Drafting-table ambient background for Blueprint - blueprint
-        // paper's faint grid, and a technical figure (a dimensioned
-        // rectangle, or a circle with its centerlines and a diameter
-        // callout) drafted a stroke at a time somewhere on the sheet, held,
-        // then faded out while the next ones are drawn.
-        let blueprintDraftingCtx = null;
-        let blueprintDraftingAnimationId = null;
-        let blueprintDraftingLastDraw = 0;
-        let blueprintFigures = [];
-        let blueprintNextFigure = 0;
-        const BLUEPRINT_GRID_MINOR = 20;
-        const BLUEPRINT_GRID_MAJOR = 100;
-        const BLUEPRINT_MAX_FIGURES = 3;
-        const BLUEPRINT_DRAW_MS = 2500;
-        const BLUEPRINT_HOLD_MS = 4000;
-        const BLUEPRINT_FADE_MS = 1500;
+        // Command-center wall display for Big Board - a faint plotting
+        // grid, and tracks drawn across it a stroke at a time: an arc from
+        // a launch point to a target, its head leading the line, a ring
+        // opening where it lands, a track number at its start - held, then
+        // faded out while the next ones are plotted. One in five is red.
+        let bigBoardTracksCtx = null;
+        let bigBoardTracksAnimationId = null;
+        let bigBoardTracksLastDraw = 0;
+        let bigBoardTracks = [];
+        let bigBoardNextTrack = 0;
+        const BIG_BOARD_GRID_MINOR = 24;
+        const BIG_BOARD_GRID_MAJOR = 120;
+        const BIG_BOARD_MAX_TRACKS = 4;
+        const BIG_BOARD_DRAW_MS = 3000;
+        const BIG_BOARD_HOLD_MS = 3500;
+        const BIG_BOARD_FADE_MS = 1500;
 
-        function blueprintArrow(segments, x, y, dx, dy) {
-            // an open arrowhead at (x, y) pointing along (dx, dy)
-            const len = 8;
-            const angle = Math.atan2(dy, dx);
-            [-0.4, 0.4].forEach(spread => {
-                segments.push([x, y, x - len * Math.cos(angle + spread), y - len * Math.sin(angle + spread)]);
-            });
+        function makeBigBoardTrack(width, height, now) {
+            const margin = 60;
+            const x1 = margin + Math.random() * Math.max(1, width - 2 * margin);
+            const y1 = 120 + Math.random() * Math.max(1, height - 220);
+            // the target sits well across the board from the launch point
+            const dir = x1 < width / 2 ? 1 : -1;
+            const span = width * (0.25 + Math.random() * 0.35);
+            const x2 = Math.min(width - margin, Math.max(margin, x1 + dir * span));
+            const y2 = 120 + Math.random() * Math.max(1, height - 220);
+            const lift = Math.max(60, Math.abs(x2 - x1) * (0.3 + Math.random() * 0.2));
+            const cx = (x1 + x2) / 2;
+            const cy = Math.max(30, Math.min(y1, y2) - lift);
+            const red = Math.random() < 0.2;
+            const label = 'TRK ' + String(Math.floor(Math.random() * 9000) + 1000);
+            return { x1, y1, cx, cy, x2, y2, red, label, start: now };
         }
 
-        function makeBlueprintFigure(width, height, now) {
-            const segments = [];
-            let label;
-            let labelX;
-            let labelY;
-            if (Math.random() < 0.5) {
-                const w = 120 + Math.random() * 140;
-                const h = 80 + Math.random() * 100;
-                const x = 40 + Math.random() * Math.max(1, width - w - 80);
-                const y = 100 + Math.random() * Math.max(1, height - h - 180);
-                segments.push([x, y, x + w, y], [x + w, y, x + w, y + h], [x + w, y + h, x, y + h], [x, y + h, x, y]);
-                const dimY = y - 22;
-                segments.push([x, y - 6, x, y - 30], [x + w, y - 6, x + w, y - 30], [x, dimY, x + w, dimY]);
-                blueprintArrow(segments, x, dimY, -1, 0);
-                blueprintArrow(segments, x + w, dimY, 1, 0);
-                label = (w / 4).toFixed(1);
-                labelX = x + w / 2;
-                labelY = dimY - 6;
-            } else {
-                const r = 40 + Math.random() * 50;
-                const cx = r + 50 + Math.random() * Math.max(1, width - 2 * r - 180);
-                const cy = r + 120 + Math.random() * Math.max(1, height - 2 * r - 200);
-                const steps = 48;
-                for (let i = 0; i < steps; i++) {
-                    const a1 = (i / steps) * Math.PI * 2;
-                    const a2 = ((i + 1) / steps) * Math.PI * 2;
-                    segments.push([cx + r * Math.cos(a1), cy + r * Math.sin(a1), cx + r * Math.cos(a2), cy + r * Math.sin(a2)]);
-                }
-                segments.push([cx - r - 12, cy, cx + r + 12, cy], [cx, cy - r - 12, cx, cy + r + 12]);
-                const edgeX = cx + r * Math.SQRT1_2;
-                const edgeY = cy - r * Math.SQRT1_2;
-                segments.push([edgeX + 24, edgeY - 24, edgeX, edgeY]);
-                blueprintArrow(segments, edgeX, edgeY, -1, 1);
-                segments.push([edgeX + 24, edgeY - 24, edgeX + 70, edgeY - 24]);
-                label = 'Ø ' + (r / 2).toFixed(1);
-                labelX = edgeX + 47;
-                labelY = edgeY - 30;
-            }
-            const total = segments.reduce((sum, [x1, y1, x2, y2]) => sum + Math.hypot(x2 - x1, y2 - y1), 0);
-            return { segments, total, label, labelX, labelY, start: now };
-        }
-
-        function drawBlueprintGrid(ctx, width, height) {
+        function drawBigBoardGrid(ctx, width, height) {
             ctx.lineWidth = 1;
-            [[BLUEPRINT_GRID_MINOR, 'rgba(255, 255, 255, 0.07)'], [BLUEPRINT_GRID_MAJOR, 'rgba(255, 255, 255, 0.16)']].forEach(([step, color]) => {
+            [[BIG_BOARD_GRID_MINOR, 'rgba(79, 209, 255, 0.05)'], [BIG_BOARD_GRID_MAJOR, 'rgba(79, 209, 255, 0.12)']].forEach(([step, color]) => {
                 ctx.strokeStyle = color;
                 ctx.beginPath();
                 for (let x = 0.5; x < width; x += step) {
@@ -2060,102 +2026,119 @@
             });
         }
 
-        function drawBlueprintFigure(ctx, figure, timestamp) {
-            const age = timestamp - figure.start;
-            const progress = Math.min(1, age / BLUEPRINT_DRAW_MS);
-            const fadeStart = BLUEPRINT_DRAW_MS + BLUEPRINT_HOLD_MS;
-            const alpha = age < fadeStart ? 1 : Math.max(0, 1 - (age - fadeStart) / BLUEPRINT_FADE_MS);
-            ctx.strokeStyle = `rgba(255, 255, 255, ${0.85 * alpha})`;
-            ctx.lineWidth = 1.2;
+        function bigBoardPoint(track, t) {
+            const u = 1 - t;
+            return [u * u * track.x1 + 2 * u * t * track.cx + t * t * track.x2,
+                u * u * track.y1 + 2 * u * t * track.cy + t * t * track.y2];
+        }
+
+        function drawBigBoardTrack(ctx, track, timestamp) {
+            const age = timestamp - track.start;
+            const progress = Math.min(1, age / BIG_BOARD_DRAW_MS);
+            const fadeStart = BIG_BOARD_DRAW_MS + BIG_BOARD_HOLD_MS;
+            const alpha = age < fadeStart ? 1 : Math.max(0, 1 - (age - fadeStart) / BIG_BOARD_FADE_MS);
+            const rgb = track.red ? '255, 77, 77' : '79, 209, 255';
+            ctx.strokeStyle = `rgba(${rgb}, ${0.8 * alpha})`;
+            ctx.lineWidth = 1.4;
             ctx.beginPath();
-            let remaining = figure.total * progress;
-            for (const [x1, y1, x2, y2] of figure.segments) {
-                if (remaining <= 0) break;
-                const len = Math.hypot(x2 - x1, y2 - y1);
-                const t = Math.min(1, remaining / len);
-                ctx.moveTo(x1, y1);
-                ctx.lineTo(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
-                remaining -= len;
+            ctx.moveTo(track.x1, track.y1);
+            const steps = Math.max(1, Math.round(60 * progress));
+            for (let i = 1; i <= steps; i++) {
+                const [x, y] = bigBoardPoint(track, (i / steps) * progress);
+                ctx.lineTo(x, y);
             }
             ctx.stroke();
-            if (progress === 1) {
-                ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * alpha})`;
-                ctx.font = '12px "Courier New", monospace';
-                ctx.textAlign = 'center';
-                ctx.fillText(figure.label, figure.labelX, figure.labelY);
-                ctx.textAlign = 'left';
+            ctx.fillStyle = `rgba(${rgb}, ${0.85 * alpha})`;
+            ctx.beginPath();
+            ctx.arc(track.x1, track.y1, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.font = '11px "Courier New", monospace';
+            ctx.fillText(track.label, track.x1 + 6, track.y1 + 14);
+            if (progress < 1) {
+                const [hx, hy] = bigBoardPoint(track, progress);
+                ctx.fillStyle = `rgba(234, 247, 255, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(hx, hy, 2.5, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                // a ring opening at the target, then holding
+                const ring = Math.min(1, (age - BIG_BOARD_DRAW_MS) / 600);
+                ctx.strokeStyle = `rgba(${rgb}, ${0.8 * alpha})`;
+                ctx.beginPath();
+                ctx.arc(track.x2, track.y2, 4 + 10 * ring, 0, Math.PI * 2);
+                ctx.stroke();
             }
         }
 
-        function drawBlueprintDrafting(timestamp) {
-            const canvas = document.getElementById('blueprintDrafting');
-            if (!canvas || getCurrentTheme() !== 'blueprint') return;
-            if (!blueprintDraftingCtx) resizeBlueprintDrafting();
-            if (!blueprintDraftingCtx) return;
+        function drawBigBoardTracks(timestamp) {
+            const canvas = document.getElementById('bigBoardTracks');
+            if (!canvas || getCurrentTheme() !== 'big-board') return;
+            if (!bigBoardTracksCtx) resizeBigBoardTracks();
+            if (!bigBoardTracksCtx) return;
 
-            const dt = timestamp - blueprintDraftingLastDraw;
+            const dt = timestamp - bigBoardTracksLastDraw;
             if (dt < 50) {
-                blueprintDraftingAnimationId = requestAnimationFrame(drawBlueprintDrafting);
+                bigBoardTracksAnimationId = requestAnimationFrame(drawBigBoardTracks);
                 return;
             }
-            blueprintDraftingLastDraw = timestamp;
+            bigBoardTracksLastDraw = timestamp;
 
             const width = window.innerWidth;
             const height = window.innerHeight;
-            const lifetime = BLUEPRINT_DRAW_MS + BLUEPRINT_HOLD_MS + BLUEPRINT_FADE_MS;
-            blueprintFigures = blueprintFigures.filter(f => timestamp - f.start < lifetime);
-            if (timestamp >= blueprintNextFigure && blueprintFigures.length < BLUEPRINT_MAX_FIGURES) {
-                blueprintFigures.push(makeBlueprintFigure(width, height, timestamp));
-                blueprintNextFigure = timestamp + 2500 + Math.random() * 1500;
+            const lifetime = BIG_BOARD_DRAW_MS + BIG_BOARD_HOLD_MS + BIG_BOARD_FADE_MS;
+            bigBoardTracks = bigBoardTracks.filter(t => timestamp - t.start < lifetime);
+            if (timestamp >= bigBoardNextTrack && bigBoardTracks.length < BIG_BOARD_MAX_TRACKS) {
+                bigBoardTracks.push(makeBigBoardTrack(width, height, timestamp));
+                bigBoardNextTrack = timestamp + 2000 + Math.random() * 1500;
             }
 
-            const ctx = blueprintDraftingCtx;
+            const ctx = bigBoardTracksCtx;
             ctx.clearRect(0, 0, width, height);
-            drawBlueprintGrid(ctx, width, height);
-            blueprintFigures.forEach(f => drawBlueprintFigure(ctx, f, timestamp));
+            drawBigBoardGrid(ctx, width, height);
+            bigBoardTracks.forEach(t => drawBigBoardTrack(ctx, t, timestamp));
 
-            blueprintDraftingAnimationId = requestAnimationFrame(drawBlueprintDrafting);
+            bigBoardTracksAnimationId = requestAnimationFrame(drawBigBoardTracks);
         }
 
-        function resizeBlueprintDrafting() {
-            const canvas = document.getElementById('blueprintDrafting');
+        function resizeBigBoardTracks() {
+            const canvas = document.getElementById('bigBoardTracks');
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
             if (!ctx) return;
-            blueprintDraftingCtx = ctx;
+            bigBoardTracksCtx = ctx;
             const dpr = window.devicePixelRatio || 1;
             canvas.width = window.innerWidth * dpr;
             canvas.height = window.innerHeight * dpr;
-            blueprintDraftingCtx.scale(dpr, dpr);
-            // figures placed for the old size could now sit off the sheet
-            blueprintFigures = [];
+            bigBoardTracksCtx.scale(dpr, dpr);
+            // tracks plotted for the old size could now run off the board
+            bigBoardTracks = [];
         }
 
-        function startBlueprintDrafting() {
-            if (blueprintDraftingAnimationId) return;
-            resizeBlueprintDrafting();
-            if (!blueprintDraftingCtx) return;
-            blueprintDraftingLastDraw = performance.now();
-            blueprintNextFigure = blueprintDraftingLastDraw;
-            blueprintDraftingAnimationId = requestAnimationFrame(drawBlueprintDrafting);
+        function startBigBoardTracks() {
+            if (bigBoardTracksAnimationId) return;
+            resizeBigBoardTracks();
+            if (!bigBoardTracksCtx) return;
+            bigBoardTracksLastDraw = performance.now();
+            bigBoardNextTrack = bigBoardTracksLastDraw;
+            bigBoardTracksAnimationId = requestAnimationFrame(drawBigBoardTracks);
         }
 
-        function stopBlueprintDrafting() {
-            if (blueprintDraftingAnimationId) {
-                cancelAnimationFrame(blueprintDraftingAnimationId);
-                blueprintDraftingAnimationId = null;
+        function stopBigBoardTracks() {
+            if (bigBoardTracksAnimationId) {
+                cancelAnimationFrame(bigBoardTracksAnimationId);
+                bigBoardTracksAnimationId = null;
             }
-            const canvas = document.getElementById('blueprintDrafting');
-            if (canvas && blueprintDraftingCtx) {
-                blueprintDraftingCtx.clearRect(0, 0, canvas.width, canvas.height);
+            const canvas = document.getElementById('bigBoardTracks');
+            if (canvas && bigBoardTracksCtx) {
+                bigBoardTracksCtx.clearRect(0, 0, canvas.width, canvas.height);
             }
         }
 
-        function updateBlueprintDrafting() {
-            if (getCurrentTheme() === 'blueprint') {
-                startBlueprintDrafting();
+        function updateBigBoardTracks() {
+            if (getCurrentTheme() === 'big-board') {
+                startBigBoardTracks();
             } else {
-                stopBlueprintDrafting();
+                stopBigBoardTracks();
             }
         }
 
@@ -2185,9 +2168,9 @@
         // below need to reach every effect too. Adding a new ambient
         // theme now only means adding one entry to each of these three
         // arrays, rather than a new call in 4+ separate places.
-        const AMBIENT_THEME_RESIZERS = [resizeCodeRain, resizeBlockRain, resizeVaporwaveGrid, resizeDosDefrag, resizeCgaStarfield, resizeBreadbinSprites, resizeDigitalFrontier, resizeLunaBliss, resizeAmberBootLog, resizeMp3Visualizer, resizeThermalHeat, resizeBlueprintDrafting];
-        const AMBIENT_THEME_UPDATERS = [updateCodeRain, updateBlockRain, updateVaporwaveGrid, updateDosDefrag, updateCgaStarfield, updateBreadbinSprites, updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, updateMp3Visualizer, updateThermalHeat, updateBlueprintDrafting];
-        const AMBIENT_THEME_STOPPERS = [stopCodeRain, stopBlockRain, stopVaporwaveGrid, stopDosDefrag, stopCgaStarfield, stopBreadbinSprites, stopDigitalFrontier, stopLunaBliss, stopAmberBootLog, stopMp3Visualizer, stopThermalHeat, stopBlueprintDrafting];
+        const AMBIENT_THEME_RESIZERS = [resizeCodeRain, resizeBlockRain, resizeVaporwaveGrid, resizeDosDefrag, resizeCgaStarfield, resizeBreadbinSprites, resizeDigitalFrontier, resizeLunaBliss, resizeAmberBootLog, resizeMp3Visualizer, resizeThermalHeat, resizeBigBoardTracks];
+        const AMBIENT_THEME_UPDATERS = [updateCodeRain, updateBlockRain, updateVaporwaveGrid, updateDosDefrag, updateCgaStarfield, updateBreadbinSprites, updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, updateMp3Visualizer, updateThermalHeat, updateBigBoardTracks];
+        const AMBIENT_THEME_STOPPERS = [stopCodeRain, stopBlockRain, stopVaporwaveGrid, stopDosDefrag, stopCgaStarfield, stopBreadbinSprites, stopDigitalFrontier, stopLunaBliss, stopAmberBootLog, stopMp3Visualizer, stopThermalHeat, stopBigBoardTracks];
 
         function updateAllAmbientThemes() {
             AMBIENT_THEME_UPDATERS.forEach(fn => fn());
@@ -9435,6 +9418,7 @@
             let colors = {}, light = false;
             let W = 0, H = 0, dpr = 1, idData = null;
             let dots = [], dotR = 2, dotsByCC = {}, anchors = {}, hub = { x: 0, y: 0, onMap: false };
+            let outlinePath = null, graticulePath = null;
             let data = null, binCounts = [], maxTotal = 1, highlighted = new Set();
             let p = 0, playing = false, lastNow = 0, bi = 0, ai = 0;
             let cum = {}, routes = new Map(), alertRoutes = new Map(), flowsSoFar = 0, alertsSoFar = 0;
@@ -9466,6 +9450,9 @@
                 colors = { bg: c('--bg-secondary', '#161b22'), bg2: c('--bg-tertiary', '#21262d'), muted: c('--text-muted', '#8b949e'),
                     bright: c('--text-bright', '#f0f6fc'), flow: c('--accent', '#58a6ff') };
                 colors.accent = colors.flow;
+                // a theme that sets --map-outline gets coastlines and a graticule drawn as vector lines
+                const outline = cs.getPropertyValue('--map-outline').trim();
+                colors.outline = outline ? d3.rgb(outline) : null;
                 for (const s in COLORS.SEVERITY) colors['s' + s] = d3.rgb(COLORS.SEVERITY[s]);
                 light = d3.hsl(colors.bg).l > 0.55;
                 colors.dot = d3.rgb(d3.interpolateRgb(colors.bg, colors.muted)(light ? 0.3 : 0.34));
@@ -9503,6 +9490,9 @@
                 const path = d3.geoPath(proj, ox);
                 features.forEach((f, i) => { ox.beginPath(); path(f); ox.fillStyle = `rgb(${(i + 1) & 255},${(i + 1) >> 8},0)`; ox.fill(); });
                 idData = ox.getImageData(0, 0, off.width, off.height);
+                const svgPath = d3.geoPath(proj);
+                outlinePath = new Path2D(svgPath({ type: 'FeatureCollection', features }) || '');
+                graticulePath = new Path2D(svgPath(d3.geoGraticule10()) || '');
                 const step = Math.max(4.2, Math.min(8, W / 210));
                 dots = []; dotsByCC = {}; dotR = step * 0.34;
                 for (let y = step / 2, row = 0; y < H; y += step, row++) {
@@ -9538,6 +9528,9 @@
                 const g = bgx.createRadialGradient(W / 2, H * 0.45, 0, W / 2, H * 0.45, Math.max(W, H) * 0.7);
                 g.addColorStop(0, rgba(colors.accent, light ? 0.05 : 0.07)); g.addColorStop(1, rgba(colors.accent, 0));
                 bgx.fillStyle = g; bgx.fillRect(0, 0, W, H);
+                if (colors.outline && graticulePath) {
+                    bgx.strokeStyle = rgba(colors.outline, 0.12); bgx.lineWidth = 0.6; bgx.stroke(graticulePath);
+                }
                 const LEVELS = 14, heat = {}, lmax = Math.log1p(maxTotal);
                 for (const cc in cum) heat[cc] = Math.log1p(cum[cc].src + cum[cc].dst) / lmax;
                 const paths = Array.from({ length: LEVELS + 2 }, () => new Path2D());
@@ -9553,6 +9546,9 @@
                         : rgba(d3.rgb(mix(0.25 + 0.75 * lv / LEVELS)), 0.55 + 0.45 * lv / LEVELS);
                     bgx.fill(path);
                 });
+                if (colors.outline && outlinePath) {
+                    bgx.strokeStyle = rgba(colors.outline, 0.55); bgx.lineWidth = 0.8; bgx.stroke(outlinePath);
+                }
                 for (const cc in places) {
                     if (!anchors[cc] || !(cum[cc] || highlighted.has(cc))) continue;
                     const [x, y] = anchors[cc], h = heat[cc] || 0;
@@ -16366,11 +16362,11 @@
                 'Measuring the delta-T...', 'Switching to white-hot...', 'Scanning for warm bodies...',
                 'Focusing the germanium lens...', 'Reading the temperature scale...', 'Finding the overheating server...'
             ],
-            blueprint: [
-                'Sharpening the pencils...', 'Measuring twice...', 'Squaring the T-square...',
-                'Drafting the elevation...', 'Dimensioning the drawing...', 'Checking the tolerances...',
-                'Unrolling the plans...', 'Stamping the revision...', 'Inking the linework...',
-                'Filling in the title block...', 'Erasing the construction lines...', 'Scaling to 1:100...'
+            'big-board': [
+                'Raising the readiness level...', 'Computing trajectories...', 'Plotting the tracks...',
+                'Updating the big board...', 'Correlating the radar returns...', 'Polling the early-warning sites...',
+                'Confirming the launch detection...', 'Checking the sensor feeds...', 'Projecting the impact points...',
+                'Paging the watch officer...', 'Running the threat assessment...', 'Holding at the current posture...'
             ]
         };
 

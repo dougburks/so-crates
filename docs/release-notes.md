@@ -162,9 +162,9 @@
 - **One Dark** - the Atom editor's dark theme, blue-gray with soft blue
   accents
 - **Two new Fun themes** - Thermal, a thermal camera view with heat
-  signatures drifting behind the page, and Blueprint, white linework on
-  blueprint blue with figures drafted a stroke at a time on a faint grid.
-  Each has its own loading messages
+  signatures drifting behind the page, and Big Board, a 1980s command
+  center's wall display with tracks plotted across a faint grid and the
+  Traffic Map drawn in vector lines. Each has its own loading messages
 - **The Themes modal is wider** - six themes a row, so it still fits a
   1080p window without scrolling
 - **The Themes modal's preview matches today's layout** - stat cards in

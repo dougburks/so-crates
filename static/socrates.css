@@ -1159,33 +1159,37 @@
             --tag-green-text: #ffe14d;
             --help-icon-color: #ffe14d;
         }
-        [data-theme="blueprint"] {
-            --bg-primary: #0e3a66;
-            --bg-secondary: #124677;
-            --bg-tertiary: #165289;
-            --bg-hover: #1d5f9c;
-            --bg-hover-light: #2a6aa8;
-            --border-color: #7fa9d6;
-            --text-primary: #e8f1fb;
-            --text-bright: #ffffff;
-            --text-muted: #a9c6e6;
-            --accent: #ffffff;
-            --accent-hover: #d6e6f7;
-            --interactive-highlight: #ffd166;
-            --bg-drop-active: #165289;
+        /* Big Board: a 1980s command center's wall display - near-black
+           navy, cyan vector linework and labels, white for values, red and
+           amber kept for threats (the severity colors). --map-outline turns
+           the Traffic Map's coastlines and graticule into vector lines. */
+        [data-theme="big-board"] {
+            --bg-primary: #050b16;
+            --bg-secondary: #0a1628;
+            --bg-tertiary: #0e1e36;
+            --bg-hover: #13294a;
+            --bg-hover-light: #1a3660;
+            --border-color: #1f5288;
+            --text-primary: #a9dcff;
+            --text-bright: #eaf7ff;
+            --text-muted: #6f9cc4;
+            --accent: #4fd1ff;
+            --accent-hover: #8be1ff;
+            --bg-drop-active: #0e1e36;
             --modal-backdrop: rgba(0,0,0,0.75);
-            --badge-danger-text: #ff9e8a;
-            --danger-bg: #0b2f54;
-            --badge-bg-neutral: #0b2f54;
-            --badge-warning-text: #ffd166;
-            --badge-success-text: #9be7a8;
-            --tag-red-text: #ff9e8a;
-            --tag-purple-text: #d0b3ff;
-            --tag-orange-text: #ffb880;
-            --tag-blue-text: #9fd4ff;
-            --tag-gray-text: #a9c6e6;
-            --tag-green-text: #9be7a8;
-            --help-icon-color: #ffffff;
+            --badge-danger-text: #ff5c5c;
+            --danger-bg: #2a0d14;
+            --badge-bg-neutral: #0e1e36;
+            --badge-warning-text: #ffb000;
+            --badge-success-text: #5ff0b0;
+            --tag-red-text: #ff5c5c;
+            --tag-purple-text: #b9a3ff;
+            --tag-orange-text: #ffa64d;
+            --tag-blue-text: #7cc8ff;
+            --tag-gray-text: #7fa3c4;
+            --tag-green-text: #5ff0b0;
+            --help-icon-color: #4fd1ff;
+            --map-outline: #4fd1ff;
         }
         [data-theme="mp3-player"] {
             --bg-primary: #1c1e22;
@@ -1370,7 +1374,7 @@
             display: inline-block;
             vertical-align: middle;
         }
-        .code-rain-canvas, .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .blueprint-drafting-canvas {
+        .code-rain-canvas, .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .big-board-tracks-canvas {
             position: fixed;
             top: 0;
             left: 0;
@@ -1472,9 +1476,9 @@
         [data-theme="thermal"] .thermal-heat-canvas {
             opacity: 0.5;
         }
-        /* Grid and drafted figures for Blueprint - thin white lines, which
-           need more opacity than a filled effect to read at all */
-        [data-theme="blueprint"] .blueprint-drafting-canvas {
+        /* Grid and tracks for Big Board - thin lines, which need more
+           opacity than a filled effect to read at all */
+        [data-theme="big-board"] .big-board-tracks-canvas {
             opacity: 0.6;
         }
         .code-rain-canvas ~ * {
@@ -1495,7 +1499,7 @@
            viewport - a real regression, caught after the header/footer
            visibly broke (see git history on .block-rain-canvas's
            introduction). */
-        .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .blueprint-drafting-canvas {
+        .block-rain-canvas, .vaporwave-grid-canvas, .dos-defrag-canvas, .cga-starfield-canvas, .breadbin-sprites-canvas, .digital-frontier-streaks-canvas, .luna-bliss-canvas, .amber-boot-log-canvas, .mp3-visualizer-canvas, .thermal-heat-canvas, .big-board-tracks-canvas {
             position: fixed;
             z-index: 0;
         }
@@ -2422,6 +2426,14 @@
             filter: drop-shadow(0 0 3px rgba(255, 113, 206, 1)) drop-shadow(0 0 10px rgba(255, 113, 206, 0.7)) drop-shadow(0 0 20px rgba(1, 205, 254, 0.5));
         }
 
+        /* Big Board: a faint phosphor glow on the wall's panels */
+        [data-theme="big-board"] .app-header {
+            box-shadow: 0 2px 12px rgba(79, 209, 255, 0.18);
+        }
+        [data-theme="big-board"] .stat-card.tab-active,
+        [data-theme="big-board"] .stat-card:hover {
+            box-shadow: 0 0 10px rgba(79, 209, 255, 0.35);
+        }
         /* Amber: same neon-outline treatment again, single-toned like
            Digital Frontier rather than two-tone like Vaporwave - unlike
            those two (a fictional Tron look, a multi-color synthwave
