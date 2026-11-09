@@ -79,9 +79,67 @@ def _list(values, limit=3):
     return ', '.join(str(v) for v in values[:limit]) + more
 
 
+_TNS_ACCOUNT = ('CREATE USER', 'ALTER USER', 'DROP USER', 'GRANT', 'CREATE ROLE', 'ALTER ROLE', 'DROP ROLE')
+_MYSQL_ACCOUNT = ('CREATE USER', 'ALTER USER', 'DROP USER', 'RENAME USER', 'GRANT', 'SET', 'CREATE ROLE', 'DROP ROLE')
+_MYSQL_WRITES = ('INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'REVOKE', 'RENAME', 'LOAD')
+_MSSQL_ACCOUNT = ('CREATE LOGIN', 'ALTER LOGIN', 'DROP LOGIN', 'CREATE USER', 'ALTER USER', 'DROP USER', 'GRANT',
+                  'ALTER SERVER ROLE', 'CREATE SERVER ROLE', 'ALTER ROLE', 'CREATE ROLE', 'CREATE APPLICATION ROLE')
+_MSSQL_ACCOUNT_PROCS = ('sp_addsrvrolemember', 'sp_addrolemember', 'sp_addlogin', 'sp_grantlogin', 'sp_password')
+_MSSQL_WRITES = ('INSERT', 'UPDATE', 'DELETE', 'MERGE', 'REVOKE', 'DENY', 'BULK')
+_TNS_WRITES = ('INSERT', 'UPDATE', 'DELETE', 'MERGE', 'REVOKE', 'RENAME', 'COMMENT', 'AUDIT', 'NOAUDIT', 'FLASHBACK')
+
+
+def _tns_statement(b):
+    """A statement for a detail line: its first 120 characters (any
+    IDENTIFIED BY password already masked in the record), and its result."""
+    text = ' '.join(str(b.get('statement') or '').split())
+    return _join(text if len(text) <= 120 else text[:120] + '...', ('-', b.get('result')))
+
+
+def _redis_command(b):
+    """A Redis admin command for a detail line: its first 120 characters
+    (any password it set already masked in the record), and its answer."""
+    text = str(b.get('command') or '')
+    return _join(text if len(text) <= 120 else text[:120] + '...', ('-', b.get('result')))
+
+
+_REDIS_FILE_SETTINGS = ('dir', 'dbfilename', 'logfile', 'appendfilename', 'appenddirname')
+_REDIS_ACCOUNT = ('ACL SETUSER', 'ACL DELUSER', 'ACL LOAD')
+_REDIS_SCRIPTS = ('EVAL', 'EVALSHA', 'EVAL_RO', 'EVALSHA_RO', 'FCALL', 'FCALL_RO', 'FUNCTION LOAD', 'FUNCTION RESTORE',
+                  'SCRIPT LOAD')
+
+
+def _zabbix_commands(b):
+    """A Zabbix record's commands for a detail line: each with whether the
+    agent ran it, refused it, or wasn't heard from."""
+    def state(c):
+        result = str(c.get('result') or '')
+        return 'refused' if c.get('refused') or result.startswith('refused') else \
+            'no answer' if result == 'no response' else 'answered'
+    return _join(_list(f"{str(c.get('command'))[:80]} ({state(c)})" for c in b.get('commands') or ()),
+                 ('-', b.get('request')), ('for', b.get('host')))
+
+
+_FINS_CONTROL = ('Run', 'Stop', 'Program Area Write', 'Program Area Clear', 'Program Area Protect Clear',
+                 'Program Area File Transfer', 'Forced Set/Reset', 'Access Right Forced Acquire', 'Memory Card Format',
+                 'File Delete', 'Parameter Area Clear')
+# HART commands that move a device's output or measurement: its loop
+# current fixed or trimmed, its range or zero set, a variable written or
+# reassigned, its address changed, it reset or locked
+_HART_PROCESS = (6, 35, 36, 37, 40, 42, 43, 45, 46, 51, 52, 66, 67, 68, 71, 79, 82, 83)
+
+
 _IEC104_CONTROL = ('Single command', 'Double command', 'Regulating step command', 'Set point (normalized)',
                    'Set point (scaled)', 'Set point (float)', 'Bitstring command', 'Reset process',
                    'Parameter activation')
+# MongoDB commands that create or empower a user or role, and the
+# handshake commands left out of a connection's detail line
+_MONGO_ACCOUNT = ('createUser', 'updateUser', 'grantRolesToUser', 'createRole', 'updateRole', 'grantPrivilegesToRole')
+_MONGO_QUIET = ('hello', 'ismaster', 'isMaster', 'buildinfo', 'buildInfo', 'ping', 'saslStart', 'saslContinue',
+                'endSessions', 'getnonce')
+# MMS services that run, stop or reload what a relay or controller executes
+_MMS_PROGRAM = ('start', 'stop', 'resume', 'reset', 'kill', 'createProgramInvocation', 'deleteProgramInvocation',
+                'initiateDownloadSequence', 'requestDomainDownload', 'loadDomainContent', 'deleteDomain')
 # The alerts a TLS endpoint sends when it refuses the other's certificate
 # (tshark's names)
 _TLS_CERT_ALERTS = ('Bad Certificate', 'Unsupported Certificate', 'Certificate Revoked', 'Certificate Expired',
@@ -210,6 +268,12 @@ RULES = (
          lambda b: _join(f"user {b['username']}" if b.get('username') else 'a password, no user name',
                          '- login failed' if b.get('login') == 'failed' else ''),
          "Telnet sends the user name and password as typed; the device's banner is on the record."),
+    Rule('rsh_login', 'high', 'rsh', 'rsh, rlogin or rexec login in the clear',
+         f"{_j('rsh', 'user')} IS NOT NULL",
+         lambda b: _join(b.get('service'), ('as', b.get('user')), ('from', b.get('local_user')),
+                         ('-', b.get('command')), ('-', b.get('result'))),
+         "The BSD remote shells send everything as typed - rexec its password, rlogin the one typed at its "
+         "prompt - and rsh and rlogin trust the client's word for who it is. The command run is on the record."),
     Rule('s7_plc_control', 'high', 's7comm', 'S7 PLC started or stopped',
          _in('s7comm', 'function', ['PLC Stop', 'PLC Control']),
          lambda b: _join(b.get('function'), (b.get('response') or {}).get('error')),
@@ -228,6 +292,157 @@ RULES = (
          lambda b: b.get('anomaly', ''),
          "A protection relay's state number should only go up by one - a jump or reset is what a "
          "forged or replayed message looks like."),
+    Rule('mms_control', 'high', 'mms_action', 'MMS control command or program change',
+         f"({_j('mms_action', 'control')} IS NOT NULL OR {_in('mms_action', 'service', list(_MMS_PROGRAM))})",
+         lambda b: _join(b.get('control') or b.get('service'), b.get('object'), ('-', b.get('result'))),
+         'An IEC 61850 operate, select or cancel - switching a breaker or other controllable equipment - '
+         'or a program started, stopped or killed, or a domain downloaded, on a relay or controller.'),
+    Rule('mongodb_destroy', 'high', 'mongodb_action', 'MongoDB database or collection dropped',
+         _in('mongodb_action', 'command', ['drop', 'dropDatabase', 'dropAllUsersFromDatabase', 'shutdown']),
+         lambda b: _join(b.get('command'), '.'.join(filter(None, (b.get('database'), b.get('collection')))), ('-', b.get('result'))),
+         'Data or users deleted wholesale, or the server shut down - what a ransom attack on an open '
+         'MongoDB server does before it leaves its note.'),
+    Rule('mongodb_user_change', 'high', 'mongodb_action', 'MongoDB user or role created or granted',
+         _in('mongodb_action', 'command', list(_MONGO_ACCOUNT)),
+         lambda b: _join(b.get('command'), b.get('user') or b.get('role'), _list(b.get('roles', ())),
+                         ('-', b.get('result'))),
+         'A user or role created, changed or given more rights - a way back in that outlasts the session.'),
+    Rule('tacacs_cleartext', 'high', 'tacacs', 'TACACS+ sent unencrypted',
+         f"{_j('tacacs', 'encrypted')} = 0",
+         lambda b: _join(b.get('type'), ('by', b.get('user')), b.get('command'),
+                         ('-', 'password in the clear' if b.get('password') else None)),
+         "A network device's TACACS+ body sent without its encryption - a flag RFC 8907 says must never be "
+         'used in production: who logged in, their password, and every command they were allowed, readable '
+         'by anyone on the path.'),
+    Rule('ecat_firmware', 'high', 'ecat', 'EtherCAT file or EEPROM written',
+         f"({_j('ecat', 'eeprom_writes')} > 0 OR EXISTS (SELECT 1 FROM json_each(json_data, '$.ecat.foe') "
+         "WHERE value LIKE 'write%'))",
+         lambda b: _join(_list([f for f in b.get('foe', ()) if f.startswith('write')]),
+                         _counted(b.get('eeprom_writes'), 'EEPROM write')),
+         "A file - firmware, most often - written to an EtherCAT slave over FoE, or a slave's EEPROM, which "
+         'holds its identity and configuration, rewritten: a drive or I/O module changed, from wherever the '
+         'master is.'),
+    Rule('fins_control', 'high', 'fins_action', 'Omron PLC run, stop, program change or forced I/O',
+         _in('fins_action', 'command', list(_FINS_CONTROL)),
+         lambda b: _join(b.get('command'), b.get('mode'), b.get('area'), ('-', b.get('result'))),
+         "An Omron PLC put in run or stop mode, its program written, cleared or unprotected, its I/O forced, "
+         "another device's access right taken over, or its files or memory card wiped - over FINS, which "
+         'has no login.'),
+    Rule('hart_ip_process_change', 'high', 'hart_ip_action', 'HART device output, range or calibration changed',
+         f"CAST({_j('hart_ip_action', 'number')} AS INTEGER) IN ({', '.join(str(n) for n in _HART_PROCESS)})",
+         lambda b: _join(b.get('command'), ('on', b.get('device')), ('-', b.get('result'))),
+         "A field instrument's 4-20 mA output fixed or trimmed, its range or zero moved, a variable written, "
+         'or the device reset or locked - what the control system reads from it changes.'),
+    Rule('memcache_amplifier', 'high', 'memcache', 'memcached answering over UDP',
+         f"{_j('memcache', 'amplification')} IS NOT NULL",
+         lambda b: f"{b['amplification']:g}x amplification - {b.get('response_bytes') or 0:,} bytes back for "
+                   f"{b.get('request_bytes') or 0:,}",
+         "A memcached server answered over UDP - the amplifier of the 2018 attacks (CVE-2018-1000115): a "
+         "request's source address forged, its reply goes to the victim, up to thousands of times larger. "
+         'Turn UDP off (-U 0) or keep the port off the internet.'),
+    Rule('memcache_flush', 'high', 'memcache', 'memcached flushed or shut down',
+         f"({_j('memcache', 'commands.flush_all')} IS NOT NULL OR {_j('memcache', 'commands.shutdown')} IS NOT NULL)",
+         lambda b: _join(_list([c for c in ('flush_all', 'shutdown') if c in (b.get('commands') or {})]),
+                         ('-', 'answered' if b.get('answered') else 'no answer')),
+         'Every item in the cache dropped, or the server stopped - what an application does rarely, and '
+         'anyone who reaches an open memcached can do.'),
+    Rule('mssql_os_command', 'high', 'mssql_statement', 'SQL Server running operating-system commands',
+         f"(lower({_j('mssql_statement', 'statement')}) LIKE '%xp_cmdshell%' "
+         f"OR lower({_j('mssql_statement', 'statement')}) LIKE '%sp_oacreate%' "
+         f"OR lower({_j('mssql_statement', 'statement')}) LIKE '%sp_execute_external_script%')",
+         _tns_statement,
+         'xp_cmdshell, OLE Automation or an external script - SQL Server running commands on its host, as its '
+         'service account: the usual way from a database login to the server.'),
+    Rule('mssql_cleartext_login', 'high', 'mssql', 'SQL Server login sent unencrypted',
+         f"{_j('mssql', 'encryption')} = 'none' AND {_j('mssql', 'password')} IS NOT NULL",
+         lambda b: _join(b.get('user'), ('from', b.get('client_host')), ('-', b.get('application'))),
+         'A SQL Server login with encryption turned off on both sides - its password only obfuscated, '
+         'readable by anyone on the path.'),
+    Rule('mssql_account_change', 'high', 'mssql_statement', 'SQL Server login or role created or granted',
+         f"({_in('mssql_statement', 'verb', list(_MSSQL_ACCOUNT))} OR "
+         + ' OR '.join(f"lower({_j('mssql_statement', 'statement')}) LIKE '%{p}%'" for p in _MSSQL_ACCOUNT_PROCS) + ')',
+         _tns_statement,
+         'A login, user or role created, changed or given more rights - sysadmin, most often - or a password '
+         'set: a way back in that outlasts the session.'),
+    Rule('mssql_destroy', 'high', 'mssql_statement', 'SQL Server database or table dropped',
+         f"({_j('mssql_statement', 'verb')} LIKE 'DROP %' OR {_j('mssql_statement', 'verb')} LIKE 'TRUNCATE%') "
+         f"AND NOT {_in('mssql_statement', 'verb', ['DROP LOGIN', 'DROP USER'])}",
+         _tns_statement,
+         'A database, table or other object deleted wholesale.'),
+    Rule('mysql_file_access', 'high', 'mysql_statement', 'MySQL reading or writing server files',
+         f"(upper({_j('mysql_statement', 'statement')}) LIKE '%INTO OUTFILE%' "
+         f"OR upper({_j('mysql_statement', 'statement')}) LIKE '%INTO DUMPFILE%' "
+         f"OR upper({_j('mysql_statement', 'statement')}) LIKE '%LOAD_FILE(%' "
+         f"OR upper({_j('mysql_statement', 'statement')}) LIKE '%LOAD DATA%INFILE%')",
+         _tns_statement,
+         "SQL writing a file on the database server - a web shell, most often, through INTO OUTFILE - or "
+         'reading one (LOAD_FILE, LOAD DATA INFILE): a way from the database onto the server.'),
+    Rule('mysql_account_change', 'high', 'mysql_statement', 'MySQL user or privilege created or granted',
+         f"({_in('mysql_statement', 'verb', [v for v in _MYSQL_ACCOUNT if v != 'SET'])} "
+         f"OR upper({_j('mysql_statement', 'statement')}) LIKE 'SET PASSWORD%')",
+         _tns_statement,
+         'A database user or role created, changed or given more rights, or a password set - a way back in '
+         'that outlasts the session.'),
+    Rule('mysql_destroy', 'high', 'mysql_statement', 'MySQL database or table dropped',
+         f"({_j('mysql_statement', 'verb')} LIKE 'DROP %' OR {_j('mysql_statement', 'verb')} LIKE 'TRUNCATE%') "
+         f"AND NOT {_in('mysql_statement', 'verb', ['DROP USER', 'DROP ROLE'])}",
+         _tns_statement,
+         'A database, table or other object deleted wholesale - what a ransom attack on an open database does '
+         'before it leaves its note.'),
+    Rule('irc_bot_commands', 'high', 'irc', 'IRC bot commands',
+         f"{_j('irc', 'bot_commands')} IS NOT NULL",
+         lambda b: _join(_list(b.get('bot_commands'), 2), ('-', b.get('nick')), ('in', _list(b.get('channels')))),
+         "Messages or a channel topic that read as a botnet's orders - !download, !ddos.syn, .scan... - on an "
+         'IRC connection: a bot taking commands from its herder, or the herder giving them.'),
+    Rule('zabbix_remote_command', 'high', 'zabbix', 'Zabbix running commands',
+         f"EXISTS (SELECT 1 FROM json_each(json_data, '$.zabbix.commands'))",
+         _zabbix_commands,
+         'system.run, a remote command or a script: Zabbix running a shell command on an agent - remote code '
+         'execution by design, and an attacker\'s once they hold a server, run a rogue one an agent trusts, or '
+         'reach an agent that allows it.'),
+    Rule('redis_replication', 'high', 'redis_command', 'Redis made a replica of another server',
+         f"{_j('redis_command', 'master')} IS NOT NULL",
+         _redis_command,
+         'REPLICAOF (SLAVEOF): the server copies its data from, and takes commands from, the address given - '
+         "a rogue server's way to load a module onto it, and to read everything it holds."),
+    Rule('redis_module_load', 'high', 'redis_command', 'Redis module loaded',
+         f"{_j('redis_command', 'name')} IN ('MODULE LOAD', 'MODULE LOADEX')",
+         _redis_command,
+         'A shared library loaded into the server - native code run as Redis, most often a module a rogue '
+         'replication just wrote to disk.'),
+    Rule('redis_file_write', 'high', 'redis_command', 'Redis told to save where it shouldn\'t',
+         f"{_j('redis_command', 'name')} = 'CONFIG SET' AND {_has('redis_command', 'settings', _REDIS_FILE_SETTINGS)}",
+         _redis_command,
+         "The directory or file name Redis saves its database to changed - then SAVE writes it, with a key "
+         "holding an SSH key, a cron line or a web shell, over a file of the attacker's choosing."),
+    Rule('redis_account_change', 'high', 'redis_command', 'Redis user or password changed',
+         f"({_in('redis_command', 'name', _REDIS_ACCOUNT)} OR ({_j('redis_command', 'name')} = 'CONFIG SET' AND "
+         f"{_has('redis_command', 'settings', ['requirepass', 'masterauth'])}))",
+         _redis_command,
+         'A user created, changed or removed, or the server\'s password set - a way back in, or the owner '
+         'locked out.'),
+    Rule('redis_destroy', 'high', 'redis_command', 'Redis flushed or shut down',
+         _in('redis_command', 'name', ['FLUSHALL', 'FLUSHDB', 'SHUTDOWN']),
+         _redis_command,
+         'Every key deleted, or the server stopped - what a ransom attack on an open Redis does before it '
+         'leaves its note.'),
+    Rule('tns_account_change', 'high', 'tns_statement', 'Oracle user or privilege created or granted',
+         _in('tns_statement', 'verb', list(_TNS_ACCOUNT)),
+         _tns_statement,
+         'A database user or role created, changed, unlocked or given more rights - a way back in that '
+         'outlasts the session.'),
+    Rule('tns_destroy', 'high', 'tns_statement', 'Oracle table or object dropped',
+         f"({_j('tns_statement', 'verb')} LIKE 'DROP %' OR {_j('tns_statement', 'verb')} LIKE 'TRUNCATE%' "
+         f"OR {_j('tns_statement', 'verb')} = 'PURGE') AND NOT {_in('tns_statement', 'verb', list(_TNS_ACCOUNT))}",
+         _tns_statement,
+         'Data or a database object deleted wholesale - a table, view, procedure, tablespace... dropped '
+         'or truncated.'),
+    Rule('pn_dcp_set', 'high', 'pn_dcp', 'PROFINET device renamed, readdressed or reset',
+         f"{_j('pn_dcp', 'service')} = 'Set' AND "
+         + _has('pn_dcp', 'changes', ['station name', 'IP address', 'DHCP', 'reset factory settings', 'reset to factory']),
+         lambda b: _join(_list(b.get('changes', ())), ('to', b.get('station_name') or b.get('ip')), ('-', b.get('result'))),
+         "PROFINET DCP has no authentication: anyone on the segment can change a device's name or address, "
+         "or reset it, cutting it off from its controller."),
     Rule('slp_registration', 'high', 'slp', 'SLP accepts registrations',
          f"{_j('slp', 'function')} = 'Service Registration' AND {_j('slp', 'status')} = 'OK'",
          lambda b: _join(b.get('url'), f"({b['length']} bytes)" if b.get('length') else ''),
@@ -255,6 +470,137 @@ RULES = (
          '1',
          lambda b: _join(b.get('service'), b.get('node'), ('-', b.get('result'))),
          'A client changed a node, called a method, or added or deleted nodes.'),
+    Rule('mms_change', 'medium', 'mms_action', 'MMS write or definition change',
+         f"({_j('mms_action', 'control')} IS NULL AND NOT {_in('mms_action', 'service', list(_MMS_PROGRAM))})",
+         lambda b: _join(b.get('service'), b.get('object'), ('-', b.get('result'))),
+         'A client wrote a variable, or defined or deleted variables, lists, events or journals, on an MMS server.'),
+    Rule('mongodb_unauthenticated', 'medium', 'mongodb', 'MongoDB answered without a login',
+         f"{_j('mongodb', 'unauthenticated')} = 1",
+         lambda b: _join(_list(c for c in b.get('commands', {}) if c not in _MONGO_QUIET), ('by', b.get('driver'))),
+         "The server answered more than a handshake on a connection that never logged in - it's open to "
+         "anyone who reaches it. (A connection that logged in before the capture started looks the same.)"),
+    Rule('mongodb_change', 'medium', 'mongodb_action', 'MongoDB write or change',
+         f"NOT {_in('mongodb_action', 'command', ['drop', 'dropDatabase', 'dropAllUsersFromDatabase', 'shutdown'] + list(_MONGO_ACCOUNT))}",
+         lambda b: _join(b.get('command'), '.'.join(filter(None, (b.get('database'), b.get('collection')))), ('-', b.get('result'))),
+         'Documents inserted, updated or deleted, or a collection, index or setting changed.'),
+    Rule('openvpn_tunnel', 'medium', 'openvpn', 'OpenVPN tunnel',
+         f"{_j('openvpn', 'stage')} = 'established'",
+         lambda b: _join(('to', (b.get('certificate') or {}).get('subject') or b.get('sni')),
+                         ('-', _counted((b.get('data_to_server') or 0) + (b.get('data_to_client') or 0), 'data packet'))),
+         "A VPN tunnel carried data. From inside a network it's a way around its monitoring and controls - "
+         "check it's one you run."),
+    Rule('wireguard_tunnel', 'medium', 'wireguard', 'WireGuard tunnel',
+         f"{_j('wireguard', 'stage')} = 'established'",
+         lambda b: _counted((b.get('data_to_server') or 0) + (b.get('data_to_client') or 0), 'data packet'),
+         "A VPN tunnel carried data. From inside a network it's a way around its monitoring and controls - "
+         "check it's one you run."),
+    Rule('tns_change', 'medium', 'tns_statement', 'Oracle write or change',
+         f"({_in('tns_statement', 'verb', list(_TNS_WRITES))} OR {_j('tns_statement', 'verb')} LIKE 'CREATE %' "
+         f"OR ({_j('tns_statement', 'verb')} LIKE 'ALTER %' AND {_j('tns_statement', 'verb')} != 'ALTER SESSION')) "
+         f"AND NOT {_in('tns_statement', 'verb', list(_TNS_ACCOUNT))}",
+         _tns_statement,
+         'Rows inserted, updated or deleted, or a table, procedure or other object created or changed. '
+         "An application's writes look the same - check who sent them."),
+    Rule('tns_listener_command', 'medium', 'tns', 'Oracle listener command',
+         f"{_j('tns', 'command')} IS NOT NULL AND lower({_j('tns', 'command')}) != 'ping'",
+         lambda b: _join(b.get('command'), ('-', b.get('error') or b.get('result'))),
+         "A command to the TNS listener itself - lsnrctl's status, version or services, which describe the "
+         'server, or stop, set or reload, which change it. From anywhere but the server or an admin '
+         "host, it's a survey or an attack."),
+    Rule('fins_change', 'medium', 'fins_action', 'Omron PLC memory or setting written',
+         f"NOT {_in('fins_action', 'command', list(_FINS_CONTROL))}",
+         lambda b: _join(b.get('command'), b.get('area'), b.get('address'), ('-', b.get('result'))),
+         "An Omron PLC's memory, parameters, clock, files or names written, or its errors cleared."),
+    Rule('hart_ip_change', 'medium', 'hart_ip_action', 'HART device configuration written',
+         f"CAST({_j('hart_ip_action', 'number')} AS INTEGER) NOT IN ({', '.join(str(n) for n in _HART_PROCESS)})",
+         lambda b: _join(b.get('command'), ('on', b.get('device')), ('-', b.get('result'))),
+         "A field instrument's tag, message, damping, units or other setting written, or a self test run."),
+    Rule('synphasor_data_off', 'medium', 'synphasor', 'PMU told to stop sending data',
+         f"{_j('synphasor', 'commands')} LIKE '%transmission off%'",
+         lambda b: _join(_list(b.get('stations', ())), ('stream', b.get('stream_id'))),
+         "A C37.118 command turning off a phasor measurement unit's data - routine from its PDC when it "
+         'disconnects, and from anywhere else, a way to blind wide-area monitoring and protection. C37.118 has '
+         'no login.'),
+    Rule('ecat_state_change', 'medium', 'ecat', 'EtherCAT slaves sent to another state',
+         f"{_j('ecat', 'state_requests')} IS NOT NULL",
+         lambda b: _join(_list(list(b.get('state_requests') or {})), 'every slave at once' if b.get('broadcast_state_change') else None),
+         "A master asked EtherCAT slaves to change state - routine when it starts the machine (INIT, PRE-OP, "
+         'SAFE-OP, OP), and out of OP, its outputs stop: a running machine halted.'),
+    Rule('mssql_configuration', 'medium', 'mssql_statement', 'SQL Server configuration changed',
+         f"lower({_j('mssql_statement', 'statement')}) LIKE '%sp_configure%,%'",
+         _tns_statement,
+         "A server option set with sp_configure - turning on what's off by default (advanced options, "
+         'xp_cmdshell, OLE Automation, CLR) is the step before using it.'),
+    Rule('mssql_password_hashes', 'medium', 'mssql_statement', 'SQL Server password hashes read',
+         f"(lower({_j('mssql_statement', 'statement')}) LIKE '%sql_logins%' "
+         f"OR lower({_j('mssql_statement', 'statement')}) LIKE '%syslogins%') "
+         f"AND lower({_j('mssql_statement', 'statement')}) LIKE '%password%' AND {_j('mssql_statement', 'result')} = 'ok'",
+         _tns_statement,
+         "The server's logins read with their password hashes - to crack offline."),
+    Rule('mssql_change', 'medium', 'mssql_statement', 'SQL Server write or change',
+         f"({_in('mssql_statement', 'verb', list(_MSSQL_WRITES))} OR {_j('mssql_statement', 'verb')} LIKE 'CREATE %' "
+         f"OR {_j('mssql_statement', 'verb')} LIKE 'ALTER %') AND NOT {_in('mssql_statement', 'verb', list(_MSSQL_ACCOUNT))}",
+         _tns_statement,
+         'Rows inserted, updated or deleted, or a table or other object created or changed. '
+         "An application's writes look the same - check who sent them."),
+    Rule('irc_bot_nick', 'medium', 'irc', 'IRC nickname shaped like a bot\'s',
+         f"{_j('irc', 'bot_like_nick')} = 1",
+         lambda b: _join(b.get('nick') or _list(b.get('nicks')), ('on', b.get('network') or b.get('server'))),
+         'A nickname like USA|83621 or [DEU|W10]4821 - a country or OS code and a number, the names IRC bots '
+         'give themselves so their herder can tell them apart.'),
+    Rule('irc_dcc_send', 'medium', 'irc', 'IRC file transfer offered',
+         f"{_j('irc', 'dcc')} IS NOT NULL",
+         lambda b: _list(f"{d.get('file')} from {d.get('from')} to {d.get('to')}" for d in b.get('dcc') or ()),
+         'A DCC SEND offer: a file passed between IRC users directly - how bots receive updates and send '
+         'what they stole.'),
+    Rule('zabbix_file_read', 'medium', 'zabbix', 'Zabbix reading files',
+         # (not an agent's data: its keys are the active checks' it was given)
+         f"{_j('zabbix', 'request')} != 'agent data' AND "
+         "EXISTS (SELECT 1 FROM json_each(json_data, '$.zabbix.keys') "
+         "WHERE value LIKE 'vfs.file.contents[%' OR value LIKE 'vfs.file.get[%')",
+         lambda b: _join(_list(k for k in b.get('keys') or () if k.startswith(('vfs.file.contents[', 'vfs.file.get['))),
+                         ('-', b.get('request')), ('for', b.get('host'))),
+         "An item reading a file's contents from the agent's host - normal for a log or config file, and a "
+         'way to read /etc/shadow or a key with whatever rights the agent has.'),
+    Rule('zabbix_credentials', 'medium', 'zabbix', 'Zabbix credentials sent unencrypted',
+         f"{_j('zabbix', 'credentials')} IS NOT NULL",
+         lambda b: _join(_list(f'{name} ({n})' for name, n in (b.get('credentials') or {}).items()),
+                         ('for', b.get('host'))),
+         "A proxy's configuration, in the clear, carrying its hosts' IPMI or SNMP passwords, TLS pre-shared "
+         'keys or secret macros - readable by anyone who sees the traffic.'),
+    Rule('redis_scripts', 'medium', 'redis_command', 'Redis running Lua',
+         _in('redis_command', 'name', _REDIS_SCRIPTS),
+         _redis_command,
+         'A Lua script run or loaded on the server - routine for some applications, and the way in through '
+         "CVE-2022-0543, Debian's and Ubuntu's sandbox escape."),
+    Rule('redis_no_auth', 'medium', 'redis', 'Redis answering without a password',
+         f"{_j('redis', 'auth')} = 'none'",
+         lambda b: _join(_list(list(b.get('commands') or {})), ('-', b.get('server')), b.get('server_version')),
+         'A Redis server that answered commands with no password asked for - anyone who reaches it can read, '
+         'change or delete its data, and rewrite its configuration.'),
+    Rule('redis_config_change', 'medium', 'redis_command', 'Redis configuration changed',
+         f"{_j('redis_command', 'name')} = 'CONFIG SET' AND NOT {_has('redis_command', 'settings', list(_REDIS_FILE_SETTINGS) + ['requirepass', 'masterauth'])}",
+         _redis_command,
+         'A setting changed on a running server - protected mode off, a module command enabled, persistence '
+         'turned off...'),
+    Rule('mysql_password_hashes', 'medium', 'mysql_statement', 'MySQL password hashes read',
+         f"lower({_j('mysql_statement', 'statement')}) LIKE '%from mysql.user%' AND "
+         f"{_j('mysql_statement', 'result')} = 'ok'",
+         _tns_statement,
+         "The server's own table of users read, with their password hashes - to crack offline, or to log in "
+         'with where the hash alone is enough.'),
+    Rule('mysql_no_password', 'medium', 'mysql', 'MySQL login with no password',
+         f"{_j('mysql', 'login')} = 'succeeded' AND {_j('mysql', 'password_sent')} = 0",
+         lambda b: _join(b.get('user'), ('to', b.get('database')), ('-', b.get('client'))),
+         'A database login that sent an empty password and was let in - an account anyone who reaches the '
+         'server can use.'),
+    Rule('mysql_change', 'medium', 'mysql_statement', 'MySQL write or change',
+         f"({_in('mysql_statement', 'verb', list(_MYSQL_WRITES))} OR {_j('mysql_statement', 'verb')} LIKE 'CREATE %' "
+         f"OR {_j('mysql_statement', 'verb')} LIKE 'ALTER %') "
+         f"AND NOT {_in('mysql_statement', 'verb', list(_MYSQL_ACCOUNT))}",
+         _tns_statement,
+         'Rows inserted, updated or deleted, or a table or other object created or changed. '
+         "An application's writes look the same - check who sent them."),
     Rule('socks_open', 'medium', 'socks', 'SOCKS proxy without authentication',
          f"{_j('socks', 'auth_method')} = 'no authentication' AND {_j('socks', 'status')} = 'succeeded'",
          lambda b: _join(('to', _join(b.get('request_name') or b.get('request_host'), b.get('request_port')))),
@@ -304,6 +650,114 @@ RULES = (
                          ('- certificate for', _list(b.get('subjectaltname')) or b.get('subject'))),
          "The client asked for one host and got a certificate for others - a server's default certificate, "
          "a shared host or CDN that doesn't serve that name, or someone in the middle answering for it."),
+    Rule('pn_dcp_identify_all', 'low', 'pn_dcp', 'PROFINET devices discovered',
+         f"{_j('pn_dcp', 'service')} = 'Identify' AND {_j('pn_dcp', 'query')} = 'all'",
+         lambda b: f"{_counted(b['responses'], 'device')} answered" if b.get('responses') else 'no answer',
+         "A DCP Identify All lists every PROFINET device on the segment, with its name, type and address - "
+         "routine from an engineering station, a survey from anywhere else."),
+    Rule('openvpn_retries', 'low', 'openvpn', 'OpenVPN client retrying unanswered',
+         f"{_j('openvpn', 'stage')} = 'client reset only' AND {_j('openvpn', 'client_resets')} >= 2",
+         lambda b: _counted(b.get('client_resets'), 'attempt'),
+         "A client kept trying to open an OpenVPN session that nothing answered - a VPN configured to "
+         "reach out, and blocked or gone. (A scanner's probe is one attempt, and isn't listed.)"),
+    Rule('wireguard_retries', 'low', 'wireguard', 'WireGuard peer retrying unanswered',
+         f"{_j('wireguard', 'stage')} = 'initiation only' AND {_j('wireguard', 'initiations')} >= 2",
+         lambda b: _counted(b.get('initiations'), 'attempt'),
+         "A peer kept trying to open a WireGuard tunnel that nothing answered - a VPN configured to reach "
+         "out, and blocked or gone, or a peer whose key the other end doesn't accept. (A scanner's probe is "
+         "one attempt, and isn't listed.)"),
+    Rule('memcache_stats', 'low', 'memcache', 'memcached stats answered',
+         f"{_j('memcache', 'commands.stats')} IS NOT NULL AND {_j('memcache', 'answered')} = 1",
+         lambda b: _join(_list(b.get('stats', ())), ('- version', b.get('version'))),
+         'A memcached server told a client its stats - version, uptime, connections, item counts, and with '
+         "stats items or cachedump, what's stored. Routine from monitoring, a survey from anywhere else."),
+    Rule('fins_identified', 'low', 'fins', 'Omron PLC identified',
+         f"{_j('fins', 'model')} IS NOT NULL",
+         lambda b: _join(b.get('model'), ('version', b.get('version'))),
+         'An Omron PLC answered a Controller Data Read with its model and version - what a scanner asks '
+         'first, to find PLCs to attack.'),
+    Rule('hart_ip_session', 'low', 'hart_ip', 'HART-IP session accepted',
+         f"{_j('hart_ip', 'session')} = 'accepted'",
+         lambda b: _join(b.get('host_type'), ('-', _list(b.get('tags', ())))),
+         "A HART-IP gateway or instrument accepted a session - HART-IP 1 has no login, so anyone who reaches "
+         "it can read its devices and write to them."),
+    Rule('raknet_server', 'low', 'raknet', 'RakNet game server answering',
+         f"{_j('raknet', 'answered')} = 1 AND ({_j('raknet', 'advertisement')} IS NOT NULL OR {_j('raknet', 'connected')} = 1)",
+         lambda b: _join(b.get('edition'), b.get('motd'), b.get('game_version'),
+                         ('-', f"{b['players']} of {b.get('max_players', '?')} players" if 'players' in b else None),
+                         'connected' if b.get('connected') else None),
+         'A game server - Minecraft Bedrock, or another on RakNet - answered: one that has no place on a work '
+         "network, or one that's on the internet and being listed, or used as a reflector."),
+    Rule('tacacs_login_failed', 'low', 'tacacs', 'TACACS+ login refused',
+         f"{_j('tacacs', 'type')} = 'authentication' AND {_j('tacacs', 'result')} LIKE '%Fail%'",
+         lambda b: _join(b.get('user'), ('on', b.get('port')), ('from', b.get('remote_address'))),
+         "A login to a network device refused by its TACACS+ server - a mistyped password, or one guess of "
+         'many. (Only an unencrypted body shows it.)'),
+    Rule('tacacs_command_refused', 'low', 'tacacs', 'TACACS+ command refused',
+         f"{_j('tacacs', 'type')} = 'authorization' AND {_j('tacacs', 'result')} = 'FAIL'",
+         lambda b: _join(b.get('user'), ('-', b.get('command'))),
+         "A command on a network device its TACACS+ server wouldn't allow the user - beyond their role, "
+         'or tried by someone who got in. (Only an unencrypted body shows it.)'),
+    Rule('synphasor_not_synced', 'low', 'synphasor', 'PMU lost time sync',
+         f"{_j('synphasor', 'not_synced')} > 0",
+         lambda b: _join(_list(b.get('stations', ())), ('-', _counted(b.get('not_synced'), 'data frame'))),
+         "A phasor measurement unit said its data wasn't synchronized to its time source - a lost GPS signal, "
+         'or GPS spoofing; its phasors can no longer be compared with other PMUs.'),
+    Rule('synphasor_config_read', 'low', 'synphasor', 'PMU configuration read',
+         f"{_j('synphasor', 'pmus')} IS NOT NULL",
+         lambda b: _join(_list(b.get('stations', ())), ('stream', b.get('stream_id'))),
+         "A phasor measurement unit gave out its configuration - its station, channels and rate. Routine for "
+         "its PDC, a survey of the substation from anywhere else."),
+    Rule('ecat_over_ip', 'low', 'ecat', 'EtherCAT answering over IP',
+         f"json_extract(json_data, '$.proto') = 'UDP' AND {_j('ecat', 'answered')} = 1",
+         lambda b: _join(_list(list(b.get('commands') or {})), ('-', _counted(b.get('slaves'), 'slave'))),
+         "EtherCAT slaves answering frames that came over UDP - a fieldbus that belongs inside a machine, "
+         'reachable from an IP network.'),
+    Rule('mssql_login_failed', 'low', 'mssql', 'SQL Server login failed',
+         f"{_j('mssql', 'login')} = 'failed'",
+         lambda b: _join(b.get('user'), ('from', b.get('client_host')), ('-', b.get('login_error'))),
+         'A SQL Server login refused - a mistyped password, or one guess of many (sa is the usual guess).'),
+    Rule('irc_connection', 'low', 'irc', 'IRC client connected',
+         f"{_j('irc', 'login')} = 'registered'",
+         lambda b: _join(b.get('nick'), ('on', b.get('network') or b.get('server')), ('in', _list(b.get('channels')))),
+         'A client registered with an IRC server - rare on most networks today, and still how some botnets '
+         'take orders.'),
+    Rule('irc_password', 'low', 'irc', 'IRC password sent in the clear',
+         f"({_j('irc', 'password')} IS NOT NULL OR {_j('irc', 'oper')} IS NOT NULL OR "
+         f"{_j('irc', 'services_password')} IS NOT NULL OR {_j('irc', 'channel_keys')} IS NOT NULL)",
+         lambda b: _join(_list([kind for kind, key in (('server password', 'password'), ('operator password', 'oper'),
+                                                       ('NickServ password', 'services_password'),
+                                                       ('channel key', 'channel_keys')) if b.get(key)], 4),
+                         ('-', b.get('nick'))),
+         "A server, operator or NickServ password, or a channel's key, sent unencrypted - a bot's carry the "
+         "herder's, enough to take over its channel."),
+    Rule('redis_login_failed', 'low', 'redis', 'Redis login failed',
+         f"{_j('redis', 'login_failures')} IS NOT NULL",
+         lambda b: _join(b.get('user'), ('-', _counted(b.get('login_failures'), 'failure'))),
+         'AUTH refused - a mistyped password, or one guess of many.'),
+    Rule('zabbix_refused', 'low', 'zabbix', 'Zabbix agent refused checks',
+         f"{_j('zabbix', 'not_supported')} IS NOT NULL",
+         lambda b: _join(_counted(b.get('not_supported'), 'check'), ('-', _list(b.get('errors')))),
+         "An agent answering ZBX_NOTSUPPORTED - a key it doesn't know or isn't allowed to run: a "
+         'misconfigured template, or someone trying keys with zabbix_get.'),
+    Rule('mysql_login_failed', 'low', 'mysql', 'MySQL login failed',
+         f"{_j('mysql', 'login')} = 'failed'",
+         lambda b: _join(b.get('user'), ('-', b.get('login_error'))),
+         'A database login refused - a mistyped password, or one guess of many.'),
+    Rule('tns_login_failed', 'low', 'tns', 'Oracle login failed',
+         f"{_j('tns', 'login')} = 'failed'",
+         lambda b: _join(b.get('db_user'), ('-', b.get('login_error'))),
+         'A database login refused - a mistyped password, or one guess of many.'),
+    Rule('tns_unknown_service', 'low', 'tns', 'Oracle service or SID unknown',
+         f"{_j('tns', 'result')} = 'refused' AND {_in('tns', 'error', ['ORA-12505', 'ORA-12514'])}",
+         lambda b: _join(('SID', b.get('sid')), ('service', b.get('service_name'))),
+         "The listener didn't know the SID or service a client asked for - a misconfigured client, or "
+         "one guessing SIDs (many unknown ones from one host)."),
+    Rule('rsh_answering', 'low', 'rsh', 'rsh, rlogin or rexec service answering',
+         f"{_j('rsh', 'probe')} IS NOT NULL AND {_j('rsh', 'result')} != 'no response'",
+         lambda b: _join(b.get('service'), ('-', b.get('error') or b.get('result'))),
+         "Something that wasn't a login reached a remote shell service and it answered - a scanner found it "
+         "listening."),
     Rule('rip_whole_table', 'low', 'rip', 'RIP routing table handed out',
          f"{_j('rip', 'whole_table')} = 1 AND {_j('rip', 'responses')} IS NOT NULL",
          lambda b: _counted(b.get('route_count'), 'route'),

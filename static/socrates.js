@@ -179,12 +179,17 @@
             'everforest': { label: 'Everforest', group: 'dark' },
             'gruvbox': { label: 'Gruvbox', group: 'dark' },
             'hackerman': { label: 'Hackerman', group: 'dark' },
+            'jade-horse': { label: 'Jade Horse', group: 'dark' },
             'kanagawa': { label: 'Kanagawa', group: 'dark' },
+            'last-horizon': { label: 'Last Horizon', group: 'dark' },
+            'lupine': { label: 'Lupine', group: 'light' },
             'miasma': { label: 'Miasma', group: 'dark' },
             'nord': { label: 'Nord', group: 'dark' },
+            'one-dark': { label: 'One Dark', group: 'dark' },
             'osaka-jade': { label: 'Osaka Jade', group: 'dark' },
             'ristretto': { label: 'Ristretto', group: 'dark' },
             'rose-pine': { label: 'Rose Pine', group: 'light' },
+            'solitude': { label: 'Solitude', group: 'dark' },
             'vantablack': { label: 'Vantablack', group: 'dark' },
             'white': { label: 'White', group: 'light' },
             'luna-blue': { label: 'Luna Blue', group: 'fun' },
@@ -194,6 +199,8 @@
             'solarized-dark': { label: 'Solarized Dark', group: 'dark' },
             'monokai': { label: 'Monokai', group: 'dark' },
             'mp3-player': { label: 'MP3 Player', group: 'fun' },
+            'thermal': { label: 'Thermal', group: 'fun' },
+            'war-room': { label: 'War Room', group: 'fun' },
         };
 
         const THEME_GROUP_LABELS = { dark: 'Dark Themes', fun: 'Fun Themes', light: 'Light Themes' };
@@ -331,7 +338,7 @@
             safeStorageSet(localStorage, CYBERCHEF_THEME_SYNC_KEY, desired);
         }
 
-        // Real app markup/classes (.app-header, .stats-grid, .stat-card)
+        // Real app markup/classes (.app-header, .stats-group, .stat-card)
         // reusing the real stylesheet, rendered in an isolated iframe
         // document so previewing a theme never touches the real page's
         // document.documentElement. Loaded once via srcdoc (relative URLs
@@ -341,17 +348,33 @@
         // hover - cheap, and avoids booting a second full copy of the app
         // (which loading the real socrates.html in an iframe would mean:
         // re-running init(), restarting the OhMyDebn theme-sync poll, etc.
-        // just for a hover preview).
-        const THEME_PREVIEW_SRCDOC = `<!doctype html>
+        // just for a hover preview). The cards are a PCAP analysis's, in
+        // its sections (STAT_GROUPS), their numbers in the same per-type
+        // colors (COLORS.EVENT) - a function, not a constant, since both
+        // are declared further down this file.
+        function themePreviewSrcdoc() {
+            const card = (count, label, color, active) => `
+          <div class="stat-card${active ? ' tab-active' : ''}">
+            <div class="stat-number" style="color: ${color}">${count}</div>
+            <div class="stat-label">${label}</div>
+          </div>`;
+            const group = (index, cards) => `
+      <div class="stats-group" style="--cards: ${cards.length}">
+        <div class="stats-grid-heading"><span class="stats-grid-heading-toggle"><span aria-hidden="true">\u25be</span><span>${STAT_GROUPS[index].heading}</span></span></div>
+        <div class="stats-group-cards">${cards.join('')}
+        </div>
+      </div>`;
+            return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <link rel="stylesheet" href="static/socrates.css">
 <style>
   html, body { overflow: hidden; }
-  .app-header { position: static; border-bottom: none; }
-  .preview-container { padding: 12px 14px; }
-  .preview-stats-grid { grid-template-columns: repeat(3, 1fr); margin-bottom: 0; }
+  .app-header { position: static; border-bottom: none; padding: 8px 20px; }
+  .preview-container { padding: 10px 14px; }
+  .stats-grid { margin-bottom: 0; }
+  .stats-grid-heading, .stats-grid-heading-toggle { cursor: default; }
 </style>
 </head>
 <body>
@@ -366,29 +389,27 @@
     </div>
   </div>
   <div class="preview-container">
-    <div class="stats-grid preview-stats-grid">
-      <div class="stat-card tab-active">
-        <div class="stat-number">128</div>
-        <div class="stat-label">Alerts</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-number">4,502</div>
-        <div class="stat-label">Flows</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-number">37</div>
-        <div class="stat-label">DNS</div>
-      </div>
+    <div class="stats-grid stats-grid-grouped">${group(0, [
+        card('12', 'Network Alerts', COLORS.EVENT.alert, true),
+        card('4,872', 'All Events', 'var(--text-bright)')
+    ])}${group(1, [
+        card('386', 'DNS Queries', COLORS.EVENT.dns),
+        card('94', 'HTTP', COLORS.EVENT.http),
+        card('211', 'TLS', COLORS.EVENT.tls)
+    ])}${group(2, [
+        card('1,503', 'Flows', COLORS.EVENT.flow)
+    ])}
     </div>
   </div>
 </body>
 </html>`;
+        }
 
         let themePreviewFrameReady = false;
 
         // Only ever touches the isolated preview iframe's own document,
         // never the real page's document.documentElement. Hovering across a
-        // packed grid of ~35 tiles with no debounce would otherwise mean a
+        // packed grid of ~40 tiles with no debounce would otherwise mean a
         // full-page, high-contrast recolor on every mouseenter - exactly
         // the large-area rapid-flash pattern WCAG 2.3.1 (Three Flashes or
         // Below Threshold) exists to prevent. Scoping the change to this
@@ -402,6 +423,9 @@
             const frameDoc = frame && frame.contentDocument;
             if (frameDoc && frameDoc.documentElement) {
                 frameDoc.documentElement.setAttribute('data-theme', themeName);
+                // the active card's corner brackets, as updateFunThemeClass
+                // gives the real page
+                frameDoc.documentElement.classList.toggle('fun-theme', !!THEMED_LOADING_PHRASES[themeName]);
             }
             updatePreviewingLabel(themeName);
         }
@@ -1838,6 +1862,286 @@
             }
         }
 
+        // Drifting heat signatures for Thermal - a few soft blobs that
+        // wander the viewport, swelling and shrinking, each shaded from a
+        // white-hot core out through the "ironbow" palette thermal cameras
+        // use (yellow, orange, magenta, purple, then nothing). Drawn
+        // additively, so where two cross they read hotter, as heat would.
+        let thermalHeatCtx = null;
+        let thermalHeatAnimationId = null;
+        let thermalHeatLastDraw = 0;
+        let thermalBlobs = [];
+        const THERMAL_BLOB_COUNT = 6;
+        const THERMAL_IRONBOW = [
+            [0, 'rgba(255, 251, 230, 0.9)'],
+            [0.2, 'rgba(255, 225, 77, 0.75)'],
+            [0.45, 'rgba(255, 140, 26, 0.55)'],
+            [0.7, 'rgba(214, 51, 108, 0.35)'],
+            [0.88, 'rgba(122, 26, 140, 0.18)'],
+            [1, 'rgba(42, 10, 74, 0)']
+        ];
+
+        function makeThermalBlobs(width, height) {
+            const base = Math.min(width, height);
+            const blobs = [];
+            for (let i = 0; i < THERMAL_BLOB_COUNT; i++) {
+                blobs.push({
+                    x: Math.random() * width,
+                    y: Math.random() * height,
+                    // pixels per second
+                    vx: (Math.random() - 0.5) * 40,
+                    vy: (Math.random() - 0.5) * 40,
+                    radius: base * (0.12 + Math.random() * 0.12),
+                    phase: Math.random() * Math.PI * 2
+                });
+            }
+            return blobs;
+        }
+
+        function drawThermalHeat(timestamp) {
+            const canvas = document.getElementById('thermalHeat');
+            if (!canvas || getCurrentTheme() !== 'thermal') return;
+            if (!thermalHeatCtx) resizeThermalHeat();
+            if (!thermalHeatCtx) return;
+
+            const dt = timestamp - thermalHeatLastDraw;
+            if (dt < 50) {
+                thermalHeatAnimationId = requestAnimationFrame(drawThermalHeat);
+                return;
+            }
+            thermalHeatLastDraw = timestamp;
+
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const ctx = thermalHeatCtx;
+            ctx.clearRect(0, 0, width, height);
+            ctx.globalCompositeOperation = 'lighter';
+            // a long gap (a backgrounded tab's first frame back) mustn't
+            // fling the blobs across the screen
+            const seconds = Math.min(dt, 200) / 1000;
+            thermalBlobs.forEach(blob => {
+                blob.x += blob.vx * seconds;
+                blob.y += blob.vy * seconds;
+                if (blob.x < 0 || blob.x > width) blob.vx = -blob.vx;
+                if (blob.y < 0 || blob.y > height) blob.vy = -blob.vy;
+                const r = blob.radius * (1 + 0.15 * Math.sin(timestamp / 1500 + blob.phase));
+                const grad = ctx.createRadialGradient(blob.x, blob.y, 0, blob.x, blob.y, r);
+                THERMAL_IRONBOW.forEach(([stop, color]) => grad.addColorStop(stop, color));
+                ctx.fillStyle = grad;
+                ctx.fillRect(blob.x - r, blob.y - r, r * 2, r * 2);
+            });
+            ctx.globalCompositeOperation = 'source-over';
+
+            thermalHeatAnimationId = requestAnimationFrame(drawThermalHeat);
+        }
+
+        function resizeThermalHeat() {
+            const canvas = document.getElementById('thermalHeat');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            thermalHeatCtx = ctx;
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            thermalHeatCtx.scale(dpr, dpr);
+            thermalBlobs = makeThermalBlobs(window.innerWidth, window.innerHeight);
+        }
+
+        function startThermalHeat() {
+            if (thermalHeatAnimationId) return;
+            resizeThermalHeat();
+            if (!thermalHeatCtx) return;
+            thermalHeatLastDraw = performance.now();
+            thermalHeatAnimationId = requestAnimationFrame(drawThermalHeat);
+        }
+
+        function stopThermalHeat() {
+            if (thermalHeatAnimationId) {
+                cancelAnimationFrame(thermalHeatAnimationId);
+                thermalHeatAnimationId = null;
+            }
+            const canvas = document.getElementById('thermalHeat');
+            if (canvas && thermalHeatCtx) {
+                thermalHeatCtx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        }
+
+        function updateThermalHeat() {
+            if (getCurrentTheme() === 'thermal') {
+                startThermalHeat();
+            } else {
+                stopThermalHeat();
+            }
+        }
+
+        // Command-center wall display for War Room - a faint plotting
+        // grid, and tracks drawn across it a stroke at a time: an arc from
+        // a launch point to a target, its head leading the line, a ring
+        // opening where it lands, a track number at its start - held, then
+        // faded out while the next ones are plotted. One in five is red.
+        let warRoomTracksCtx = null;
+        let warRoomTracksAnimationId = null;
+        let warRoomTracksLastDraw = 0;
+        let warRoomTracks = [];
+        let warRoomNextTrack = 0;
+        const WAR_ROOM_GRID_MINOR = 24;
+        const WAR_ROOM_GRID_MAJOR = 120;
+        const WAR_ROOM_MAX_TRACKS = 4;
+        const WAR_ROOM_DRAW_MS = 3000;
+        const WAR_ROOM_HOLD_MS = 3500;
+        const WAR_ROOM_FADE_MS = 1500;
+
+        function makeWarRoomTrack(width, height, now) {
+            const margin = 60;
+            const x1 = margin + Math.random() * Math.max(1, width - 2 * margin);
+            const y1 = 120 + Math.random() * Math.max(1, height - 220);
+            // the target sits well across the board from the launch point
+            const dir = x1 < width / 2 ? 1 : -1;
+            const span = width * (0.25 + Math.random() * 0.35);
+            const x2 = Math.min(width - margin, Math.max(margin, x1 + dir * span));
+            const y2 = 120 + Math.random() * Math.max(1, height - 220);
+            const lift = Math.max(60, Math.abs(x2 - x1) * (0.3 + Math.random() * 0.2));
+            const cx = (x1 + x2) / 2;
+            const cy = Math.max(30, Math.min(y1, y2) - lift);
+            const red = Math.random() < 0.2;
+            const label = 'TRK ' + String(Math.floor(Math.random() * 9000) + 1000);
+            return { x1, y1, cx, cy, x2, y2, red, label, start: now };
+        }
+
+        function drawWarRoomGrid(ctx, width, height) {
+            ctx.lineWidth = 1;
+            [[WAR_ROOM_GRID_MINOR, 'rgba(79, 209, 255, 0.05)'], [WAR_ROOM_GRID_MAJOR, 'rgba(79, 209, 255, 0.12)']].forEach(([step, color]) => {
+                ctx.strokeStyle = color;
+                ctx.beginPath();
+                for (let x = 0.5; x < width; x += step) {
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, height);
+                }
+                for (let y = 0.5; y < height; y += step) {
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(width, y);
+                }
+                ctx.stroke();
+            });
+        }
+
+        function warRoomPoint(track, t) {
+            const u = 1 - t;
+            return [u * u * track.x1 + 2 * u * t * track.cx + t * t * track.x2,
+                u * u * track.y1 + 2 * u * t * track.cy + t * t * track.y2];
+        }
+
+        function drawWarRoomTrack(ctx, track, timestamp) {
+            const age = timestamp - track.start;
+            const progress = Math.min(1, age / WAR_ROOM_DRAW_MS);
+            const fadeStart = WAR_ROOM_DRAW_MS + WAR_ROOM_HOLD_MS;
+            const alpha = age < fadeStart ? 1 : Math.max(0, 1 - (age - fadeStart) / WAR_ROOM_FADE_MS);
+            const rgb = track.red ? '255, 77, 77' : '79, 209, 255';
+            ctx.strokeStyle = `rgba(${rgb}, ${0.8 * alpha})`;
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.moveTo(track.x1, track.y1);
+            const steps = Math.max(1, Math.round(60 * progress));
+            for (let i = 1; i <= steps; i++) {
+                const [x, y] = warRoomPoint(track, (i / steps) * progress);
+                ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.fillStyle = `rgba(${rgb}, ${0.85 * alpha})`;
+            ctx.beginPath();
+            ctx.arc(track.x1, track.y1, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.font = '11px "Courier New", monospace';
+            ctx.fillText(track.label, track.x1 + 6, track.y1 + 14);
+            if (progress < 1) {
+                const [hx, hy] = warRoomPoint(track, progress);
+                ctx.fillStyle = `rgba(234, 247, 255, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(hx, hy, 2.5, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                // a ring opening at the target, then holding
+                const ring = Math.min(1, (age - WAR_ROOM_DRAW_MS) / 600);
+                ctx.strokeStyle = `rgba(${rgb}, ${0.8 * alpha})`;
+                ctx.beginPath();
+                ctx.arc(track.x2, track.y2, 4 + 10 * ring, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+
+        function drawWarRoomTracks(timestamp) {
+            const canvas = document.getElementById('warRoomTracks');
+            if (!canvas || getCurrentTheme() !== 'war-room') return;
+            if (!warRoomTracksCtx) resizeWarRoomTracks();
+            if (!warRoomTracksCtx) return;
+
+            const dt = timestamp - warRoomTracksLastDraw;
+            if (dt < 50) {
+                warRoomTracksAnimationId = requestAnimationFrame(drawWarRoomTracks);
+                return;
+            }
+            warRoomTracksLastDraw = timestamp;
+
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const lifetime = WAR_ROOM_DRAW_MS + WAR_ROOM_HOLD_MS + WAR_ROOM_FADE_MS;
+            warRoomTracks = warRoomTracks.filter(t => timestamp - t.start < lifetime);
+            if (timestamp >= warRoomNextTrack && warRoomTracks.length < WAR_ROOM_MAX_TRACKS) {
+                warRoomTracks.push(makeWarRoomTrack(width, height, timestamp));
+                warRoomNextTrack = timestamp + 2000 + Math.random() * 1500;
+            }
+
+            const ctx = warRoomTracksCtx;
+            ctx.clearRect(0, 0, width, height);
+            drawWarRoomGrid(ctx, width, height);
+            warRoomTracks.forEach(t => drawWarRoomTrack(ctx, t, timestamp));
+
+            warRoomTracksAnimationId = requestAnimationFrame(drawWarRoomTracks);
+        }
+
+        function resizeWarRoomTracks() {
+            const canvas = document.getElementById('warRoomTracks');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            warRoomTracksCtx = ctx;
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            warRoomTracksCtx.scale(dpr, dpr);
+            // tracks plotted for the old size could now run off the board
+            warRoomTracks = [];
+        }
+
+        function startWarRoomTracks() {
+            if (warRoomTracksAnimationId) return;
+            resizeWarRoomTracks();
+            if (!warRoomTracksCtx) return;
+            warRoomTracksLastDraw = performance.now();
+            warRoomNextTrack = warRoomTracksLastDraw;
+            warRoomTracksAnimationId = requestAnimationFrame(drawWarRoomTracks);
+        }
+
+        function stopWarRoomTracks() {
+            if (warRoomTracksAnimationId) {
+                cancelAnimationFrame(warRoomTracksAnimationId);
+                warRoomTracksAnimationId = null;
+            }
+            const canvas = document.getElementById('warRoomTracks');
+            if (canvas && warRoomTracksCtx) {
+                warRoomTracksCtx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        }
+
+        function updateWarRoomTracks() {
+            if (getCurrentTheme() === 'war-room') {
+                startWarRoomTracks();
+            } else {
+                stopWarRoomTracks();
+            }
+        }
+
         function updateFavicon() {
             const link = document.getElementById('faviconLink');
             if (!link) return;
@@ -1864,9 +2168,9 @@
         // below need to reach every effect too. Adding a new ambient
         // theme now only means adding one entry to each of these three
         // arrays, rather than a new call in 4+ separate places.
-        const AMBIENT_THEME_RESIZERS = [resizeCodeRain, resizeBlockRain, resizeVaporwaveGrid, resizeDosDefrag, resizeCgaStarfield, resizeBreadbinSprites, resizeDigitalFrontier, resizeLunaBliss, resizeAmberBootLog, resizeMp3Visualizer];
-        const AMBIENT_THEME_UPDATERS = [updateCodeRain, updateBlockRain, updateVaporwaveGrid, updateDosDefrag, updateCgaStarfield, updateBreadbinSprites, updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, updateMp3Visualizer];
-        const AMBIENT_THEME_STOPPERS = [stopCodeRain, stopBlockRain, stopVaporwaveGrid, stopDosDefrag, stopCgaStarfield, stopBreadbinSprites, stopDigitalFrontier, stopLunaBliss, stopAmberBootLog, stopMp3Visualizer];
+        const AMBIENT_THEME_RESIZERS = [resizeCodeRain, resizeBlockRain, resizeVaporwaveGrid, resizeDosDefrag, resizeCgaStarfield, resizeBreadbinSprites, resizeDigitalFrontier, resizeLunaBliss, resizeAmberBootLog, resizeMp3Visualizer, resizeThermalHeat, resizeWarRoomTracks];
+        const AMBIENT_THEME_UPDATERS = [updateCodeRain, updateBlockRain, updateVaporwaveGrid, updateDosDefrag, updateCgaStarfield, updateBreadbinSprites, updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, updateMp3Visualizer, updateThermalHeat, updateWarRoomTracks];
+        const AMBIENT_THEME_STOPPERS = [stopCodeRain, stopBlockRain, stopVaporwaveGrid, stopDosDefrag, stopCgaStarfield, stopBreadbinSprites, stopDigitalFrontier, stopLunaBliss, stopAmberBootLog, stopMp3Visualizer, stopThermalHeat, stopWarRoomTracks];
 
         function updateAllAmbientThemes() {
             AMBIENT_THEME_UPDATERS.forEach(fn => fn());
@@ -1930,7 +2234,7 @@
                     themePreviewFrameReady = true;
                     previewTheme(menuBaseTheme);
                 }, { once: true });
-                frame.srcdoc = THEME_PREVIEW_SRCDOC;
+                frame.srcdoc = themePreviewSrcdoc();
             } else {
                 previewTheme(menuBaseTheme);
             }
@@ -2156,9 +2460,31 @@
                 s7comm: '#00897b',
                 ssdp: '#7e57c2',
                 telnet: '#ffa726',
+                rsh: '#ff8a65',
+                openvpn: '#5c6bc0',
+                wireguard: '#e57373',
                 iec104: '#ef5350',
                 bacnet: '#ab47bc',
                 opcua: '#29b6f6',
+                mms: '#5c6bc0',
+                pn_dcp: '#26c6da',
+                mongodb: '#66bb6a',
+                tns: '#ef6c00',
+                memcache: '#26a69a',
+                fins: '#29b6f6',
+                hart_ip: '#9ccc65',
+                raknet: '#8d6e63',
+                tacacs: '#5c6bc0',
+                synphasor: '#ffca28',
+                ecat: '#ec407a',
+                mysql: '#4fc3f7',
+                mysql_statement: '#ffb74d',
+                mssql: '#ef5350',
+                mssql_statement: '#ff8a65',
+                redis: '#e53935',
+                redis_command: '#ff7043',
+                zabbix: '#d32f2f',
+                irc: '#ab47bc',
                 goose: '#d4e157',
                 browser: '#78909c',
                 lldp: '#26a69a',
@@ -2179,6 +2505,12 @@
                 tunnel: '#8d6e63',
                 xdmcp: '#78909c',
                 opcua_action: '#ff7043',
+                mms_action: '#ef5350',
+                pn_device: '#9ccc65',
+                mongodb_action: '#ff7043',
+                tns_statement: '#ffb74d',
+                fins_action: '#ef5350',
+                hart_ip_action: '#ff7043',
                 bacnet_property: '#5c6bc0',
                 bacnet_device: '#8d6e63',
                 iec104_point: '#26a69a',
@@ -4385,6 +4717,509 @@
             return html;
         }
 
+        // tshark's MMS records (shark_protocols.MMS): a connection's
+        // association, and a change (write, control, program, domain...).
+        function renderMmsDetails(e) {
+            const m = e.mms || {};
+            let html = htmlSection('MMS Details', COLORS.EVENT.mms);
+            html += htmlRowText('Initiate', m.initiate);
+            html += htmlRowText('Vendor', m.vendor);
+            html += htmlRowText('Model', m.model);
+            html += htmlRowText('Revision', m.revision);
+            html += htmlRowText('Domains', (m.domains || []).join(', '), 'mono');
+            html += htmlRowText('Services', Object.entries(m.services || {}).map(([s, n]) => `${s} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Reports', Object.entries(m.reports || {}).map(([s, n]) => `${s} ${n.toLocaleString()}`).join(', '));
+            if (m.errors) html += htmlRowText('Errors', `${m.errors.toLocaleString()} (last: ${m.last_error || ''})`);
+            if (m.concluded) html += htmlRowText('Concluded', 'yes');
+            return html;
+        }
+
+        function renderMmsActionDetails(e) {
+            const a = e.mms_action || {};
+            let html = htmlSection('MMS Action Details', COLORS.EVENT.mms_action);
+            html += htmlRowText('Service', a.service);
+            html += htmlRowText('Control', a.control);
+            html += htmlRowText('Object', a.object, 'mono');
+            html += htmlRowText('Value', a.value !== undefined ? String(a.value) : '', 'mono');
+            html += htmlRowText('Result', a.result);
+            return html;
+        }
+
+        // tshark's PROFINET DCP records (shark_protocols.PNDCP): an action
+        // (an Identify query, a Set or Get), and a device describing itself.
+        function renderPnDcpDetails(e) {
+            const d = e.pn_dcp || {};
+            let html = htmlSection('PROFINET DCP Details', COLORS.EVENT.pn_dcp);
+            html += htmlRowText('Service', d.service);
+            html += htmlRowText('Query', d.query);
+            if (d.count !== undefined) html += htmlRowText('Count', d.count.toLocaleString());
+            if (d.responses !== undefined) html += htmlRowText('Responses', d.responses.toLocaleString());
+            html += htmlRowText('Changes', (d.changes || []).join(', '));
+            html += htmlRowText('Station Name', d.station_name, 'mono');
+            html += htmlRowText('IP', d.ip);
+            html += htmlRowText('Subnet Mask', d.subnet_mask);
+            html += htmlRowText('Gateway', d.gateway);
+            if (d.permanent !== undefined) html += htmlRowText('Permanent', d.permanent ? 'yes' : 'no (until restart)');
+            html += htmlRowText('Result', d.result);
+            return html;
+        }
+
+        function renderPnDeviceDetails(e) {
+            const d = e.pn_device || {};
+            let html = htmlSection('PROFINET Device Details', COLORS.EVENT.pn_device);
+            html += htmlRowText('Station Name', d.station_name, 'mono');
+            html += htmlRowText('Device Type', d.device_type);
+            html += htmlRowText('Alias', d.alias, 'mono');
+            html += htmlRowText('Vendor ID', d.vendor_id);
+            html += htmlRowText('Device ID', d.device_id);
+            html += htmlRowText('Role', d.role);
+            html += htmlRowText('MAC', d.mac, 'mono');
+            html += htmlRowText('IP', d.ip);
+            html += htmlRowText('Subnet Mask', d.subnet_mask);
+            html += htmlRowText('Gateway', d.gateway);
+            html += htmlRowText('Count', d.count !== undefined ? d.count.toLocaleString() : '');
+            html += htmlRowText('Last Seen', (d.last_seen || '').slice(0, 23).replace('T', ' '));
+            return html;
+        }
+
+        // tshark's MongoDB records (shark_protocols.MongoDB): a connection,
+        // and a change (insert, drop, a user created...).
+        function renderMongodbDetails(e) {
+            const m = e.mongodb || {};
+            let html = htmlSection('MongoDB Details', COLORS.EVENT.mongodb);
+            html += htmlRowText('Driver', m.driver);
+            html += htmlRowText('Application', m.application);
+            html += htmlRowText('OS', m.os);
+            html += htmlRowText('Platform', m.platform);
+            html += htmlRowText('User', m.user);
+            html += htmlRowText('Mechanism', m.auth_mechanism);
+            html += htmlRowText('Auth Database', m.auth_database);
+            html += htmlRowText('Login', m.login);
+            if (m.unauthenticated) html += htmlRowText('Unauthenticated', 'commands answered without a login');
+            html += htmlRowText('Commands', Object.entries(m.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Databases', (m.databases || []).join(', '), 'mono');
+            html += htmlRowText('Server Version', m.server_version);
+            html += htmlRowText('Databases Listed', (m.databases_listed || []).join(', '), 'mono');
+            html += htmlRowText('Answered', m.answered ? 'yes' : 'no');
+            if (m.compressed) html += htmlRowText('Compressed', `${m.compressed.toLocaleString()} messages`);
+            if (m.errors) html += htmlRowText('Errors', `${m.errors.toLocaleString()} (last: ${m.last_error || ''})`);
+            return html;
+        }
+
+        function renderMongodbActionDetails(e) {
+            const a = e.mongodb_action || {};
+            let html = htmlSection('MongoDB Action Details', COLORS.EVENT.mongodb_action);
+            html += htmlRowText('Command', a.command);
+            html += htmlRowText('Database', a.database, 'mono');
+            html += htmlRowText('Collection', a.collection, 'mono');
+            html += htmlRowText('User', a.user);
+            html += htmlRowText('Role', a.role);
+            if (a.roles) html += htmlRowText('Roles', a.roles.join('; '));
+            html += htmlRowText('Count', a.count !== undefined ? a.count.toLocaleString() : '');
+            html += htmlRowText('Document', a.document, 'mono');
+            html += htmlRowText('Filter', a.filter, 'mono');
+            html += htmlRowText('Result', a.result);
+            if (a.n !== undefined) html += htmlRowText('Affected', String(a.n));
+            return html;
+        }
+
+        // tshark's Omron FINS records (shark_protocols.FINS): a connection,
+        // and each command that changes or controls the PLC.
+        function renderFinsDetails(e) {
+            const f = e.fins || {};
+            let html = htmlSection('Omron FINS Details', COLORS.EVENT.fins);
+            html += htmlRowText('Model', f.model);
+            html += htmlRowText('Version', f.version);
+            html += htmlRowText('Node', f.node !== undefined ? String(f.node) : '');
+            html += htmlRowText('Source Node', f.source_node !== undefined ? String(f.source_node) : '');
+            if (f.client_node !== undefined) html += htmlRowText('FINS/TCP Nodes', `client ${f.client_node}, server ${f.server_node ?? ''}`);
+            html += htmlRowText('Commands', Object.entries(f.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Answered', f.answered ? 'yes' : 'no');
+            html += htmlRowText('Errors', Object.entries(f.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            return html;
+        }
+
+        function renderFinsActionDetails(e) {
+            const a = e.fins_action || {};
+            let html = htmlSection('Omron FINS Action Details', COLORS.EVENT.fins_action);
+            html += htmlRowText('Command', a.code ? `${a.command} (${a.code})` : a.command);
+            html += htmlRowText('Area', a.area);
+            html += htmlRowText('Address', a.address, 'mono');
+            html += htmlRowText('Count', a.count !== undefined ? a.count.toLocaleString() : '');
+            html += htmlRowText('Mode', a.mode);
+            html += htmlRowText('Program', a.program, 'mono');
+            html += htmlRowText('Password', a.password, 'mono');
+            html += htmlRowText('Data', a.data, 'mono');
+            html += htmlRowText('Node', a.node !== undefined ? String(a.node) : '');
+            html += htmlRowText('Result', a.result);
+            return html;
+        }
+
+        // tshark's HART-IP records (shark_protocols.HARTIP): a session, and
+        // each command that changes or commands a field device.
+        function renderHartIpDetails(e) {
+            const h = e.hart_ip || {};
+            let html = htmlSection('HART-IP Details', COLORS.EVENT.hart_ip);
+            html += htmlRowText('Host Type', h.host_type);
+            html += htmlRowText('Session', h.moved_to_port ? `${h.session || ''} (continued on port ${h.moved_to_port})` : h.session);
+            html += htmlRowText('Commands', Object.entries(h.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Answered', h.answered ? 'yes' : 'no');
+            html += htmlRowText('Errors', Object.entries(h.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            for (const d of h.devices || []) {
+                const parts = [d.tag && `tag ${d.tag}`, d.manufacturer_id !== undefined && `manufacturer ${d.manufacturer_id}`,
+                               d.device_type && `type ${d.device_type}`, d.device_id && `ID ${d.device_id}`,
+                               d.device_revision !== undefined && `revision ${d.device_revision}`,
+                               d.pv !== undefined && `PV ${d.pv}`, d.loop_current !== undefined && `loop ${d.loop_current} mA`,
+                               d.descriptor && `descriptor ${d.descriptor}`, d.message && `message ${d.message}`].filter(Boolean);
+                html += htmlRowText(`Device ${d.address}`, parts.join(', '), 'mono');
+            }
+            return html;
+        }
+
+        function renderHartIpActionDetails(e) {
+            const a = e.hart_ip_action || {};
+            let html = htmlSection('HART-IP Action Details', COLORS.EVENT.hart_ip_action);
+            html += htmlRowText('Command', a.number !== undefined ? `${a.command} (${a.number})` : a.command);
+            html += htmlRowText('Device', a.device, 'mono');
+            html += htmlRowText('Data', a.data, 'mono');
+            html += htmlRowText('Result', a.result);
+            return html;
+        }
+
+        // tshark's MySQL records (shark_protocols.MySQL): a connection, and each
+        // distinct statement on it.
+        function renderMysqlDetails(e) {
+            const m = e.mysql || {};
+            let html = htmlSection('MySQL Details', COLORS.EVENT.mysql);
+            html += htmlRowText('Server Version', m.server_version);
+            html += htmlRowText('SSL', m.ssl ? 'yes - the login and everything after it are encrypted' : '');
+            html += htmlRowText('User', m.user);
+            html += htmlRowText('Database', m.database);
+            html += htmlRowText('Password Sent', m.password_sent === undefined ? '' : (m.password_sent ? 'yes' : 'no - an empty password'));
+            html += htmlRowText('Auth Plugin', m.auth_plugin);
+            html += htmlRowText('Client', m.client);
+            html += htmlRowText('Client OS', m.client_os);
+            html += htmlRowText('Login', m.login);
+            html += htmlRowText('Login Error', m.login_error);
+            html += htmlRowText('Commands', Object.entries(m.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Statements', m.statements ? m.statements.toLocaleString() + (m.statements_not_kept ? ` (${m.statements_not_kept.toLocaleString()} past the ones kept)` : '') : '');
+            html += htmlRowText('Errors', Object.entries(m.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            return html;
+        }
+
+        function renderMysqlStatementDetails(e) {
+            const st = e.mysql_statement || {};
+            let html = htmlSection('MySQL Statement Details', COLORS.EVENT.mysql_statement);
+            html += htmlRowText('Verb', st.verb);
+            html += htmlRow('Statement', escapeHtml(st.statement || ''), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Result', st.result);
+            html += htmlRowText('Rows Affected', st.rows_affected !== undefined ? st.rows_affected.toLocaleString() : '');
+            html += htmlRowText('Count', st.count !== undefined ? st.count.toLocaleString() : '');
+            html += htmlRowText('Password', st.password, 'mono');
+            html += htmlRowText('User', st.user);
+            html += htmlRowText('Database', st.database);
+            return html;
+        }
+
+        // tshark's Redis records (shark_protocols.Redis): a connection, and
+        // each distinct admin command on it.
+        function renderRedisDetails(e) {
+            const r = e.redis || {};
+            let html = htmlSection('Redis Details', COLORS.EVENT.redis);
+            html += htmlRowText('Server', r.server);
+            html += htmlRowText('Server Version', r.server_version);
+            html += htmlRowText('Server OS', r.server_os);
+            html += htmlRowText('Role', r.role);
+            html += htmlRowText('Auth', { none: 'none - commands answered with no password', required: 'required - none given', failed: 'failed', succeeded: 'succeeded' }[r.auth] || r.auth);
+            html += htmlRowText('User', r.user);
+            html += htmlRowText('Password', r.password, 'mono');
+            if (r.login_failures) html += htmlRowText('Login Failures', r.login_failures.toLocaleString());
+            html += htmlRowText('Client', r.client);
+            html += htmlRowText('Client Name', r.client_name);
+            html += htmlRowText('Commands', Object.entries(r.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            if (r.commands_not_kept) html += htmlRowText('Commands Not Kept', r.commands_not_kept.toLocaleString());
+            html += htmlRowText('Keys', (r.keys || []).join(', '), 'mono');
+            if (r.changes) html += htmlRowText('Changes', r.changes.toLocaleString());
+            html += htmlRowText('Inline', r.inline ? 'yes - plain-text commands, as netcat or telnet send' : '');
+            html += htmlRowText('Answered', r.answered ? 'yes' : 'no');
+            html += htmlRowText('Errors', Object.entries(r.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Last Error', r.last_error);
+            return html;
+        }
+
+        function renderRedisCommandDetails(e) {
+            const c = e.redis_command || {};
+            let html = htmlSection('Redis Command Details', COLORS.EVENT.redis_command);
+            html += htmlRowText('Command', c.name);
+            html += htmlRow('Full Command', escapeHtml(c.command || ''), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Result', c.result);
+            html += htmlRowText('Settings', (c.settings || []).join(', '));
+            html += htmlRowText('Master', c.master, 'mono');
+            html += htmlRowText('Module', c.module, 'mono');
+            html += htmlRowText('Password', c.password, 'mono');
+            html += htmlRowText('Count', c.count !== undefined ? c.count.toLocaleString() : '');
+            html += htmlRowText('User', c.user);
+            return html;
+        }
+
+        // tshark's Zabbix records (shark_protocols.Zabbix): one per client,
+        // server and request kind, its connections counted.
+        function renderZabbixDetails(e) {
+            const z = e.zabbix || {};
+            let html = htmlSection('Zabbix Details', COLORS.EVENT.zabbix);
+            html += htmlRowText('Request', z.request);
+            html += htmlRowText('Host', z.host);
+            html += htmlRowText('Version', z.version);
+            html += htmlRowText('Connections', z.connections !== undefined ? z.connections.toLocaleString() : '');
+            html += htmlRowText('Answered', z.answered ? 'yes' : 'no');
+            html += htmlRowText('Responses', Object.entries(z.responses || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Item Keys', (z.keys || []).join(', '), 'mono');
+            for (const c of z.commands || []) {
+                const via = { 'system.run': 'system.run item, asked for', item: 'system.run item, configured', 'remote command': 'remote command', script: 'script' }[c.via] || c.via;
+                html += htmlRow(`Command (${escapeHtml(via)})`, `${escapeHtml(c.command || '')}\n→ ${escapeHtml(c.result || '')}`, 'mono', 'white-space: pre-wrap');
+            }
+            if (z.command_results) html += htmlRowText('Command Results Sent', z.command_results.toLocaleString());
+            html += htmlRowText('Credentials Sent', Object.entries(z.credentials || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            if (z.not_supported) html += htmlRowText('Not Supported', z.not_supported.toLocaleString());
+            html += htmlRowText('Errors', (z.errors || []).join('; '));
+            html += htmlRowText('Redirect', z.redirect, 'mono');
+            return html;
+        }
+
+        // tshark's IRC records (shark_protocols.IRC): one per connection.
+        function renderIrcDetails(e) {
+            const r = e.irc || {};
+            let html = htmlSection('IRC Details', COLORS.EVENT.irc);
+            html += htmlRowText('Nick', r.nick);
+            if ((r.nicks || []).length > 1) html += htmlRowText('Nicks Tried', (r.nicks || []).join(', '));
+            html += htmlRowText('Bot-Like Nick', r.bot_like_nick ? 'yes - a country or OS code and a number, as bots name themselves' : '');
+            html += htmlRowText('User', r.user);
+            html += htmlRowText('Real Name', r.realname);
+            html += htmlRowText('Login', r.login);
+            html += htmlRowText('Server', r.server);
+            html += htmlRowText('Network', r.network);
+            html += htmlRowText('Server Version', r.server_version);
+            html += htmlRowText('Server Password', r.password, 'mono');
+            html += htmlRowText('Channels', (r.channels || []).join(', '));
+            html += htmlRowText('Channel Keys', Object.entries(r.channel_keys || {}).map(([c, k]) => `${c} ${k}`).join(', '), 'mono');
+            for (const [c, t] of Object.entries(r.topics || {})) html += htmlRowText(`Topic ${c}`, t, 'mono');
+            if ((r.bot_commands || []).length) html += htmlRow('Bot Commands', escapeHtml(r.bot_commands.join('\n')), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Messages', `${(r.messages_sent || 0).toLocaleString()} sent, ${(r.messages_received || 0).toLocaleString()} received`);
+            if ((r.messages || []).length) {
+                const lines = r.messages.map(m => `${m.direction === 'sent' ? '→' : '←'} <${m.from}> ${m.to}: ${m.text}`);
+                html += htmlRow('Message Log', escapeHtml(lines.join('\n')), 'mono', 'white-space: pre-wrap');
+            }
+            html += htmlRowText('CTCP', (r.ctcp || []).join('; '));
+            for (const d of r.dcc || []) html += htmlRowText('DCC SEND', `${d.file} (${d.size !== undefined ? d.size.toLocaleString() + ' bytes, ' : ''}${d.address}) from ${d.from} to ${d.to}`, 'mono');
+            if (r.oper) html += htmlRowText('Operator Login', `${r.oper.name} / ${r.oper.password}${r.oper.result ? ' - ' + r.oper.result : ''}`, 'mono');
+            html += htmlRowText('NickServ Password', r.services_password, 'mono');
+            html += htmlRowText('Commands', Object.entries(r.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Errors', Object.entries(r.errors || {}).map(([c, t]) => `${c} ${t}`).join('; '));
+            html += htmlRowText('Quit', r.quit);
+            html += htmlRowText('Closed', r.closed);
+            return html;
+        }
+
+        // tshark's SQL Server records (shark_protocols.TDS): a connection, and
+        // each distinct statement on it.
+        function renderMssqlDetails(e) {
+            const m = e.mssql || {};
+            let html = htmlSection('SQL Server Details', COLORS.EVENT.mssql);
+            html += htmlRowText('Product', m.product);
+            html += htmlRowText('Server Version', m.server_version);
+            html += htmlRowText('Encryption', m.encryption === 'none' ? 'none - the login and its password in the clear' : m.encryption);
+            html += htmlRowText('Client Encryption', m.client_encryption);
+            html += htmlRowText('Server Encryption', m.server_encryption);
+            html += htmlRowText('User', m.user);
+            html += htmlRowText('Password', m.password, 'mono');
+            html += htmlRowText('Database', m.database);
+            html += htmlRowText('Application', m.application);
+            html += htmlRowText('Client Host', m.client_host);
+            html += htmlRowText('Library', m.library);
+            html += htmlRowText('Server Name', m.server_name);
+            html += htmlRowText('Login', m.login);
+            html += htmlRowText('Login Error', m.login_error);
+            html += htmlRowText('Statements', m.statements ? m.statements.toLocaleString() + (m.statements_not_kept ? ` (${m.statements_not_kept.toLocaleString()} past the ones kept)` : '') : '');
+            html += htmlRowText('Errors', Object.entries(m.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            return html;
+        }
+
+        function renderMssqlStatementDetails(e) {
+            const st = e.mssql_statement || {};
+            let html = htmlSection('SQL Server Statement Details', COLORS.EVENT.mssql_statement);
+            html += htmlRowText('Verb', st.verb);
+            html += htmlRow('Statement', escapeHtml(st.statement || ''), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Procedure', st.procedure);
+            html += htmlRowText('Result', st.result);
+            html += htmlRowText('Rows', st.rows !== undefined ? st.rows.toLocaleString() : '');
+            html += htmlRowText('Count', st.count !== undefined ? st.count.toLocaleString() : '');
+            html += htmlRowText('Password', st.password, 'mono');
+            html += htmlRowText('User', st.user);
+            html += htmlRowText('Database', st.database);
+            return html;
+        }
+
+        // tshark's EtherCAT records (shark_protocols.ECAT): one per master.
+        function renderEcatDetails(e) {
+            const c = e.ecat || {};
+            const counts = o => Object.entries(o || {}).map(([k, n]) => `${k} ${n.toLocaleString()}`).join(', ');
+            let html = htmlSection('EtherCAT Details', COLORS.EVENT.ecat);
+            html += htmlRowText('Commands', counts(c.commands));
+            html += htmlRowText('Slaves', c.slaves !== undefined ? String(c.slaves) : '');
+            html += htmlRowText('Answered', c.answered ? 'yes' : 'no');
+            html += htmlRowText('State Requests', counts(c.state_requests) + (c.broadcast_state_change ? ' (to every slave at once)' : ''));
+            if (c.eeprom_writes) html += htmlRowText('EEPROM Writes', c.eeprom_writes.toLocaleString());
+            html += htmlRowText('Mailbox', counts(c.mailbox));
+            html += htmlRowText('FoE', (c.foe || []).join(', '), 'mono');
+            html += htmlRowText('SDO Objects', (c.sdo_objects || []).join(', '), 'mono');
+            return html;
+        }
+
+        // tshark's C37.118 synchrophasor records (shark_protocols.Synphasor):
+        // one per stream.
+        function renderSynphasorDetails(e) {
+            const c = e.synphasor || {};
+            let html = htmlSection('C37.118 Details', COLORS.EVENT.synphasor);
+            html += htmlRowText('Stream ID', c.stream_id !== undefined ? String(c.stream_id) : '');
+            html += htmlRowText('Commands', Object.entries(c.commands || {}).map(([k, n]) => `${k} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Data', c.data_on === undefined ? '' : (c.data_on ? 'on' : 'turned off'));
+            html += htmlRowText('Frames', Object.entries(c.frames || {}).map(([k, n]) => `${k} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Data Rate', c.data_rate);
+            html += htmlRowText('Header', c.header);
+            for (const p of c.pmus || []) {
+                const parts = [p.id !== undefined && `ID ${p.id}`, p.nominal_frequency && `${p.nominal_frequency} Hz`,
+                               (p.phasors || []).length && `phasors ${p.phasors.join(', ')}`,
+                               (p.analogs || []).length && `analogs ${p.analogs.join(', ')}`,
+                               (p.digitals || []).length && `digitals ${p.digitals.join(', ')}`].filter(Boolean);
+                html += htmlRowText(`PMU ${p.station || ''}`, parts.join('; '));
+            }
+            if (c.not_synced) html += htmlRowText('Not Synced', `${c.not_synced.toLocaleString()} data frames (PMU lost its time source)`);
+            if (c.triggered) html += htmlRowText('Triggered', `${c.triggered.toLocaleString()} data frames`);
+            if (c.config_changed) html += htmlRowText('Configuration Changed', `${c.config_changed.toLocaleString()} data frames`);
+            if (c.data_modified) html += htmlRowText('Data Modified', `${c.data_modified.toLocaleString()} data frames`);
+            return html;
+        }
+
+        // tshark's TACACS+ records (shark_protocols.TACACS): one per session -
+        // an authentication, authorization or accounting exchange.
+        function renderTacacsDetails(e) {
+            const t = e.tacacs || {};
+            let html = htmlSection('TACACS+ Details', COLORS.EVENT.tacacs);
+            html += htmlRowText('Type', t.type);
+            html += htmlRowText('Encrypted', t.encrypted ? 'yes' : 'no - the body is in the clear');
+            html += htmlRowText('Action', t.action);
+            html += htmlRowText('User', t.user);
+            html += htmlRowText('Password', t.password, 'mono');
+            html += htmlRowText('Line', t.port);
+            html += htmlRowText('Remote Address', t.remote_address);
+            html += htmlRowText('Authentication', t.authentication);
+            html += htmlRowText('Service', t.service);
+            html += htmlRowText('Privilege', t.privilege !== undefined ? String(t.privilege) : '');
+            html += htmlRowText('Command', t.command, 'mono');
+            html += htmlRowText('Command Secret', t.command_secret, 'mono');
+            html += htmlRowText('Record', t.record);
+            html += htmlRowText('Arguments', (t.args || []).join(' '), 'mono');
+            html += htmlRowText('Result', t.result);
+            html += htmlRowText('Server Message', t.server_message);
+            html += htmlRowText('Reply Arguments', (t.reply_args || []).join(' '), 'mono');
+            html += htmlRowText('Packets', t.packets !== undefined ? String(t.packets) : '');
+            html += htmlRowText('Answered', t.answered ? 'yes' : 'no');
+            return html;
+        }
+
+        // tshark's RakNet records (shark_protocols.RakNet): one per flow.
+        function renderRaknetDetails(e) {
+            const r = e.raknet || {};
+            let html = htmlSection('RakNet Details', COLORS.EVENT.raknet);
+            html += htmlRowText('Messages', Object.entries(r.messages || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Answered', r.answered ? 'yes' : 'no');
+            html += htmlRowText('Connected', r.connected ? 'yes' : '');
+            html += htmlRowText('Edition', r.edition);
+            html += htmlRowText('MOTD', r.motd);
+            html += htmlRowText('Level', r.level);
+            html += htmlRowText('Game Mode', r.gamemode);
+            html += htmlRowText('Game Version', r.game_version);
+            html += htmlRowText('Game Protocol', r.protocol !== undefined ? String(r.protocol) : '');
+            html += htmlRowText('Players', r.players !== undefined ? `${r.players} of ${r.max_players ?? '?'}` : '');
+            html += htmlRowText('Advertisement', r.advertisement, 'mono');
+            html += htmlRowText('RakNet Protocol', r.protocol_version !== undefined ? String(r.protocol_version) : '');
+            html += htmlRowText('MTU', r.mtu !== undefined ? String(r.mtu) : '');
+            html += htmlRowText('Client GUID', r.client_guid, 'mono');
+            html += htmlRowText('Server GUID', r.server_guid, 'mono');
+            if (r.datagrams_to_server || r.datagrams_to_client) html += htmlRowText('Datagrams', `${(r.datagrams_to_server || 0).toLocaleString()} to server, ${(r.datagrams_to_client || 0).toLocaleString()} to client`);
+            return html;
+        }
+
+        // tshark's memcached records (shark_protocols.Memcache): one per
+        // connection or UDP exchange.
+        function renderMemcacheDetails(e) {
+            const m = e.memcache || {};
+            let html = htmlSection('memcached Details', COLORS.EVENT.memcache);
+            html += htmlRowText('Commands', Object.entries(m.commands || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            html += htmlRowText('Keys', (m.keys || []).join(', '), 'mono');
+            html += htmlRowText('Stats Asked', (m.stats || []).join(', '));
+            html += htmlRowText('Encoding', m.encoding);
+            html += htmlRowText('Server Version', m.version);
+            html += htmlRowText('Answered', m.answered ? 'yes' : 'no');
+            html += htmlRowText('Login', m.login);
+            if (m.changes) html += htmlRowText('Changes', m.changes.toLocaleString());
+            if (m.not_found) html += htmlRowText('Not Found', m.not_found.toLocaleString());
+            if (m.errors) html += htmlRowText('Errors', `${m.errors.toLocaleString()} (last: ${m.last_error || ''})`);
+            if (m.unknown) html += htmlRowText('Unrecognized', `${m.unknown.toLocaleString()} lines`);
+            html += htmlRowText('Request Bytes', (m.request_bytes || 0).toLocaleString());
+            html += htmlRowText('Response Bytes', (m.response_bytes || 0).toLocaleString());
+            if (m.amplification !== undefined) html += htmlRowText('Amplification', `${m.amplification.toLocaleString()}× (UDP)`);
+            return html;
+        }
+
+        // tshark's Oracle TNS records (shark_protocols.TNS): a connection,
+        // and each distinct SQL statement on it.
+        function renderTnsDetails(e) {
+            const t = e.tns || {};
+            let html = htmlSection('Oracle TNS Details', COLORS.EVENT.tns);
+            html += htmlRowText('Service Name', t.service_name, 'mono');
+            html += htmlRowText('SID', t.sid, 'mono');
+            html += htmlRowText('Listener Command', t.command);
+            html += htmlRowText('Result', t.result);
+            html += htmlRowText('Error', t.error);
+            html += htmlRowText('Redirect', t.redirect, 'mono');
+            html += htmlRowText('Response', t.response, 'mono');
+            html += htmlRowText('Listener Version', t.listener_version);
+            html += htmlRowText('TNS Version', t.version !== undefined ? String(t.version) : '');
+            html += htmlRowText('Client Program', t.client_program, 'mono');
+            html += htmlRowText('Client Host', t.client_host);
+            html += htmlRowText('Client OS User', t.client_user);
+            html += htmlRowText('Client Platform', t.client_platform);
+            html += htmlRowText('DB User', t.db_user);
+            html += htmlRowText('Login', t.login);
+            html += htmlRowText('Login Error', t.login_error);
+            html += htmlRowText('OS User', t.os_user);
+            html += htmlRowText('Terminal', t.terminal);
+            html += htmlRowText('Program', t.program, 'mono');
+            html += htmlRowText('Machine', t.machine);
+            html += htmlRowText('PID', t.pid);
+            html += htmlRowText('Database', t.database);
+            html += htmlRowText('Instance', t.instance);
+            html += htmlRowText('Server Host', t.server_host);
+            html += htmlRowText('Banner', t.banner);
+            html += htmlRowText('Statements', t.statements ? t.statements.toLocaleString() + (t.statements_not_kept ? ` (${t.statements_not_kept.toLocaleString()} past the ones kept)` : '') : '');
+            html += htmlRowText('Errors', Object.entries(t.errors || {}).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(', '));
+            return html;
+        }
+
+        function renderTnsStatementDetails(e) {
+            const st = e.tns_statement || {};
+            let html = htmlSection('Oracle SQL Details', COLORS.EVENT.tns_statement);
+            html += htmlRowText('Verb', st.verb);
+            html += htmlRow('Statement', escapeHtml(st.statement || ''), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Result', st.result);
+            html += htmlRowText('Count', st.count !== undefined ? st.count.toLocaleString() : '');
+            html += htmlRowText('Password', st.password, 'mono');
+            html += htmlRowText('DB User', st.db_user);
+            html += htmlRowText('Service', st.service_name || st.sid, 'mono');
+            return html;
+        }
+
         // tshark's BACnet records (shark_protocols.BACnet): an action with
         // its reply, a read/notification summary, a device.
         function renderBacnetDetails(e) {
@@ -4473,6 +5308,73 @@
             html += htmlRowText('Earlier Failed Logins', t.earlier_failures ? String(t.earlier_failures) : '');
             // the lines typed after logging in, one per line
             if ((t.commands || []).length) html += htmlRow('Commands', escapeHtml(t.commands.join('\n')), 'mono', 'white-space: pre-wrap');
+            return html;
+        }
+
+        // tshark's rsh, rlogin and rexec records (shark_protocols.RShell):
+        // one per connection - a session, or a probe and its answer.
+        function renderRshDetails(e) {
+            const r = e.rsh || {};
+            let html = htmlSection('Remote Shell Details', COLORS.EVENT.rsh);
+            html += htmlRowText('Service', r.service);
+            html += htmlRowText('Local User', r.local_user, 'mono');
+            html += htmlRowText('User', r.user, 'mono');
+            html += htmlRowText('Password', r.password, 'mono');
+            html += htmlRowText('Command', r.command, 'mono');
+            html += htmlRowText('Terminal', r.terminal);
+            html += htmlRowText('Error Port', r.stderr_port !== undefined ? String(r.stderr_port) : '');
+            html += htmlRowText('Result', r.result);
+            html += htmlRowText('Error', r.error);
+            html += htmlRowText('Login', r.login);
+            html += htmlRowText('Earlier Failed Logins', r.earlier_failures ? String(r.earlier_failures) : '');
+            html += htmlRowText('Output', r.output, 'mono');
+            // the lines typed in an rlogin session, one per line
+            if ((r.commands || []).length) html += htmlRow('Commands', escapeHtml(r.commands.join('\n')), 'mono', 'white-space: pre-wrap');
+            html += htmlRowText('Probe', r.probe, 'mono');
+            return html;
+        }
+
+        // tshark's OpenVPN records (shark_protocols.OpenVPN): one per connection.
+        function renderOpenvpnDetails(e) {
+            const o = e.openvpn || {};
+            let html = htmlSection('OpenVPN Details', COLORS.EVENT.openvpn);
+            html += htmlRowText('Stage', o.stage);
+            html += htmlRowText('Version', o.version);
+            html += htmlRowText('Control Protection', o.control_protection);
+            html += htmlRowText('Client Resets', o.client_resets !== undefined ? o.client_resets.toLocaleString() : '');
+            if (o.client_sessions) html += htmlRowText('Client Sessions', o.client_sessions.toLocaleString());
+            html += htmlRowText('SNI', o.sni, 'mono');
+            const cert = o.certificate || {};
+            html += htmlRowText('Subject', cert.subject, 'mono');
+            html += htmlRowText('Issuer', cert.issuerdn, 'mono');
+            html += htmlRowText('Valid', cert.notbefore ? `${cert.notbefore} to ${cert.notafter || ''}` : '');
+            html += htmlRowText('Serial', cert.serial, 'mono');
+            html += htmlRowText('Fingerprint', cert.fingerprint, 'mono');
+            html += htmlRowText('Client Certificate', (o.client_certificate || {}).subject, 'mono');
+            html += htmlRowText('Cipher Suite', o.cipher_suite);
+            html += htmlRowText('JA4', o.ja4, 'mono');
+            html += htmlRowText('Data Packets', `${(o.data_to_server || 0).toLocaleString()} to server, ${(o.data_to_client || 0).toLocaleString()} to client`);
+            if (o.data_keys) html += htmlRowText('Data Keys', `${o.data_keys} (renegotiated)`);
+            if (o.soft_resets) html += htmlRowText('Soft Resets', o.soft_resets.toLocaleString());
+            return html;
+        }
+
+        // tshark's WireGuard records (shark_protocols.WireGuard): one per connection.
+        function renderWireguardDetails(e) {
+            const w = e.wireguard || {};
+            const n = v => v !== undefined ? v.toLocaleString() : '';
+            let html = htmlSection('WireGuard Details', COLORS.EVENT.wireguard);
+            html += htmlRowText('Stage', w.stage);
+            html += htmlRowText('Initiations', n(w.initiations) + (w.both_initiated ? ' (by both peers)' : ''));
+            html += htmlRowText('Handshakes', n(w.handshakes));
+            if (w.unanswered) html += htmlRowText('Unanswered', n(w.unanswered));
+            if (w.cookie_replies) html += htmlRowText('Cookie Replies', n(w.cookie_replies));
+            if (w.under_load) html += htmlRowText('Under Load', 'yes (handshakes carried a cookie)');
+            html += htmlRowText('Data Packets', `${n(w.data_to_server || 0)} to server, ${n(w.data_to_client || 0)} to client`);
+            if (w.keepalives) html += htmlRowText('Keepalives', n(w.keepalives));
+            // only when tshark had the keys to decrypt the handshake
+            html += htmlRowText('Initiator Key', w.initiator_key, 'mono');
+            html += htmlRowText('Responder Key', w.responder_key, 'mono');
             return html;
         }
 
@@ -4848,9 +5750,15 @@
             s7comm: renderS7commDetails,
             ssdp: renderSsdpDetails,
             telnet: renderTelnetDetails,
+            rsh: renderRshDetails,
+            openvpn: renderOpenvpnDetails,
+            wireguard: renderWireguardDetails,
             iec104: renderIec104Details,
             bacnet: renderBacnetDetails,
             opcua: renderOpcuaDetails,
+            mms: renderMmsDetails,
+            pn_dcp: renderPnDcpDetails,
+            mongodb: renderMongodbDetails,
             goose: renderGooseDetails,
             browser: renderBrowserDetails,
             dhcpv6: renderDhcpv6Details,
@@ -4871,6 +5779,28 @@
             lldp: renderNeighborDetails,
             cdp: renderNeighborDetails,
             opcua_action: renderOpcuaActionDetails,
+            mms_action: renderMmsActionDetails,
+            pn_device: renderPnDeviceDetails,
+            mongodb_action: renderMongodbActionDetails,
+            tns: renderTnsDetails,
+            memcache: renderMemcacheDetails,
+            raknet: renderRaknetDetails,
+            tacacs: renderTacacsDetails,
+            synphasor: renderSynphasorDetails,
+            ecat: renderEcatDetails,
+            mysql: renderMysqlDetails,
+            mysql_statement: renderMysqlStatementDetails,
+            redis: renderRedisDetails,
+            redis_command: renderRedisCommandDetails,
+            zabbix: renderZabbixDetails,
+            irc: renderIrcDetails,
+            mssql: renderMssqlDetails,
+            mssql_statement: renderMssqlStatementDetails,
+            fins: renderFinsDetails,
+            fins_action: renderFinsActionDetails,
+            hart_ip: renderHartIpDetails,
+            hart_ip_action: renderHartIpActionDetails,
+            tns_statement: renderTnsStatementDetails,
             bacnet_property: renderBacnetPropertyDetails,
             bacnet_device: renderBacnetDeviceDetails,
             iec104_point: renderIec104PointDetails,
@@ -7980,9 +8910,31 @@
             s7comm: 'S7comm',
             ssdp: 'SSDP',
             telnet: 'Telnet',
+            rsh: 'Remote Shell',
+            openvpn: 'OpenVPN',
+            wireguard: 'WireGuard',
             iec104: 'IEC 104',
             bacnet: 'BACnet',
             opcua: 'OPC UA',
+            mms: 'MMS',
+            pn_dcp: 'PROFINET DCP',
+            mongodb: 'MongoDB',
+            tns: 'Oracle TNS',
+            memcache: 'memcached',
+            fins: 'Omron FINS',
+            hart_ip: 'HART-IP',
+            raknet: 'RakNet',
+            tacacs: 'TACACS+',
+            synphasor: 'C37.118',
+            ecat: 'EtherCAT',
+            mysql: 'MySQL',
+            mysql_statement: 'MySQL Statements',
+            redis: 'Redis',
+            redis_command: 'Redis Commands',
+            zabbix: 'Zabbix',
+            irc: 'IRC',
+            mssql: 'SQL Server',
+            mssql_statement: 'SQL Server Statements',
             goose: 'GOOSE',
             browser: 'Windows Browser',
             dhcpv6: 'DHCPv6',
@@ -8003,6 +8955,12 @@
             lldp: 'LLDP',
             cdp: 'CDP',
             opcua_action: 'OPC UA Actions',
+            mms_action: 'MMS Actions',
+            pn_device: 'PROFINET Devices',
+            mongodb_action: 'MongoDB Actions',
+            tns_statement: 'Oracle SQL',
+            fins_action: 'Omron FINS Actions',
+            hart_ip_action: 'HART-IP Actions',
             bacnet_property: 'BACnet Properties',
             bacnet_device: 'BACnet Devices',
             iec104_point: 'IEC 104 Points',
@@ -8460,6 +9418,7 @@
             let colors = {}, light = false;
             let W = 0, H = 0, dpr = 1, idData = null;
             let dots = [], dotR = 2, dotsByCC = {}, anchors = {}, hub = { x: 0, y: 0, onMap: false };
+            let outlinePath = null, graticulePath = null;
             let data = null, binCounts = [], maxTotal = 1, highlighted = new Set();
             let p = 0, playing = false, lastNow = 0, bi = 0, ai = 0;
             let cum = {}, routes = new Map(), alertRoutes = new Map(), flowsSoFar = 0, alertsSoFar = 0;
@@ -8485,12 +9444,19 @@
             // an alert's color key - any severity, a custom rule's priority:9 included
             const sevKind = sev => COLORS.SEVERITY[sev] ? 's' + sev : 'sdefault';
 
+            // strength of the default outlines and graticule - faint enough to stay under the traffic on every theme
+            const TM_GRID_ALPHA = 0.15, TM_LAND_ALPHA = 0.45;
             function readColors() {
                 const cs = getComputedStyle(document.documentElement);
                 const c = (name, fallback) => d3.rgb(cs.getPropertyValue(name).trim() || fallback);
                 colors = { bg: c('--bg-secondary', '#161b22'), bg2: c('--bg-tertiary', '#21262d'), muted: c('--text-muted', '#8b949e'),
                     bright: c('--text-bright', '#f0f6fc'), flow: c('--accent', '#58a6ff') };
                 colors.accent = colors.flow;
+                // Country outlines and a graticule are drawn faintly in the muted text color;
+                // a theme that sets --map-outline gets them in that color, and stronger
+                const outline = cs.getPropertyValue('--map-outline').trim();
+                colors.outline = outline ? d3.rgb(outline) : colors.muted;
+                colors.outlineAlpha = outline ? { grid: 0.12, land: 0.55 } : { grid: TM_GRID_ALPHA, land: TM_LAND_ALPHA };
                 for (const s in COLORS.SEVERITY) colors['s' + s] = d3.rgb(COLORS.SEVERITY[s]);
                 light = d3.hsl(colors.bg).l > 0.55;
                 colors.dot = d3.rgb(d3.interpolateRgb(colors.bg, colors.muted)(light ? 0.3 : 0.34));
@@ -8528,6 +9494,9 @@
                 const path = d3.geoPath(proj, ox);
                 features.forEach((f, i) => { ox.beginPath(); path(f); ox.fillStyle = `rgb(${(i + 1) & 255},${(i + 1) >> 8},0)`; ox.fill(); });
                 idData = ox.getImageData(0, 0, off.width, off.height);
+                const svgPath = d3.geoPath(proj);
+                outlinePath = new Path2D(svgPath({ type: 'FeatureCollection', features }) || '');
+                graticulePath = new Path2D(svgPath(d3.geoGraticule10()) || '');
                 const step = Math.max(4.2, Math.min(8, W / 210));
                 dots = []; dotsByCC = {}; dotR = step * 0.34;
                 for (let y = step / 2, row = 0; y < H; y += step, row++) {
@@ -8563,6 +9532,9 @@
                 const g = bgx.createRadialGradient(W / 2, H * 0.45, 0, W / 2, H * 0.45, Math.max(W, H) * 0.7);
                 g.addColorStop(0, rgba(colors.accent, light ? 0.05 : 0.07)); g.addColorStop(1, rgba(colors.accent, 0));
                 bgx.fillStyle = g; bgx.fillRect(0, 0, W, H);
+                if (graticulePath) {
+                    bgx.strokeStyle = rgba(colors.outline, colors.outlineAlpha.grid); bgx.lineWidth = 0.6; bgx.stroke(graticulePath);
+                }
                 const LEVELS = 14, heat = {}, lmax = Math.log1p(maxTotal);
                 for (const cc in cum) heat[cc] = Math.log1p(cum[cc].src + cum[cc].dst) / lmax;
                 const paths = Array.from({ length: LEVELS + 2 }, () => new Path2D());
@@ -8578,6 +9550,9 @@
                         : rgba(d3.rgb(mix(0.25 + 0.75 * lv / LEVELS)), 0.55 + 0.45 * lv / LEVELS);
                     bgx.fill(path);
                 });
+                if (outlinePath) {
+                    bgx.strokeStyle = rgba(colors.outline, colors.outlineAlpha.land); bgx.lineWidth = 0.8; bgx.stroke(outlinePath);
+                }
                 for (const cc in places) {
                     if (!anchors[cc] || !(cum[cc] || highlighted.has(cc))) continue;
                     const [x, y] = anchors[cc], h = heat[cc] || 0;
@@ -9133,6 +10108,62 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Endpoint', 'Security', 'Application', 'User', 'Password', 'Activation'];
                 case 'opcua_action':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Node', 'Value', 'Result'];
+                case 'mms':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Initiate', 'Domains', 'Vendor', 'Model'];
+                case 'mms_action':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Object', 'Control', 'Value', 'Result'];
+                case 'pn_dcp':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Query', 'Changes', 'Station Name', 'IP', 'Result', 'Count'];
+                case 'openvpn':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Stage', 'Version', 'Protection', 'Subject', 'Resets', 'Data Pkts →', 'Data Pkts ←'];
+                case 'wireguard':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Stage', 'Initiations', 'Handshakes', 'Unanswered', 'Keepalives', 'Data Pkts →', 'Data Pkts ←'];
+                case 'rsh':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'User', 'Local User', 'Command', 'Password', 'Result'];
+                case 'mongodb':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Driver', 'User', 'Login', 'Databases', 'Server Version', 'Answered'];
+                case 'mongodb_action':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Database', 'Collection', 'Count', 'Result'];
+                case 'fins':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Model', 'Version', 'Node', 'Answered', 'Errors'];
+                case 'fins_action':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Area', 'Address', 'Mode', 'Data', 'Result'];
+                case 'hart_ip':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Host Type', 'Session', 'Commands', 'Tags', 'Answered'];
+                case 'hart_ip_action':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Command', 'Device', 'Data', 'Result'];
+                case 'mysql':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Database', 'Client', 'Server Version', 'Login', 'Statements', 'SSL'];
+                case 'mysql_statement':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Verb', 'Statement', 'Result', 'Count'];
+                case 'mssql':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Database', 'Application', 'Client Host', 'Encryption', 'Login', 'Statements'];
+                case 'mssql_statement':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Verb', 'Statement', 'Result', 'Count'];
+                case 'redis':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Auth', 'Commands', 'Keys', 'Server Version', 'Answered', 'Errors'];
+                case 'redis_command':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Command', 'Statement', 'Result', 'Count'];
+                case 'zabbix':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Request', 'Host', 'Version', 'Connections', 'Keys', 'Commands', 'Answered'];
+                case 'irc':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Nick', 'Server', 'Channels', 'Login', 'Sent', 'Received', 'Bot Commands'];
+                case 'ecat':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Slaves', 'State Requests', 'EEPROM Writes', 'FoE', 'Answered'];
+                case 'synphasor':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Stations', 'Stream ID', 'Data Rate', 'Commands', 'Data Frames', 'Not Synced'];
+                case 'tacacs':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Type', 'User', 'Command', 'Line', 'Remote Address', 'Result', 'Encrypted'];
+                case 'raknet':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Messages', 'Edition', 'MOTD', 'Game Version', 'Players', 'Connected', 'Answered'];
+                case 'memcache':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Commands', 'Keys', 'Server Version', 'Answered', 'Req Bytes', 'Resp Bytes', 'Amplification'];
+                case 'tns':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'DB User', 'OS User', 'Program', 'Result', 'Login', 'Statements'];
+                case 'tns_statement':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'DB User', 'Verb', 'Statement', 'Result', 'Count'];
+                case 'pn_device':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Station Name', 'Device Type', 'Vendor ID', 'Device ID', 'Role', 'IP', 'Count'];
                 case 'bacnet_property':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Service', 'Object', 'Property', 'Count', 'Errors', 'Last Value'];
                 case 'bacnet_device':
@@ -9608,6 +10639,34 @@
                 case 'bacnet_device':
                 case 'opcua':
                 case 'opcua_action':
+                case 'mms':
+                case 'mms_action':
+                case 'pn_dcp':
+                case 'pn_device':
+                case 'mongodb':
+                case 'mongodb_action':
+                case 'tns':
+                case 'tns_statement':
+                case 'memcache':
+                case 'fins':
+                case 'fins_action':
+                case 'hart_ip':
+                case 'hart_ip_action':
+                case 'raknet':
+                case 'tacacs':
+                case 'synphasor':
+                case 'ecat':
+                case 'mysql':
+                case 'mysql_statement':
+                case 'mssql':
+                case 'mssql_statement':
+                case 'redis':
+                case 'redis_command':
+                case 'zabbix':
+                case 'irc':
+                case 'rsh':
+                case 'openvpn':
+                case 'wireguard':
                 case 'goose':
                 case 'browser':
                 case 'lldp':
@@ -12246,6 +13305,7 @@
                 case 'Severity': return e.syslog ? e.syslog.severity || '' : 'Sev ' + (e.alert?.severity || 0);
                 case 'Ruleset': return classifyRuleset(e.alert?.signature_id);
                 case 'Type': {
+                    if (e.tacacs) return e.tacacs.type || '';
                     if (e.coap) return e.coap.type || '';
                     if (e.event_type === 'iec104_point') return e.iec104_point?.type || '';
                     if (e.event_type === 'dnp3') return e.dnp3?.type || '';
@@ -12266,27 +13326,33 @@
                 }
                 case 'Search Target': return e.ssdp?.search_target || e.ssdp?.notification_type || '';
                 case 'Location': return e.ssdp?.location || '';
-                case 'Server': return e.ssdp?.server || '';
+                case 'Server': return e.irc ? (e.irc.network || e.irc.server || '') : (e.ssdp?.server || '');
+                // IRC: a connection's
+                case 'Nick': return e.irc?.nick || '';
+                case 'Channels': return (e.irc?.channels || []).join(', ');
+                case 'Sent': return e.irc ? String(e.irc.messages_sent || 0) : '';
+                case 'Received': return e.irc ? String(e.irc.messages_received || 0) : '';
+                case 'Bot Commands': return (e.irc?.bot_commands || []).join(', ');
                 case 'Banner': return e.telnet?.banner || '';
                 // IEC 104: a control action's, or a monitored point's
                 case 'Station': { const r = e.iec104 || e.iec104_point; return r?.station !== undefined ? String(r.station) : ''; }
                 case 'IOA': { const r = e.iec104 || e.iec104_point; return r?.ioa !== undefined ? String(r.ioa) : ''; }
                 case 'Value': {
-                    const r = e.iec104 || e.bacnet || e.opcua_action;
+                    const r = e.iec104 || e.bacnet || e.opcua_action || e.mms_action;
                     if (r?.value !== undefined) return String(r.value);
                     return e.opcua_action?.arguments ? e.opcua_action.arguments.join(', ') : '';
                 }
-                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || '';
+                case 'Result': return e.iec104?.result || e.bacnet?.result || e.opcua_action?.result || e.mms_action?.result || e.pn_dcp?.result || e.mongodb_action?.result || e.rsh?.result || e.dhcpv6?.status || e.radius?.result || e.stun?.result || e.ipmi?.result || e.l2tp?.stop_result || e.l2tp?.call_result || e.xdmcp?.result || e.tns?.result || e.tns_statement?.result || e.mysql_statement?.result || e.mssql_statement?.result || e.redis_command?.result || e.fins_action?.result || e.hart_ip_action?.result || e.tacacs?.result || '';
                 case 'Updates': return e.iec104_point?.updates !== undefined ? String(e.iec104_point.updates) : '';
                 case 'Last Value': { const r = e.iec104_point || e.bacnet_property; return r?.last_value !== undefined ? String(r.last_value) : ''; }
                 // BACnet: an action's, a read/notification summary's, a device's
-                case 'Object': return e.bacnet?.object || e.bacnet_property?.object || '';
+                case 'Object': return e.bacnet?.object || e.bacnet_property?.object || e.mms_action?.object || '';
                 case 'Property': return e.bacnet?.property || e.bacnet_property?.property || '';
-                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp; return r?.count !== undefined ? String(r.count) : ''; }
+                case 'Count': { const r = e.bacnet_property || e.browser || e.lldp || e.cdp || e.pn_dcp || e.pn_device || e.mongodb_action || e.tns_statement || e.mysql_statement || e.mssql_statement || e.redis_command; return r?.count !== undefined ? String(r.count) : ''; }
                 // LLDP and CDP: a neighbor's announcements
                 case 'System Name': return e.lldp?.system_name || '';
                 case 'Chassis ID': return e.lldp?.chassis_id || '';
-                case 'Device ID': return e.cdp?.device_id || '';
+                case 'Device ID': return e.cdp?.device_id || e.pn_device?.device_id || '';
                 case 'Port ID': { const n = e.lldp || e.cdp; return n?.port_id || ''; }
                 case 'Platform': return e.cdp?.platform || '';
                 case 'Capabilities': { const n = e.lldp || e.cdp; return (n?.capabilities || []).join(', '); }
@@ -12297,21 +13363,25 @@
                 case 'Message': return e.browser?.message || e.dhcpv6?.message || e.syslog?.message || e.radius?.message || '';
                 // Syslog: a message's
                 case 'Facility': return e.syslog?.facility || '';
-                case 'Program': return e.syslog?.program || e.rpc?.program || '';
+                case 'Program': return e.syslog?.program || e.rpc?.program || e.tns?.program || e.tns?.client_program || '';
                 // ONC RPC: a call's
                 case 'Machine Name': return e.rpc?.machine_name || '';
                 case 'Workgroup': return e.browser?.destination_name || '';
                 case 'Windows': return e.browser?.os_version || '';
                 case 'Roles': return (e.browser?.roles || []).join(', ');
-                case 'Errors': return e.bacnet_property?.errors !== undefined ? String(e.bacnet_property.errors) : '';
-                case 'Device': return e.bacnet_device?.device !== undefined ? String(e.bacnet_device.device) : '';
+                case 'Errors': {
+                    if (e.fins) return Object.keys(e.fins.errors || {}).join(', ');
+                    if (e.redis) return Object.keys(e.redis.errors || {}).join(', ');
+                    return e.bacnet_property?.errors !== undefined ? String(e.bacnet_property.errors) : '';
+                }
                 case 'Vendor': {
                     if (e.l2tp) return e.l2tp.client_vendor || '';
+                    if (e.mms) return e.mms.vendor || '';
                     const d = e.bacnet_device;
                     return d?.vendor || (d?.vendor_id !== undefined ? String(d.vendor_id) : '');
                 }
                 case 'Announcements': return e.bacnet_device?.announcements !== undefined ? String(e.bacnet_device.announcements) : '';
-                case 'User': return e.telnet?.username || e.opcua?.username || e.socks?.user || e.radius?.user || e.stun?.username || '';
+                case 'User': return e.telnet?.username || e.opcua?.username || e.mongodb?.user || e.rsh?.user || e.socks?.user || e.radius?.user || e.stun?.username || e.tacacs?.user || '';
                 // GOOSE: a state change's
                 case 'Control Block': return e.goose?.gocb_ref || '';
                 case 'Dataset': return e.goose?.dataset || '';
@@ -12321,14 +13391,84 @@
                 // OPC UA: a connection's, an action's
                 case 'Endpoint': return e.opcua?.endpoint || '';
                 case 'Security': return e.opcua?.security_policy || '';
-                case 'Application': return e.opcua?.client_application || '';
+                case 'Application': return e.mssql ? (e.mssql.application || '') : (e.opcua?.client_application || '');
                 case 'Activation': return e.opcua?.activation || '';
-                case 'Node': return e.opcua_action?.node || '';
-                case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || '';
-                case 'Login': return e.telnet?.login || '';
-                case 'Area': return e.s7comm?.items?.[0]?.area || '';
+                case 'Node': {
+                    if (e.fins) return e.fins.node !== undefined ? String(e.fins.node) : '';
+                    return e.opcua_action?.node || '';
+                }
+                // MMS: a connection's, an action's
+                case 'Initiate': return e.mms?.initiate || '';
+                case 'Domains': return (e.mms?.domains || []).join(', ');
+                case 'Model': return e.mms?.model || e.fins?.model || '';
+                case 'Control': return e.mms_action?.control || '';
+                // PROFINET DCP: an action's, a device's
+                case 'Changes': return (e.pn_dcp?.changes || []).join(', ');
+                case 'Station Name': { const r = e.pn_dcp || e.pn_device; return r?.station_name || ''; }
+                case 'IP': { const r = e.pn_dcp || e.pn_device; return r?.ip || ''; }
+                case 'Device Type': return e.pn_device?.device_type || '';
+                case 'Vendor ID': return e.pn_device?.vendor_id || '';
+                case 'Role': return e.pn_device?.role || '';
+                // MongoDB: a connection's, an action's
+                case 'Driver': return e.mongodb?.driver || '';
+                // rsh, rlogin, rexec: a connection's
+                case 'Local User': return e.rsh?.local_user || '';
+                // OpenVPN, WireGuard: a connection's
+                case 'Stage': return (e.openvpn || e.wireguard)?.stage || '';
+                case 'Protection': return e.openvpn?.control_protection || '';
+                case 'Resets': return e.openvpn?.client_resets !== undefined ? String(e.openvpn.client_resets) : '';
+                case 'Data Pkts →': { const v = (e.openvpn || e.wireguard)?.data_to_server; return v !== undefined ? String(v) : ''; }
+                case 'Data Pkts ←': { const v = (e.openvpn || e.wireguard)?.data_to_client; return v !== undefined ? String(v) : ''; }
+                case 'Initiations': return e.wireguard?.initiations !== undefined ? String(e.wireguard.initiations) : '';
+                case 'Handshakes': return e.wireguard?.handshakes !== undefined ? String(e.wireguard.handshakes) : '';
+                case 'Unanswered': return e.wireguard?.unanswered !== undefined ? String(e.wireguard.unanswered) : '';
+                case 'Keepalives': return e.wireguard ? String(e.wireguard.keepalives || 0) : '';
+                case 'Databases': return (e.mongodb?.databases || []).join(', ');
+                case 'Database': return e.mongodb_action?.database || e.mysql?.database || e.mssql?.database || '';
+                // Oracle TNS: a connection's, a statement's
+                case 'DB User': return (e.tns || e.tns_statement)?.db_user || (e.mysql || e.mysql_statement || e.mssql || e.mssql_statement || e.redis || e.redis_command)?.user || '';
+                case 'OS User': return e.tns?.os_user || e.tns?.client_user || '';
+                case 'Statements': { const r = e.tns || e.mysql || e.mssql; return r?.statements !== undefined ? String(r.statements) : ''; }
+                // memcached: a connection's or UDP exchange's
+                case 'Commands': {
+                    if (e.zabbix) return (e.zabbix.commands || []).map(c => c.command).join('; ');
+                    return Object.keys((e.memcache || e.fins || e.hart_ip || e.synphasor || e.ecat || e.redis)?.commands || {}).join(', ');
+                }
+                case 'Auth': return e.redis?.auth || '';
+                case 'Request': return e.zabbix?.request || '';
+                case 'Connections': return e.zabbix?.connections !== undefined ? String(e.zabbix.connections) : '';
+                // EtherCAT: a master's
+                case 'Slaves': return e.ecat?.slaves !== undefined ? String(e.ecat.slaves) : '';
+                case 'State Requests': return Object.keys(e.ecat?.state_requests || {}).join(', ');
+                case 'EEPROM Writes': return e.ecat ? String(e.ecat.eeprom_writes || 0) : '';
+                case 'FoE': return (e.ecat?.foe || []).join(', ');
+                // C37.118: a stream's
+                case 'Stations': return (e.synphasor?.stations || []).join(', ');
+                case 'Stream ID': return e.synphasor?.stream_id !== undefined ? String(e.synphasor.stream_id) : '';
+                case 'Data Rate': return e.synphasor?.data_rate || '';
+                case 'Data Frames': return e.synphasor ? String(e.synphasor.frames?.data || 0) : '';
+                case 'Not Synced': return e.synphasor ? String(e.synphasor.not_synced || 0) : '';
+                // Omron FINS, HART-IP
+                case 'Data': return (e.fins_action || e.hart_ip_action)?.data || '';
+                case 'Host Type': return e.hart_ip?.host_type || '';
+                case 'Session': return e.hart_ip?.session || '';
+                case 'Device': {
+                    if (e.hart_ip_action) return e.hart_ip_action.device || '';
+                    return e.bacnet_device?.device !== undefined ? String(e.bacnet_device.device) : '';
+                }
+                case 'Keys': return ((e.memcache || e.redis || e.zabbix)?.keys || []).join(', ');
+                case 'Req Bytes': return e.memcache ? String(e.memcache.request_bytes || 0) : '';
+                case 'Resp Bytes': return e.memcache ? String(e.memcache.response_bytes || 0) : '';
+                case 'Amplification': return e.memcache?.amplification !== undefined ? String(e.memcache.amplification) : '';
+                case 'Verb': return (e.tns_statement || e.mysql_statement || e.mssql_statement)?.verb || '';
+                case 'Statement': return ((e.tns_statement || e.mysql_statement || e.mssql_statement)?.statement || e.redis_command?.command || '').slice(0, 200);
+                case 'Encryption': return e.mssql?.encryption || '';
+                case 'Collection': return e.mongodb_action?.collection || '';
+                case 'Password': return e.telnet?.password || e.bacnet?.password || e.opcua?.password || e.rsh?.password || '';
+                case 'Login': return e.telnet?.login || e.mongodb?.login || e.tns?.login || e.mysql?.login || e.mssql?.login || e.irc?.login || '';
+                case 'Area': return e.fins_action?.area || e.s7comm?.items?.[0]?.area || '';
                 case 'Error': return e.s7comm?.response?.error_class || '';
-                case 'Host': return e.http?.hostname || e.syslog?.hostname || '';
+                case 'Host': return e.http?.hostname || e.syslog?.hostname || e.zabbix?.host || '';
                 case 'URL': {
                     if (e.slp) return e.slp.url || (e.slp.urls || [])[0] || '';
                     if (e.event_type === 'link') return e.link?.url || '';
@@ -12377,7 +13517,7 @@
                 case 'Cipher': return e.ipmi?.cipher_accepted?.authentication || e.ipmi?.cipher_requested?.authentication || '';
                 case 'Weaknesses': return (e.ipmi?.weaknesses || []).join(', ');
                 // L2TP: who each end of a control connection said it was
-                case 'Client Host': return e.l2tp?.client_host_name || '';
+                case 'Client Host': return e.mssql ? (e.mssql.client_host || '') : (e.l2tp?.client_host_name || '');
                 case 'Firmware': return e.l2tp?.client_firmware || '';
                 case 'Server Host': return e.l2tp?.server_host_name || e.xdmcp?.server_host_name || '';
                 case 'Calls': return e.l2tp?.calls ? String(e.l2tp.calls) : '';
@@ -12396,12 +13536,25 @@
                 case 'Returns to Sender': return e.tunnel?.returns_to_sender ? 'yes' : '';
                 // XDMCP: a login manager's answer, and the display that asked
                 case 'Server Status': return e.xdmcp?.server_status || '';
-                case 'Messages': return (e.xdmcp?.messages || []).join(', ');
+                case 'Messages': return e.raknet ? Object.keys(e.raknet.messages || {}).join(', ') : (e.xdmcp?.messages || []).join(', ');
+                // RakNet: a flow's
+                case 'Edition': return e.raknet?.edition || '';
+                // TACACS+: a session's
+                case 'Line': return e.tacacs?.port || '';
+                case 'Remote Address': return e.tacacs?.remote_address || '';
+                case 'Encrypted': return e.tacacs ? (e.tacacs.encrypted ? 'yes' : 'no') : '';
+                case 'MOTD': return e.raknet?.motd || '';
+                case 'Game Version': return e.raknet?.game_version || '';
+                case 'Players': return e.raknet?.players !== undefined ? String(e.raknet.players) : '';
+                case 'Connected': return e.raknet ? (e.raknet.connected ? 'yes' : 'no') : '';
                 case 'Display Address': return (e.xdmcp?.display_addresses || [])[0] || '';
                 case 'Authorization': return (e.xdmcp?.authorization_names || []).join(', ');
                 case 'Version': {
                     if (e.event_type === 'ntp') return e.ntp?.version !== undefined ? String(e.ntp.version) : '';
                     if (e.dtls) return e.dtls.version || '';
+                    if (e.openvpn) return e.openvpn.version || '';
+                    if (e.fins) return e.fins.version || '';
+                    if (e.zabbix) return e.zabbix.version || '';
                     if (e.rpc) return e.rpc.version !== undefined ? String(e.rpc.version) : '';
                     if (e.socks) return e.socks.version || '';
                     if (e.slp) return e.slp.version !== undefined ? String(e.slp.version) : '';
@@ -12431,6 +13584,7 @@
                 case 'Subject': {
                     if (e.event_type === 'email') return e.email?.subject || '';
                     if (e.dtls) return (e.dtls.subject || '').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
+                    if (e.openvpn) return (e.openvpn.certificate?.subject || '').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
                     if (e.tls_failure) return (e.tls_failure.subject || '').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
                     return (e.tls?.subject || '-').slice(0, CONFIG.TLS_SUBJECT_MAX_LENGTH);
                 }
@@ -12447,7 +13601,7 @@
                 case 'Size': return e.fileinfo?.size !== undefined ? String(e.fileinfo.size) : '';
                 case 'SHA256': return e.fileinfo?.sha256 || '';
                 case 'Rule Name': return e.filealerts?.rule_name || '';
-                case 'Tags': return (e.filealerts?.tags || []).join(', ');
+                case 'Tags': return ((e.hart_ip || e.filealerts)?.tags || []).join(', ');
                 case 'Author': return e.filealerts?.author || '';
                 case 'Function': {
                     if (e.slp) return e.slp.function || '';
@@ -12467,6 +13621,7 @@
                 case 'Dest Addr': return e.dnp3?.dst !== undefined ? String(e.dnp3.dst) : (e.dnp3?.request?.dst !== undefined ? String(e.dnp3.request.dst) : '');
                 case 'Query': {
                     if (e.coap) return e.coap.query || '';
+                    if (e.event_type === 'pn_dcp') return e.pn_dcp?.query || '';
                     if (e.event_type === 'pgsql') return e.pgsql?.request?.simple_query || '';
                     if (e.event_type === 'mdns') return e.mdns?.queries?.[0]?.rrname || '';
                     if (e.event_type === 'llmnr') return e.llmnr?.queries?.[0]?.rrname || '';
@@ -12484,7 +13639,13 @@
                     return e.dns?.rrname || e.dns?.queries?.[0]?.rrname || '';
                 }
                 case 'Command': {
+                    if (e.fins_action) return e.fins_action.command || '';
+                    if (e.redis_command) return e.redis_command.name || '';
+                    if (e.tacacs) return e.tacacs.command || '';
+                    if (e.hart_ip_action) return e.hart_ip_action.command || '';
                     if (e.rip) return e.rip.command || '';
+                    if (e.mongodb_action) return e.mongodb_action.command || '';
+                    if (e.rsh) return e.rsh.command || '';
                     if (e.event_type === 'iec104') return e.iec104?.action || e.iec104?.type || '';
                     if (e.event_type === 'pgsql') return e.pgsql?.response?.command_completed || '';
                     if (e.event_type === 'enip') return e.enip?.request?.command || e.enip?.response?.command || '';
@@ -12493,7 +13654,8 @@
                     return e.ftp?.command || '';
                 }
                 case 'Rows': return e.pgsql?.response?.data_rows !== undefined ? String(e.pgsql.response.data_rows) : '';
-                case 'SSL': return e.pgsql?.response?.ssl_accepted !== undefined ? (e.pgsql.response.ssl_accepted ? 'Yes' : 'No') : '';
+                case 'SSL': if (e.mysql) return e.mysql.ssl ? 'yes' : 'no';
+                    return e.pgsql?.response?.ssl_accepted !== undefined ? (e.pgsql.response.ssl_accepted ? 'Yes' : 'No') : '';
                 case 'SNI': return e.quic?.sni || '';
                 case 'QUIC Version': return e.quic?.version || '';
                 case 'JA3': return e.quic?.ja3?.hash || '';
@@ -12516,24 +13678,32 @@
                     return e.ssh?.client?.software_version || '';
                 }
                 case 'Server Version': {
+                    if (e.mongodb) return e.mongodb.server_version || '';
+                    if (e.mysql) return e.mysql.server_version || '';
+                    if (e.memcache) return e.memcache.version || '';
+                    if (e.redis) return e.redis.server_version || '';
                     if (e.event_type === 'rfb') {
                         const spv = e.rfb?.server_protocol_version;
                         return spv ? `${spv.major}.${spv.minor}` : '';
                     }
                     return e.ssh?.server?.software_version || '';
                 }
-                case 'Client': return e.krb5?.cname || '';
+                case 'Client': return e.mysql ? (e.mysql.client || '') : (e.krb5?.cname || '');
                 case 'Service': {
                     if (e.event_type === 'nbns') return e.nbns?.service || '';
                     if (e.event_type === 'bacnet') return e.bacnet?.service || '';
                     if (e.event_type === 'bacnet_property') return e.bacnet_property?.service || '';
                     if (e.event_type === 'opcua_action') return e.opcua_action?.service || '';
+                    if (e.event_type === 'mms_action') return e.mms_action?.service || '';
+                    if (e.event_type === 'pn_dcp') return e.pn_dcp?.service || '';
+                    if (e.event_type === 'rsh') return e.rsh?.service || '';
+                    if (e.tns) return e.tns.service_name || e.tns.sid || '';
                     return e.krb5?.sname || '';
                 }
                 // The name alone, as the server aggregates it - the <suffix> is
                 // in the detail panel, and Service says what it means.
                 case 'NetBIOS Name': return e.nbns?.name || e.browser?.source_name || '';
-                case 'Address': return e.nbns?.address || '';
+                case 'Address': return e.fins_action?.address || e.nbns?.address || '';
                 case 'Realm': return e.krb5?.realm || '';
                 case 'Error Code': return e.krb5?.error_code || '';
                 case 'SIP Method': return e.sip?.method || '';
@@ -12562,6 +13732,7 @@
                 case 'Packet': return e.tftp?.packet || '';
                 case 'File': return e.tftp?.file || '';
                 case 'Mode': {
+                    if (e.fins_action) return e.fins_action.mode || '';
                     if (e.event_type === 'ntp') return e.ntp?.mode !== undefined ? String(e.ntp.mode) : '';
                     return e.tftp?.mode || '';
                 }
@@ -12584,7 +13755,10 @@
                 }
                 case 'Event': return e.anomaly?.event || '';
                 case 'Layer': return e.anomaly?.layer || '';
-                case 'Answered': return e.shark?.answered || '';
+                case 'Answered': {
+                    const r = e.mongodb || e.memcache || e.fins || e.hart_ip || e.raknet || e.ecat || e.redis || e.zabbix;
+                    return r ? (r.answered ? 'yes' : 'no') : e.shark?.answered || '';
+                }
                 case 'App Proto': return e.event_type === 'anomaly' ? (e.anomaly?.app_proto || '') : (e.app_proto || '');
                 case 'Stratum': return e.ntp?.stratum !== undefined ? String(e.ntp.stratum) : '';
                 case 'Reference ID': return e.ntp?.reference_id || '';
@@ -15185,6 +16359,18 @@
                 'Encoding to MP3...', 'Skinning the interface...', 'Scanning ID3 tags...',
                 'Equalizing...', 'Crossfading...', 'Building the playlist...',
                 'Visualizing...', 'Normalizing volume levels...', 'Updating the Now Playing display...'
+            ],
+            thermal: [
+                'Calibrating the sensor...', 'Detecting heat signatures...', 'Sweeping the perimeter...',
+                'Adjusting the emissivity...', 'Cooling the detector...', 'Tracking the hot spots...',
+                'Measuring the delta-T...', 'Switching to white-hot...', 'Scanning for warm bodies...',
+                'Focusing the germanium lens...', 'Reading the temperature scale...', 'Finding the overheating server...'
+            ],
+            'war-room': [
+                'Raising the readiness level...', 'Computing trajectories...', 'Plotting the tracks...',
+                'Updating the big board...', 'Correlating the radar returns...', 'Polling the early-warning sites...',
+                'Confirming the launch detection...', 'Checking the sensor feeds...', 'Projecting the impact points...',
+                'Paging the watch officer...', 'Running the threat assessment...', 'Holding at the current posture...'
             ]
         };
 

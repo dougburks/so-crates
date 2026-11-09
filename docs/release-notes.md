@@ -1,5 +1,208 @@
 # Release Notes
 
+## 5.3.0
+
+### Protocols from tshark
+
+- **MMS** (IEC 61850 substations, ICCP links) - a record for each
+  connection: whether it was accepted, the logical devices touched, the
+  server's vendor, model and revision when the client asked, each
+  service's count, and the reports the server sent. And a record for each
+  change: a variable written (with the value), a program started,
+  stopped or killed, a domain downloaded, with its own result. A write to
+  a breaker's or other controllable object's Oper, SBOw or Cancel is
+  named as an operate, select or cancel. MMS connections were a
+  connection card before
+- **PROFINET DCP** - a record for each action: an Identify query (every
+  device, or one station name) with its repeats and answers, and each Set
+  or Get with its result - what was set (IP address, station name, a
+  factory reset, a signal) and to what. And a record for each device
+  that described itself: its station name, type, vendor and device IDs,
+  role and IP address. These were connection cards before
+- **MongoDB** - a record for each connection: the client's driver, OS
+  and platform, the login's user and mechanism and whether it worked
+  (never a password), each command's count, the databases touched, the
+  server's version and the databases it listed, and whether it answered
+  at all - most on an internet-facing sensor are scanners' probes. And a
+  record for each change - documents inserted, updated or deleted, a
+  collection or database dropped, a user or role created or granted -
+  with its result; an insert shows its first document, which is where a
+  ransom note turns up. These were connection cards before
+- **rsh, rlogin and rexec** - a record for each connection: the users,
+  the command and its output's start, rlogin's typed lines, the password
+  (rexec's, or the one typed at rlogin's prompt) and whether the server
+  accepted it - or, for a connection that opens with something else, the
+  scanner's probe and the service's answer. These were connection cards
+  before
+- **OpenVPN** - a record for each connection: how far it got (from a
+  client's unanswered resets to an established tunnel), how often the
+  client started over, how the control channel is protected, the
+  server's certificate from the TLS inside it, and the data packets each
+  way. These were connection cards before
+- **WireGuard** - a record for each connection: how far it got, the
+  handshakes started and answered, and the data packets and keepalives
+  each way. A stray packet that only has WireGuard's shape no longer
+  shows up as a WireGuard connection. When a capture carries the
+  tunnel's keys, tshark decrypts it, and the packets inside become flows
+  of their own under a WireGuard tunnel record
+- **Oracle TNS** - a record for each connection: the service or SID
+  asked for and the client's program, host and OS user, whether the
+  listener accepted, refused or redirected it, the database user and
+  whether the login succeeded, and the server's database, instance and
+  banner - or the command a connection sent the listener. And a record
+  for each distinct SQL statement, with its result and how many times it
+  was sent; a password set with IDENTIFIED BY is masked in it. These
+  were connection cards before
+- **memcached** - a record for each connection or UDP exchange: the
+  commands and keys, the stats asked for, the server's version, its
+  errors, and the bytes each way - over UDP, how many times the request
+  came back amplified. Text and binary protocol both. These were
+  connection cards before
+- **Omron FINS** - a record for each connection or exchange: the
+  commands, the PLC's model and version, its nodes and end codes; and one
+  for each command that changes or controls the PLC - memory and program
+  writes, run and stop, forced I/O, files - with what it wrote and the
+  answer. A program area's protection password, sent in the clear, is
+  shown. These were connection cards before
+- **HART-IP** - a record for each session: the host, the commands, and
+  each field device that answered - who made it, its tag and its primary
+  variable; and one for each command that changes or commands a device -
+  its tag, range or units written, its loop current fixed, a reset - with
+  the answer. These were connection cards before
+- **RakNet** - a record for each flow: the pings, pongs and connection
+  messages, whether the server answered and a connection opened, and the
+  server's advertisement - for Minecraft Bedrock, its MOTD, version and
+  players. Random bytes sent to its port no longer show up as RakNet.
+  These were connection cards before
+- **TACACS+** - a record for each authentication, authorization or
+  accounting session: what kind it was, whether it was encrypted, and -
+  for a body sent unencrypted - the user, their password, the line and
+  address they came from, the command authorized and the answer. These
+  were connection cards before
+- **C37.118** - a record for each synchrophasor stream: the commands a
+  PDC sent its PMU, the stations, channels, nominal frequency and data
+  rate from the PMU's configuration, its header, and how many data frames
+  said it had lost time sync, triggered or changed configuration. These
+  were connection cards before
+- **EtherCAT** - a record for each master: the commands it sent, how many
+  slaves answered, the states it asked them for, EEPROM writes, and the
+  mailbox traffic - FoE files read or written, CoE objects. These were
+  connection cards before
+- **MySQL** and **SQL Server** - like Oracle's: a record for each
+  connection (the server version; the user, database, client and
+  whether the login succeeded; SSL or TDS encryption; for SQL Server
+  with encryption off, the login's password) and one for each distinct
+  statement - a SQL Server RPC call's too - with its result and how many
+  times it was sent; a password a statement sets is masked in it. These
+  were connection cards before
+- **Redis** - a record for each connection (the login and its password,
+  the commands and keys, the server's version from INFO or HELLO, the
+  errors) and one for each distinct admin command - CONFIG, REPLICAOF,
+  MODULE, ACL, EVAL, SAVE, FLUSHALL... - with its answer; a password one
+  sets is masked in it. Inline commands from netcat too. These were
+  connection cards before
+- **Zabbix** - a record for each client, server and kind of request,
+  with how many connections it took: the host, version and item keys,
+  and every command - a system.run item, a remote command, a frontend
+  script - with its output or refusal; and which kinds of credentials a
+  proxy's configuration carried, never their values. These were
+  connection cards before
+- **IRC** - a record for each connection: the nicknames, the server and
+  network, the channels and their topics, the messages each way, CTCP,
+  DCC file offers and the server's errors, with the passwords and channel
+  keys sent in the clear; messages that read as a bot's commands, and
+  bot-shaped nicknames, are picked out. IRC's whole 6660-6669 range is
+  decoded now, not just 6667, and IRC that opens with a password - which
+  Suricata takes for FTP - keeps its record
+- **Findings** - an MMS control command, program change or domain
+  download is high; any other MMS write or definition change is medium.
+  A PROFINET device renamed, readdressed or reset is high; a DCP Identify
+  of every device is low. A MongoDB database or collection dropped, or a
+  user or role created or granted, is high; a MongoDB server answering
+  without a login, and any other MongoDB write or change, are medium. An
+  rsh, rlogin or rexec login is high; one of their services answering a
+  probe is low. An OpenVPN or WireGuard tunnel that carried data is
+  medium; an OpenVPN client or WireGuard peer retrying a server that
+  never answers is low. An Oracle user or role created, changed or
+  granted, or a table or other object dropped, is high; any other Oracle
+  write or change, and a command to the listener, are medium; a failed
+  Oracle login, and a SID or service the listener doesn't know, are low.
+  A memcached server answering over UDP (an amplifier), and memcached
+  flushed or shut down, are high; memcached stats answered is low. An
+  Omron PLC put in run or stop mode, its program changed, or its I/O
+  forced, and a HART device's output, range or calibration changed, are
+  high; any other FINS write and any other HART configuration write are
+  medium; an Omron PLC identified by a Controller Data Read, and a
+  HART-IP session accepted, are low; so is a RakNet game server answering.
+  TACACS+ sent unencrypted is high; a TACACS+ login or command refused is
+  low. A PMU told to stop sending data is medium; a PMU that lost time
+  sync, and a PMU's configuration read, are low. A file or EEPROM written
+  to an EtherCAT slave is high; EtherCAT slaves sent to another state is
+  medium; EtherCAT answering over IP is low. A MySQL or SQL Server account
+  created or granted, a database dropped, MySQL writing or reading server
+  files, SQL Server running operating-system commands, and a SQL Server
+  login sent unencrypted are high; any other write, password hashes read,
+  a MySQL login with no password and a SQL Server configuration change
+  are medium; a failed login is low. Zabbix running a command, and Redis
+  made a replica, loading a module, told to save somewhere else, its users
+  or password changed, or flushed, are high; Redis answering without a
+  password, Redis running Lua, any other Redis configuration change,
+  Zabbix reading files and Zabbix credentials sent unencrypted are
+  medium; a failed Redis login and a Zabbix agent refusing checks are low.
+  IRC bot commands are high; a bot-shaped IRC nickname and a DCC file
+  offer are medium; an IRC client connecting, and an IRC password sent in
+  the clear, are low
+
+### Traffic Map
+
+- **Country borders and a latitude/longitude grid** - the map draws each
+  country's outline and a faint graticule over its dots, in the theme's
+  muted color, so it's plain where one country ends and the next begins.
+  War Room draws them in bright cyan
+
+### Themes
+
+- **Four new themes from Omarchy** - Jade Horse, Last Horizon and
+  Solitude (dark) and Lupine (light). Osaka Jade, which Omarchy has since
+  replaced with Jade Horse, stays. With OhMyDebn theme sync on, these
+  four now match by name instead of being generated from their colors
+- **One Dark** - the Atom editor's dark theme, blue-gray with soft blue
+  accents
+- **Two new Fun themes** - Thermal, a thermal camera view with heat
+  signatures drifting behind the page, and War Room, a 1980s command
+  center's wall display with tracks plotted across a faint grid and the
+  Traffic Map's borders and grid in bright cyan. Each has its own loading
+  messages
+- **The Themes modal is wider** - six themes a row, so it still fits a
+  1080p window without scrolling
+- **The Themes modal's preview matches today's layout** - stat cards in
+  their Triage, Protocol records and Connections sections, numbers in
+  their event types' colors, and a fun theme's corner brackets on the
+  active card
+
+### Fixes
+
+- **tshark's records stuck waiting** - with a server left running while
+  its code was updated (a git pull), tshark - which runs the code on disk
+  - built its records in a newer format than the server's, and the server
+  threw them away and queued them again, over and over, the status saying
+  it was waiting on something else to finish. A newer build is now used
+  as it is
+- **One bad packet no longer costs every tshark record** - a packet one of
+  tshark's protocol parsers couldn't make sense of stopped the whole run,
+  and the analysis lost every protocol's records, not just that one's. Now
+  the parser skips that packet, and the server's log says how many it
+  skipped and why. Fuzzing every parser turned up the packets that did
+  this - in OPC UA, MMS, MongoDB, PROFINET DCP, ONC RPC and C37.118, and in
+  the new parsers before release - and each is fixed
+- **A big flow's transcript, hexdump or download failing** - where
+  tcpdump runs under the AppArmor profile Debian and Ubuntu ship for it
+  (SO-CRATES run outside a container), that profile lets nothing signal
+  tcpdump, so stopping it at a size limit or a timeout failed, and the
+  request with it - an "Internal server error" for the ASCII transcript of
+  a flow too big to carve whole. A tcpdump that can't be stopped is now
+  stopped by closing its output, and a timeout no longer waits on it
+
 ## 5.2.0
 
 ### Traffic Map

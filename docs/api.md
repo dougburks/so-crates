@@ -41,7 +41,7 @@ Redirects to `/socrates.html`.
 
 Returns the running SO-CRATES version.
 
-**Response:** `{"version": "5.2.0"}`
+**Response:** `{"version": "5.3.0"}`
 
 ---
 
@@ -112,13 +112,13 @@ Returns event-type counts for the current or specified analysis.
 | `md5` | Yes | - | MD5 hash of a historical analysis |
 | `q` | No | none | Full-text search query (counts only matching events). Multiple `q` params AND together. |
 
-**Response:** `{"counts": <event type to count map>, "date_range": {"min": <timestamp or null>, "max": <timestamp or null>}, "tshark_types": [<event type>, ...]}` - `tshark_types` lists the types tshark added to a PCAP analysis (protocols Suricata doesn't parse: records like `s7comm`, and connection types like `conn_openvpn`), empty until it has
+**Response:** `{"counts": <event type to count map>, "date_range": {"min": <timestamp or null>, "max": <timestamp or null>}, "tshark_types": [<event type>, ...]}` - `tshark_types` lists the types tshark added to a PCAP analysis (protocols Suricata doesn't parse: records like `s7comm`, and connection types like `conn_prp`), empty until tshark's rows have joined the analysis's `events.db` (see `GET /api/shark-status`'s `merged`)
 
 **Example:**
 ```json
-{"counts": {"alert": 42, "dns": 1500, "http": 380, "tls": 95, "flow": 2200, "s7comm": 310, "conn_openvpn": 2},
+{"counts": {"alert": 42, "dns": 1500, "http": 380, "tls": 95, "flow": 2200, "s7comm": 310, "conn_prp": 2},
  "date_range": {"min": "2026-02-03T11:13:50.123456+0000", "max": "2026-02-03T11:16:02.654321+0000"},
- "tshark_types": ["conn_openvpn", "s7comm"]}
+ "tshark_types": ["conn_prp", "s7comm"]}
 ```
 
 ---
@@ -153,7 +153,9 @@ Returns the analysis's findings: what its protocol records show is worth a look 
 | `counts` | No | none | `1` returns only each rule's `count` and `groups`, with an empty `findings` list |
 | `rule`, `detail`, `dest_ip`, `dest_port` | No | none | One finding's own records instead: its rule id, detail line and server, as the finding gives them (an empty `dest_port` for a record without one) |
 
-**Response:** `{"rules": [{"id", "title", "severity", "event_type", "why", "count", "groups"}], "findings": [{"rule", "severity", "title", "detail", "event", "count", "sources", "first", "last"}]}` - only the rules that matched. A rule's matches are grouped: the records with the same `detail` on the same server (`dest_ip` and `dest_port`) are one finding, whose `event` is the first of them, `count` how many there are, `sources` how many source hosts they came from, and `first` and `last` their earliest and latest times. `severity` is `high`, `medium` or `low`; `findings` are in the rules' order (most severe first), then by time, at most 500 per rule. A rule's `count` (its records) is always the full number, and `groups` the number of findings it makes - of its first 100,000 records, for a rule with more. Given `rule` (and the rest), `findings` holds that finding's records instead, one each with a `count` of 1, oldest first, at most 500, and the rule's `count` says how many there are. `event` is a record as `GET /api/events` returns it. A `detail` never has a password in it, even when the record does.
+**Response:** `{"rules": [{"id", "title", "severity", "event_type", "why", "count", "groups"}], "findings": [{"rule", "severity", "title", "detail", "event", "count", "sources", "first", "last"}]}` - only the rules that matched. A rule's matches are grouped: the records with the same `detail` on the same server (`dest_ip` and `dest_port`) are one finding, whose `event` is the first of them, `count` how many there are, `sources` how many source hosts they came from, and `first` and `last` their earliest and latest times. `severity` is `high`, `medium` or `low`; `findings` are in the rules' order (most severe first), then by time, at most 500 per rule. A rule's `count` (its records) is always the full number, and `groups` the number of findings it makes - of its first 100,000 records, for a rule with more. Given `rule` (and the rest), `findings` holds that finding's records instead, one each with a `count` of 1, oldest first, at most 500, and the rule's `count` says how many there are (among its first 100,000 records), with no `groups`. `event` is a record as `GET /api/events` returns it. A `detail` never has a password in it, even when the record does.
+
+**Errors:** `400` for an invalid MD5, or a `dest_port` that isn't a number.
 
 ---
 
@@ -807,7 +809,7 @@ The name is trimmed, has embedded newlines collapsed to spaces, and is capped at
 {"success": true, "name": "<new display name>"}
 ```
 
-**Errors:** `400` for invalid MD5, unsafe path, a `name` that isn't a string ("Invalid name"), or an empty/whitespace-only name. `404` if analysis not found.
+**Errors:** `400` for invalid MD5, unsafe path, a `name` that isn't a string ("Invalid name"), or an empty/whitespace-only name. `404` if analysis not found. `500` if the name couldn't be saved.
 
 ---
 
@@ -827,7 +829,7 @@ The notes are trimmed and capped at 10,000 characters. An empty (or whitespace-o
 {"success": true, "notes": "<notes text>"}
 ```
 
-**Errors:** `400` for invalid MD5, unsafe path, or non-string notes. `404` if analysis not found.
+**Errors:** `400` for invalid MD5, unsafe path, or non-string notes. `404` if analysis not found. `500` if the notes couldn't be saved.
 
 ---
 

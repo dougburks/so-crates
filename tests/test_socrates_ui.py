@@ -32,7 +32,14 @@ FAVICON_HACKERMAN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__))
 FAVICON_KANAGAWA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-kanagawa.svg')
 FAVICON_MIASMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-miasma.svg')
 FAVICON_NORD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-nord.svg')
-FAVICON_OSAKA_JADE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-osaka-jade.svg')
+FAVICON_THERMAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-thermal.svg')
+FAVICON_WAR_ROOM_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-war-room.svg')
+FAVICON_ONE_DARK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-one-dark.svg')
+FAVICON_OSAKA_JADE_PATH =FAVICON_OSAKA_JADE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-osaka-jade.svg')
+FAVICON_JADE_HORSE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-jade-horse.svg')
+FAVICON_LAST_HORIZON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-last-horizon.svg')
+FAVICON_LUPINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-lupine.svg')
+FAVICON_SOLITUDE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-solitude.svg')
 FAVICON_RISTRETTO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-ristretto.svg')
 FAVICON_ROSE_PINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-rose-pine.svg')
 FAVICON_VANTABLACK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'favicon-vantablack.svg')
@@ -262,9 +269,37 @@ class TestHTMLStructure(unittest.TestCase):
         """static/favicon-nord.svg must exist on disk."""
         self.assertTrue(os.path.exists(FAVICON_NORD_PATH), 'static/favicon-nord.svg must exist')
 
+    def test_favicon_thermal_file_exists(self):
+        """static/favicon-thermal.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_THERMAL_PATH), 'static/favicon-thermal.svg must exist')
+
+    def test_favicon_war_room_file_exists(self):
+        """static/favicon-war-room.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_WAR_ROOM_PATH), 'static/favicon-war-room.svg must exist')
+
+    def test_favicon_one_dark_file_exists(self):
+        """static/favicon-one-dark.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_ONE_DARK_PATH), 'static/favicon-one-dark.svg must exist')
+
     def test_favicon_osaka_jade_file_exists(self):
         """static/favicon-osaka-jade.svg must exist on disk."""
         self.assertTrue(os.path.exists(FAVICON_OSAKA_JADE_PATH), 'static/favicon-osaka-jade.svg must exist')
+
+    def test_favicon_jade_horse_file_exists(self):
+        """static/favicon-jade-horse.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_JADE_HORSE_PATH), 'static/favicon-jade-horse.svg must exist')
+
+    def test_favicon_last_horizon_file_exists(self):
+        """static/favicon-last-horizon.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_LAST_HORIZON_PATH), 'static/favicon-last-horizon.svg must exist')
+
+    def test_favicon_lupine_file_exists(self):
+        """static/favicon-lupine.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_LUPINE_PATH), 'static/favicon-lupine.svg must exist')
+
+    def test_favicon_solitude_file_exists(self):
+        """static/favicon-solitude.svg must exist on disk."""
+        self.assertTrue(os.path.exists(FAVICON_SOLITUDE_PATH), 'static/favicon-solitude.svg must exist')
 
     def test_favicon_ristretto_file_exists(self):
         """static/favicon-ristretto.svg must exist on disk."""
@@ -308,7 +343,7 @@ class TestHTMLStructure(unittest.TestCase):
         """updateFavicon() must point faviconLink at the per-theme SVG that
         exists in static/ (plain favicon.svg for the default dark theme)."""
         from tests.jsdom_helper import js_statements
-        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player']
+        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark', 'thermal', 'war-room']
         result = js_statements(f'''
             var link = document.getElementById('faviconLink');
             var out = {{}};
@@ -2212,20 +2247,47 @@ class TestThemeAndMenu(unittest.TestCase):
     def test_theme_preview_srcdoc_uses_real_app_classes(self):
         """The preview must render real app markup/classes reusing the real
         stylesheet, not an abstract from-scratch mockup - so it can never
-        look or feel out of sync with the actual app's design."""
-        self.assertIn('THEME_PREVIEW_SRCDOC', JS_CONTENT,
-                      'THEME_PREVIEW_SRCDOC constant must exist')
-        srcdoc = JS_CONTENT.split('const THEME_PREVIEW_SRCDOC = `')[1].split('`;')[0]
+        look or feel out of sync with the actual app's design: the cards in
+        their sections, their numbers in the real per-type colors."""
+        from tests.jsdom_helper import js_statements
+        srcdoc = js_statements('window.__jsdom_result = themePreviewSrcdoc();')
         self.assertIn('href="static/socrates.css"', srcdoc,
                       'Preview document must link the real stylesheet, not duplicate styles')
         self.assertIn('class="app-header"', srcdoc,
                       'Preview must reuse the real .app-header class')
-        self.assertIn('class="stats-grid', srcdoc,
-                      'Preview must reuse the real .stats-grid class')
-        self.assertIn('class="stat-card"', srcdoc,
-                      'Preview must reuse the real .stat-card class')
+        self.assertIn('class="stats-grid stats-grid-grouped"', srcdoc,
+                      'Preview must reuse the real grouped .stats-grid')
+        self.assertEqual(srcdoc.count('class="stats-group"'), 3,
+                         'Preview must show the three sections (STAT_GROUPS)')
+        for heading in ('Triage', 'Protocol records', 'Connections'):
+            self.assertIn(f'<span>{heading}</span>', srcdoc,
+                          f'Preview must label the {heading} section from STAT_GROUPS')
+        self.assertIn('class="stat-card tab-active"', srcdoc,
+                      'Preview must show an active card, as the real page does')
         self.assertIn('class="stat-number"', srcdoc,
                       'Preview must reuse the real .stat-number class')
+        event_colors = JS_CONTENT.split('const COLORS = {')[1].split('EVENT: {')[1].split('}')[0]
+        for event_type in ('alert', 'dns', 'http', 'tls', 'flow'):
+            color = re.search(rf"^\s*{event_type}: '(#[0-9a-fA-F]+)'", event_colors, re.MULTILINE).group(1)
+            self.assertIn(f'color: {color}', srcdoc,
+                          f'Preview must color the {event_type} card with COLORS.EVENT.{event_type}')
+
+    def test_theme_preview_gets_fun_theme_class(self):
+        """The real page's <html> carries .fun-theme for a fun theme (the
+        active card's corner brackets) - previewing one must too, and
+        previewing any other must take it off."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            var frame = document.getElementById('themePreviewFrame');
+            frame.srcdoc = '';
+            var doc = frame.contentDocument;
+            previewTheme('thermal');
+            var fun = doc.documentElement.classList.contains('fun-theme');
+            previewTheme('nord');
+            window.__jsdom_result = { fun: fun, notFun: doc.documentElement.classList.contains('fun-theme') };
+        ''')
+        self.assertTrue(result['fun'], 'previewing a fun theme must add .fun-theme to the preview document')
+        self.assertFalse(result['notFun'], 'previewing a non-fun theme must remove .fun-theme from the preview document')
 
     def test_theme_preview_frame_css_exists(self):
         self.assertIn('.theme-preview-frame {', CSS_CONTENT,
@@ -2296,7 +2358,7 @@ class TestThemeAndMenu(unittest.TestCase):
         handlers no longer exist to assert on - the preview behavior
         itself is covered by the hover tests in this class."""
         from tests.jsdom_helper import js_statements
-        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player']
+        themes = ['dark', 'sguil', 'hacker', 'cga', 'breadbin-blue', 'vaporwave', 'digital-frontier', 'retro-handheld', 'matte-black', 'tokyo-night', 'retro-82', 'ethereal', 'lumon', 'catppuccin', 'ohmydebn', 'catppuccin-latte', 'flexoki-light', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'miasma', 'nord', 'osaka-jade', 'ristretto', 'rose-pine', 'vantablack', 'white', 'luna-blue', 'amber', 'dos-blue', 'dracula', 'solarized-dark', 'monokai', 'mp3-player', 'jade-horse', 'last-horizon', 'lupine', 'solitude', 'one-dark', 'thermal', 'war-room']
         result = js_statements(f'''
             var div = document.createElement('div');
             div.innerHTML = renderThemesModalGrid();
@@ -2894,6 +2956,13 @@ class TestThemeAndMenu(unittest.TestCase):
         miasma_block = CSS_CONTENT.split('[data-theme="miasma"] {')[1].split('}')[0]
         nord_block = CSS_CONTENT.split('[data-theme="nord"] {')[1].split('}')[0]
         osaka_jade_block = CSS_CONTENT.split('[data-theme="osaka-jade"] {')[1].split('}')[0]
+        one_dark_block = CSS_CONTENT.split('[data-theme="one-dark"] {')[1].split('}')[0]
+        thermal_block = CSS_CONTENT.split('[data-theme="thermal"] {')[1].split('}')[0]
+        war_room_block = CSS_CONTENT.split('[data-theme="war-room"] {')[1].split('}')[0]
+        jade_horse_block = CSS_CONTENT.split('[data-theme="jade-horse"] {')[1].split('}')[0]
+        last_horizon_block = CSS_CONTENT.split('[data-theme="last-horizon"] {')[1].split('}')[0]
+        lupine_block = CSS_CONTENT.split('[data-theme="lupine"] {')[1].split('}')[0]
+        solitude_block = CSS_CONTENT.split('[data-theme="solitude"] {')[1].split('}')[0]
         ristretto_block = CSS_CONTENT.split('[data-theme="ristretto"] {')[1].split('}')[0]
         rose_pine_block = CSS_CONTENT.split('[data-theme="rose-pine"] {')[1].split('}')[0]
         vantablack_block = CSS_CONTENT.split('[data-theme="vantablack"] {')[1].split('}')[0]
@@ -2936,6 +3005,20 @@ class TestThemeAndMenu(unittest.TestCase):
                       'Nord theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', osaka_jade_block,
                       'Osaka Jade theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', one_dark_block,
+                      'One Dark theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', thermal_block,
+                      'Thermal theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', war_room_block,
+                      'War Room theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', jade_horse_block,
+                      'Jade Horse theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', last_horizon_block,
+                      'Last Horizon theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', lupine_block,
+                      'Lupine theme must define --help-icon-color')
+        self.assertIn('--help-icon-color:', solitude_block,
+                      'Solitude theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', ristretto_block,
                       'Ristretto theme must define --help-icon-color')
         self.assertIn('--help-icon-color:', rose_pine_block,
@@ -3193,9 +3276,37 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn('[data-theme="nord"]', CSS_CONTENT,
                       'CSS must have a Nord theme override block')
 
+    def test_thermal_theme_override_exists(self):
+        self.assertIn('[data-theme="thermal"]', CSS_CONTENT,
+                      'CSS must have a Thermal theme override block')
+
+    def test_war_room_theme_override_exists(self):
+        self.assertIn('[data-theme="war-room"]', CSS_CONTENT,
+                      'CSS must have a War Room theme override block')
+
+    def test_one_dark_theme_override_exists(self):
+        self.assertIn('[data-theme="one-dark"]', CSS_CONTENT,
+                      'CSS must have a One Dark theme override block')
+
     def test_osaka_jade_theme_override_exists(self):
         self.assertIn('[data-theme="osaka-jade"]', CSS_CONTENT,
                       'CSS must have an Osaka Jade theme override block')
+
+    def test_jade_horse_theme_override_exists(self):
+        self.assertIn('[data-theme="jade-horse"]', CSS_CONTENT,
+                      'CSS must have a Jade Horse theme override block')
+
+    def test_last_horizon_theme_override_exists(self):
+        self.assertIn('[data-theme="last-horizon"]', CSS_CONTENT,
+                      'CSS must have a Last Horizon theme override block')
+
+    def test_lupine_theme_override_exists(self):
+        self.assertIn('[data-theme="lupine"]', CSS_CONTENT,
+                      'CSS must have a Lupine theme override block')
+
+    def test_solitude_theme_override_exists(self):
+        self.assertIn('[data-theme="solitude"]', CSS_CONTENT,
+                      'CSS must have a Solitude theme override block')
 
     def test_ristretto_theme_override_exists(self):
         self.assertIn('[data-theme="ristretto"]', CSS_CONTENT,
@@ -3289,11 +3400,20 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn('id="mp3Visualizer"', HTML_CONTENT,
                       'HTML must include a spectrum-analyzer canvas for MP3 Player')
 
+    def test_thermal_canvas_exists(self):
+        self.assertIn('id="thermalHeat"', HTML_CONTENT,
+                      'HTML must include a heat-blob canvas for Thermal')
+
+    def test_war_room_canvas_exists(self):
+        self.assertIn('id="warRoomTracks"', HTML_CONTENT,
+                      'HTML must include a tracks canvas for War Room')
+
     def test_block_rain_wired_everywhere_code_rain_is(self):
         """updateCodeRain, updateBlockRain, updateVaporwaveGrid,
         updateDosDefrag, updateCgaStarfield, updateBreadbinSprites,
-        updateDigitalFrontier, updateLunaBliss, updateAmberBootLog, and
-        updateMp3Visualizer (the ten ambient per-theme canvas backgrounds)
+        updateDigitalFrontier, updateLunaBliss, updateAmberBootLog,
+        updateMp3Visualizer, updateThermalHeat, and updateWarRoomTracks
+        (the twelve ambient per-theme canvas backgrounds)
         must be started/stopped/resized together everywhere - setTheme,
         applyCustomTheme, init, the resize listener, and the
         visibilitychange handler - so a future edit to one path can't
@@ -3301,25 +3421,25 @@ class TestThemeAndMenu(unittest.TestCase):
         on/off after a theme switch, tab backgrounding, or window resize.
 
         REGRESSION test shape: these all used to be called individually at
-        each of those 5 call sites (10 x 5 = 50 near-identical lines); now
+        each of those 5 call sites (once 10 x 5 = 50 near-identical lines); now
         each effect is listed once in one of three shared arrays
         (AMBIENT_THEME_UPDATERS/STOPPERS/RESIZERS) and every call site goes
         through updateAllAmbientThemes()/stopAllAmbientThemes()/a shared
         forEach - so "wired everywhere" is now verified as "present in the
         shared array" plus "the shared helper is actually called from
         every site", rather than counting individual per-effect calls."""
-        all_ten = ('CodeRain', 'BlockRain', 'VaporwaveGrid', 'DosDefrag', 'CgaStarfield', 'BreadbinSprites', 'DigitalFrontier', 'LunaBliss', 'AmberBootLog', 'Mp3Visualizer')
+        all_twelve = ('CodeRain', 'BlockRain', 'VaporwaveGrid', 'DosDefrag', 'CgaStarfield', 'BreadbinSprites', 'DigitalFrontier', 'LunaBliss', 'AmberBootLog', 'Mp3Visualizer', 'ThermalHeat', 'WarRoomTracks')
 
         updaters_array = JS_CONTENT.split('const AMBIENT_THEME_UPDATERS = [')[1].split(']')[0]
-        for name in all_ten:
+        for name in all_twelve:
             self.assertIn(f'update{name}', updaters_array, f'update{name} must be in AMBIENT_THEME_UPDATERS')
 
         stoppers_array = JS_CONTENT.split('const AMBIENT_THEME_STOPPERS = [')[1].split(']')[0]
-        for name in all_ten:
+        for name in all_twelve:
             self.assertIn(f'stop{name}', stoppers_array, f'stop{name} must be in AMBIENT_THEME_STOPPERS')
 
         resizers_array = JS_CONTENT.split('const AMBIENT_THEME_RESIZERS = [')[1].split(']')[0]
-        for name in all_ten:
+        for name in all_twelve:
             self.assertIn(f'resize{name}', resizers_array, f'resize{name} must be in AMBIENT_THEME_RESIZERS')
 
         self.assertIn("AMBIENT_THEME_RESIZERS.forEach(fn => window.addEventListener('resize', fn));", JS_CONTENT,
@@ -3342,7 +3462,7 @@ class TestThemeAndMenu(unittest.TestCase):
         large empty gap). Must stay pinned regardless of which ambient
         background canvas (if any) is active."""
         from tests.jsdom_helper import js_statements
-        for theme in (None, 'hacker', 'retro-handheld', 'vaporwave', 'dos-blue', 'cga', 'breadbin-blue', 'digital-frontier', 'luna-blue', 'amber', 'mp3-player'):
+        for theme in (None, 'hacker', 'retro-handheld', 'vaporwave', 'dos-blue', 'cga', 'breadbin-blue', 'digital-frontier', 'luna-blue', 'amber', 'mp3-player', 'thermal', 'war-room'):
             setup = f"document.documentElement.setAttribute('data-theme', '{theme}');" if theme else ''
             result = js_statements(f'''
                 {setup}
@@ -3490,9 +3610,37 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertIn("'nord':", JS_CONTENT,
                       'THEMES registry must include the nord theme')
 
+    def test_thermal_theme_in_registry(self):
+        self.assertIn("'thermal':", JS_CONTENT,
+                      'THEMES registry must include the thermal theme')
+
+    def test_war_room_theme_in_registry(self):
+        self.assertIn("'war-room':", JS_CONTENT,
+                      'THEMES registry must include the war-room theme')
+
+    def test_one_dark_theme_in_registry(self):
+        self.assertIn("'one-dark':", JS_CONTENT,
+                      'THEMES registry must include the one-dark theme')
+
     def test_osaka_jade_theme_in_registry(self):
         self.assertIn("'osaka-jade':", JS_CONTENT,
                       'THEMES registry must include the osaka-jade theme')
+
+    def test_jade_horse_theme_in_registry(self):
+        self.assertIn("'jade-horse':", JS_CONTENT,
+                      'THEMES registry must include the jade-horse theme')
+
+    def test_last_horizon_theme_in_registry(self):
+        self.assertIn("'last-horizon':", JS_CONTENT,
+                      'THEMES registry must include the last-horizon theme')
+
+    def test_lupine_theme_in_registry(self):
+        self.assertIn("'lupine':", JS_CONTENT,
+                      'THEMES registry must include the lupine theme')
+
+    def test_solitude_theme_in_registry(self):
+        self.assertIn("'solitude':", JS_CONTENT,
+                      'THEMES registry must include the solitude theme')
 
     def test_ristretto_theme_in_registry(self):
         self.assertIn("'ristretto':", JS_CONTENT,
@@ -4075,13 +4223,13 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             var order = [];
             setTheme('dark');
-            for (var i = 0; i < 35; i++) {
+            for (var i = 0; i < 42; i++) {
                 toggleTheme();
                 order.push(document.documentElement.getAttribute('data-theme') || 'dark');
             }
             window.__jsdom_result = { order: order };
         ''')
-        self.assertEqual(result['order'], ['monokai', 'nord', 'ohmydebn', 'osaka-jade', 'retro-82', 'ristretto', 'solarized-dark', 'tokyo-night', 'vantablack', 'catppuccin-latte', 'flexoki-light', 'rose-pine', 'sguil', 'white', 'amber', 'breadbin-blue', 'cga', 'digital-frontier', 'dos-blue', 'hacker', 'luna-blue', 'mp3-player', 'retro-handheld', 'vaporwave', 'catppuccin', 'dracula', 'ethereal', 'everforest', 'gruvbox', 'hackerman', 'kanagawa', 'lumon', 'matte-black', 'miasma', 'dark'],
+        self.assertEqual(result['order'], ['monokai', 'nord', 'ohmydebn', 'one-dark', 'osaka-jade', 'retro-82', 'ristretto', 'solarized-dark', 'solitude', 'tokyo-night', 'vantablack', 'catppuccin-latte', 'flexoki-light', 'lupine', 'rose-pine', 'sguil', 'white', 'amber', 'breadbin-blue', 'cga', 'digital-frontier', 'dos-blue', 'hacker', 'luna-blue', 'mp3-player', 'retro-handheld', 'thermal', 'vaporwave', 'war-room', 'catppuccin', 'dracula', 'ethereal', 'everforest', 'gruvbox', 'hackerman', 'jade-horse', 'kanagawa', 'last-horizon', 'lumon', 'matte-black', 'miasma', 'dark'],
                          "'>' hotkey cycle order must match menu order")
 
     def test_theme_hotkey_reverse_matches_menu_order_backwards(self):
@@ -4091,13 +4239,13 @@ class TestThemeAndMenu(unittest.TestCase):
         result = js_statements('''
             var order = [];
             setTheme('dark');
-            for (var i = 0; i < 35; i++) {
+            for (var i = 0; i < 42; i++) {
                 toggleThemeReverse();
                 order.push(document.documentElement.getAttribute('data-theme') || 'dark');
             }
             window.__jsdom_result = { order: order };
         ''')
-        expected_reverse = ['miasma', 'matte-black', 'lumon', 'kanagawa', 'hackerman', 'gruvbox', 'everforest', 'ethereal', 'dracula', 'catppuccin', 'vaporwave', 'retro-handheld', 'mp3-player', 'luna-blue', 'hacker', 'dos-blue', 'digital-frontier', 'cga', 'breadbin-blue', 'amber', 'white', 'sguil', 'rose-pine', 'flexoki-light', 'catppuccin-latte', 'vantablack', 'tokyo-night', 'solarized-dark', 'ristretto', 'retro-82', 'osaka-jade', 'ohmydebn', 'nord', 'monokai', 'dark']
+        expected_reverse = ['miasma', 'matte-black', 'lumon', 'last-horizon', 'kanagawa', 'jade-horse', 'hackerman', 'gruvbox', 'everforest', 'ethereal', 'dracula', 'catppuccin', 'war-room', 'vaporwave', 'thermal', 'retro-handheld', 'mp3-player', 'luna-blue', 'hacker', 'dos-blue', 'digital-frontier', 'cga', 'breadbin-blue', 'amber', 'white', 'sguil', 'rose-pine', 'lupine', 'flexoki-light', 'catppuccin-latte', 'vantablack', 'tokyo-night', 'solitude', 'solarized-dark', 'ristretto', 'retro-82', 'osaka-jade', 'one-dark', 'ohmydebn', 'nord', 'monokai', 'dark']
         self.assertEqual(result['order'], expected_reverse,
                          "'<' hotkey cycle order must be the exact reverse of '>'")
 
@@ -5461,6 +5609,18 @@ class TestThemedLoadingMessages(unittest.TestCase):
             'Equalizing...', 'Crossfading...', 'Building the playlist...',
             'Visualizing...', 'Normalizing volume levels...', 'Updating the Now Playing display...',
         ],
+        'thermal': [
+            'Calibrating the sensor...', 'Detecting heat signatures...', 'Sweeping the perimeter...',
+            'Adjusting the emissivity...', 'Cooling the detector...', 'Tracking the hot spots...',
+            'Measuring the delta-T...', 'Switching to white-hot...', 'Scanning for warm bodies...',
+            'Focusing the germanium lens...', 'Reading the temperature scale...', 'Finding the overheating server...',
+        ],
+        'war-room': [
+            'Raising the readiness level...', 'Computing trajectories...', 'Plotting the tracks...',
+            'Updating the big board...', 'Correlating the radar returns...', 'Polling the early-warning sites...',
+            'Confirming the launch detection...', 'Checking the sensor feeds...', 'Projecting the impact points...',
+            'Paging the watch officer...', 'Running the threat assessment...', 'Holding at the current posture...',
+        ],
     }
 
     def _assert_themed_pool_drawn_from(self, theme):
@@ -5509,6 +5669,12 @@ class TestThemedLoadingMessages(unittest.TestCase):
 
     def test_mp3_player_gets_themed_messages(self):
         self._assert_themed_pool_drawn_from('mp3-player')
+
+    def test_thermal_gets_themed_messages(self):
+        self._assert_themed_pool_drawn_from('thermal')
+
+    def test_war_room_gets_themed_messages(self):
+        self._assert_themed_pool_drawn_from('war-room')
 
     def test_every_fun_theme_has_a_joke_set(self):
         """Every theme in THEMES's 'fun' group must have an entry in
@@ -22574,13 +22740,13 @@ class TestTsharkUI(unittest.TestCase):
         from tests.jsdom_helper import js_statements
         result = js_statements("""
             window.__jsdom_result = {
-                labels: [eventTypeLabel('conn_ftp-data'), eventTypeLabel('conn_openvpn'), eventTypeLabel('dns')],
+                labels: [eventTypeLabel('conn_ftp-data'), eventTypeLabel('conn_quake'), eventTypeLabel('dns')],
                 order: sortEventTypes(['conn_s7comm', 'tls', 'conn_ftp', 'alert', 'dns']),
                 columns: getColumnsForType('conn_s7comm'),
                 flowColumns: getColumnsForType('flow'),
             };
         """)
-        self.assertEqual(result['labels'], ['FTP Data', 'OPENVPN', 'DNS Queries'], "a known type's label, else its name in capitals")
+        self.assertEqual(result['labels'], ['FTP Data', 'QUAKE', 'DNS Queries'], "a known type's label, else its name in capitals")
         self.assertEqual(result['order'], ['alert', 'dns', 'tls', 'conn_ftp', 'conn_s7comm'], 'after every record type')
         self.assertIn('App Proto', result['columns'])
         self.assertNotIn('State', result['columns'])
@@ -23094,6 +23260,93 @@ class TestTsharkUI(unittest.TestCase):
                                                   'services': {'Write': 1}, 'errors': 0}},
         'opcua_action': {'event_type': 'opcua_action', 'opcua_action': {'service': 'Call', 'node': 'ns=1;i=62541', 'object': 'i=85',
                                                                         'arguments': ['Hello'], 'result': 'BadNodeIdUnknown'}},
+        'mms': {'event_type': 'mms', 'mms': {'initiate': 'accepted', 'vendor': 'Fixture Vendor', 'model': 'Fixture Relay',
+                                             'revision': '1.2', 'domains': ['IED1LD0', 'IED1CTRL'],
+                                             'services': {'read': 1, 'write': 2}, 'errors': 0}},
+        'openvpn': {'event_type': 'openvpn', 'openvpn': {'stage': 'established', 'version': 'V2', 'control_protection': 'tls-auth',
+                                                        'client_resets': 1, 'data_to_server': 2, 'data_to_client': 3,
+                                                        'certificate': {'subject': 'CN=vpn.example', 'issuerdn': 'CN=CA'}}},
+        'fins': {'event_type': 'fins', 'fins': {'commands': {'Run': 1, 'Memory Area Read': 3}, 'model': 'CJ2M-CPU31',
+                                                'version': '02.01', 'node': 1, 'answered': True,
+                                                'errors': {'The mode is wrong (executing)': 1}}},
+        'fins_action': {'event_type': 'fins_action', 'fins_action': {'command': 'Memory Area Write', 'area': 'DM : Word contents',
+                                                                     'address': '0x0064', 'mode': '', 'data': 'ffff',
+                                                                     'result': 'ok'}},
+        'hart_ip': {'event_type': 'hart_ip', 'hart_ip': {'host_type': 'primary master', 'session': 'accepted',
+                                                         'commands': {'Session Initiate': 1, 'Read Primary Variable': 2},
+                                                         'tags': ['PT-101'], 'answered': True}},
+        'hart_ip_action': {'event_type': 'hart_ip_action', 'hart_ip_action': {'command': 'Perform Device Reset', 'number': 42,
+                                                                              'device': '264e0000d2', 'data': '',
+                                                                              'result': 'access restricted'}},
+        'redis': {'event_type': 'redis', 'redis': {'user': 'default', 'auth': 'succeeded',
+                                                  'commands': {'AUTH': 1, 'CONFIG SET': 3}, 'keys': ['crackit'],
+                                                  'server_version': '8.0.2', 'answered': True, 'errors': {'ERR': 3}}},
+        'redis_command': {'event_type': 'redis_command', 'redis_command': {'user': 'default', 'name': 'CONFIG SET',
+                                                                           'command': 'CONFIG SET dir /root/.ssh',
+                                                                           'result': 'ok', 'count': 1}},
+        'zabbix': {'event_type': 'zabbix', 'zabbix': {'request': 'passive check', 'host': 'web01', 'version': '7.0.22',
+                                                    'connections': 3, 'keys': ['agent.version', 'system.run[id]'],
+                                                    'commands': [{'command': 'id', 'via': 'system.run',
+                                                                  'result': 'uid=0(root)'}], 'answered': True}},
+        'irc': {'event_type': 'irc', 'irc': {'nick': 'USA|83621', 'server': 'irc.evilnet.example', 'network': 'EvilNet',
+                                            'channels': ['#ddos'], 'login': 'registered', 'messages_sent': 4,
+                                            'messages_received': 3, 'bot_commands': ['!ddos.syn 203.0.113.50 80 120'],
+                                            'messages': [{'direction': 'received', 'from': 'herder', 'to': '#ddos',
+                                                          'text': '!ddos.syn 203.0.113.50 80 120'}]}},
+        'mssql': {'event_type': 'mssql', 'mssql': {'user': 'sa', 'database': 'master', 'application': 'SQLCMD',
+                                                  'client_host': 'attacker', 'encryption': 'none', 'login': 'succeeded',
+                                                  'statements': 8}},
+        'mssql_statement': {'event_type': 'mssql_statement', 'mssql_statement': {'user': 'sa', 'verb': 'EXEC',
+                                                                                 'statement': "EXEC xp_cmdshell 'whoami'",
+                                                                                 'result': 'ok', 'count': 1}},
+        'mysql': {'event_type': 'mysql', 'mysql': {'user': 'app', 'database': 'shop', 'client': 'mysql libmariadb 3.4.9',
+                                                  'server_version': '11.8.6-MariaDB', 'login': 'succeeded',
+                                                  'statements': 9, 'ssl': False}},
+        'mysql_statement': {'event_type': 'mysql_statement', 'mysql_statement': {'user': 'app', 'verb': 'DROP DATABASE',
+                                                                                 'statement': 'DROP DATABASE shop',
+                                                                                 'result': 'ok', 'count': 1}},
+        'ecat': {'event_type': 'ecat', 'ecat': {'commands': {'BRD': 3, 'FPWR': 2}, 'slaves': 3,
+                                                'state_requests': {'INIT': 1, 'OP': 1}, 'eeprom_writes': 1,
+                                                'foe': ['write firmware.efw'], 'answered': True}},
+        'synphasor': {'event_type': 'synphasor', 'synphasor': {'stations': ['Substation B PMU'], 'stream_id': 1410,
+                                                               'data_rate': '30 per second',
+                                                               'commands': {'send CFG-2 frame': 1, 'data transmission on': 1},
+                                                               'frames': {'data': 45}, 'not_synced': 2}},
+        'tacacs': {'event_type': 'tacacs', 'tacacs': {'type': 'authorization', 'user': 'admin', 'command': 'write erase',
+                                                      'port': 'vty0', 'remote_address': '10.9.9.9', 'result': 'FAIL',
+                                                      'encrypted': False}},
+        'raknet': {'event_type': 'raknet', 'raknet': {'messages': {'Unconnected Ping': 1, 'Unconnected Pong': 1},
+                                                      'edition': 'MCPE', 'motd': 'Lab Server', 'game_version': '1.21.20',
+                                                      'players': 3, 'max_players': 10, 'answered': True}},
+        'memcache': {'event_type': 'memcache', 'memcache': {'commands': {'stats': 1, 'get': 2}, 'keys': ['blob'],
+                                                           'version': '1.6.38', 'answered': True, 'request_bytes': 33,
+                                                           'response_bytes': 62609, 'amplification': 1897.2}},
+        'tns': {'event_type': 'tns', 'tns': {'service_name': 'FIXDB', 'db_user': 'sys', 'os_user': 'mallory',
+                                             'program': 'sqlplus@attacker', 'result': 'accepted', 'login': 'succeeded',
+                                             'statements': 7}},
+        'tns_statement': {'event_type': 'tns_statement', 'tns_statement': {'db_user': 'sys', 'verb': 'GRANT',
+                                                                           'statement': 'grant dba to backdoor',
+                                                                           'result': 'ok', 'count': 2}},
+        'wireguard': {'event_type': 'wireguard', 'wireguard': {'stage': 'established', 'initiations': 2, 'handshakes': 2,
+                                                            'unanswered': 0, 'data_to_server': 4, 'data_to_client': 5}},
+        'rsh': {'event_type': 'rsh', 'rsh': {'service': 'rexec', 'user': 'operator', 'password': 's3cret',
+                                             'command': 'shutdown -r now', 'result': 'refused', 'error': 'Login incorrect.'}},
+        'mongodb': {'event_type': 'mongodb', 'mongodb': {'commands': {'isMaster': 1, 'listDatabases': 1}, 'errors': 0,
+                                                        'answered': True, 'driver': 'PyMongo 4.6.3', 'user': 'alice',
+                                                        'login': 'failed', 'databases': ['admin', 'shop'],
+                                                        'server_version': '6.0.5', 'unauthenticated': True}},
+        'mongodb_action': {'event_type': 'mongodb_action', 'mongodb_action': {'command': 'insert', 'database': 'READ_ME',
+                                                                              'collection': 'README', 'count': 1,
+                                                                              'document': 'note: pay up', 'result': 'ok'}},
+        'pn_dcp': {'event_type': 'pn_dcp', 'pn_dcp': {'service': 'Set', 'changes': ['IP address'], 'ip': '10.9.9.9',
+                                                      'subnet_mask': '255.255.255.0', 'permanent': True, 'result': 'ok'}},
+        'pn_device': {'event_type': 'pn_device', 'pn_device': {'mac': '00:0e:8c:00:00:02', 'station_name': 'plc-line1',
+                                                               'device_type': 'S7-1500', 'vendor_id': '0x002a',
+                                                               'device_id': '0x010e', 'role': 'IO controller',
+                                                               'ip': '192.168.0.20', 'count': 3}},
+        'mms_action': {'event_type': 'mms_action', 'mms_action': {'service': 'write', 'object': 'IED1LD0/XCBR1$CO$Pos$SBOw',
+                                                                  'control': 'select', 'value': '1, 0',
+                                                                  'result': 'object-access-denied'}},
         'bacnet': {'event_type': 'bacnet', 'bacnet': {'service': 'reinitializeDevice', 'kind': 'confirmed', 'state': 'warmstart',
                                                       'password': 'filister', 'result': 'error: services: password-failure'}},
         'bacnet_property': {'event_type': 'bacnet_property', 'bacnet_property': {
@@ -23145,6 +23398,34 @@ class TestTsharkUI(unittest.TestCase):
         'goose': ['IED1LD0/LLN0$GO$gcb1', 'IED1LD0/LLN0$Trips', '10', '0', 'stNum skipped 7'],
         'opcua': ['opc.tcp://10.1.0.48:4840/fixture', 'None', 'Fixture Client', 'user1', 's3cret', 'Good'],
         'opcua_action': ['Call', 'ns=1;i=62541', 'Hello', 'BadNodeIdUnknown'],
+        'mms': ['accepted', 'IED1LD0, IED1CTRL', 'Fixture Vendor', 'Fixture Relay'],
+        'openvpn': ['established', 'V2', 'tls-auth', 'CN=vpn.example', '1', '2', '3'],
+        'wireguard': ['established', '2', '2', '0', '0', '4', '5'],
+        'fins': ['Run, Memory Area Read', 'CJ2M-CPU31', '02.01', '1', 'yes', 'The mode is wrong (executing)'],
+        'fins_action': ['Memory Area Write', 'DM : Word contents', '0x0064', '', 'ffff', 'ok'],
+        'hart_ip': ['primary master', 'accepted', 'Session Initiate, Read Primary Variable', 'PT-101', 'yes'],
+        'hart_ip_action': ['Perform Device Reset', '264e0000d2', '', 'access restricted'],
+        'redis': ['default', 'succeeded', 'AUTH, CONFIG SET', 'crackit', '8.0.2', 'yes', 'ERR'],
+        'redis_command': ['default', 'CONFIG SET', 'CONFIG SET dir /root/.ssh', 'ok', '1'],
+        'zabbix': ['passive check', 'web01', '7.0.22', '3', 'agent.version, system.run[id]', 'id', 'yes'],
+        'irc': ['USA|83621', 'EvilNet', '#ddos', 'registered', '4', '3', '!ddos.syn 203.0.113.50 80 120'],
+        'mssql': ['sa', 'master', 'SQLCMD', 'attacker', 'none', 'succeeded', '8'],
+        'mssql_statement': ['sa', 'EXEC', "EXEC xp_cmdshell 'whoami'", 'ok', '1'],
+        'mysql': ['app', 'shop', 'mysql libmariadb 3.4.9', '11.8.6-MariaDB', 'succeeded', '9', 'no'],
+        'mysql_statement': ['app', 'DROP DATABASE', 'DROP DATABASE shop', 'ok', '1'],
+        'ecat': ['BRD, FPWR', '3', 'INIT, OP', '1', 'write firmware.efw', 'yes'],
+        'synphasor': ['Substation B PMU', '1410', '30 per second', 'send CFG-2 frame, data transmission on', '45', '2'],
+        'tacacs': ['authorization', 'admin', 'write erase', 'vty0', '10.9.9.9', 'FAIL', 'no'],
+        'raknet': ['Unconnected Ping, Unconnected Pong', 'MCPE', 'Lab Server', '1.21.20', '3', 'no', 'yes'],
+        'memcache': ['stats, get', 'blob', '1.6.38', 'yes', '33', '62609', '1897.2'],
+        'tns': ['FIXDB', 'sys', 'mallory', 'sqlplus@attacker', 'accepted', 'succeeded', '7'],
+        'tns_statement': ['sys', 'GRANT', 'grant dba to backdoor', 'ok', '2'],
+        'rsh': ['rexec', 'operator', '', 'shutdown -r now', 's3cret', 'refused'],
+        'mongodb': ['PyMongo 4.6.3', 'alice', 'failed', 'admin, shop', '6.0.5', 'yes'],
+        'mongodb_action': ['insert', 'READ_ME', 'README', '1', 'ok'],
+        'pn_dcp': ['Set', '', 'IP address', '', '10.9.9.9', 'ok', ''],
+        'pn_device': ['plc-line1', 'S7-1500', '0x002a', '0x010e', 'IO controller', '192.168.0.20', '3'],
+        'mms_action': ['write', 'IED1LD0/XCBR1$CO$Pos$SBOw', 'select', '1, 0', 'object-access-denied'],
         'bacnet': ['reinitializeDevice', '', '', '', 'filister', 'error: services: password-failure'],
         'bacnet_property': ['readProperty', 'analog-value,1', 'present-value', '2', '1', '72.5'],
         'bacnet_device': ['1047', 'Acuity Brands Lighting, Inc.', '2'],
@@ -23180,7 +23461,11 @@ class TestTsharkUI(unittest.TestCase):
                 self.assertEqual(r['cells'][6:6 + len(expected)], expected)
                 # one record per point, so its section is a point's
                 section = {'iec104_point': 'IEC 104 Point', 'bacnet_property': 'BACnet Property',
-                           'bacnet_device': 'BACnet Device', 'opcua_action': 'OPC UA Action',
+                           'bacnet_device': 'BACnet Device', 'opcua_action': 'OPC UA Action', 'mms_action': 'MMS Action',
+                           'pn_dcp': 'PROFINET DCP', 'pn_device': 'PROFINET Device', 'mongodb_action': 'MongoDB Action', 'rsh': 'Remote Shell',
+                           'fins_action': 'Omron FINS Action', 'hart_ip_action': 'HART-IP Action',
+                           'mysql_statement': 'MySQL Statement', 'mssql_statement': 'SQL Server Statement',
+                           'redis_command': 'Redis Command',
                            'tls_failure': 'TLS Failure'}.get(t, r['label'])
                 self.assertIn(f'{section} Details', r['detail'])
 
@@ -23221,7 +23506,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'raknet', 'tacacs', 'synphasor', 'ecat', 'mysql', 'mysql_statement', 'mssql', 'mssql_statement', 'redis', 'redis_command', 'zabbix', 'irc', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 
@@ -23244,6 +23529,18 @@ class TestTrafficMap(unittest.TestCase):
     """The Traffic Map panel: collapsed until opened, only for a capture,
     its clicks toggling country: search terms, and the map's panels built
     from its data (escaped). The canvases are stubbed - JSDOM can't draw."""
+
+    def test_outlines_and_graticule_drawn_for_every_theme(self):
+        """Country outlines and a graticule are drawn on every theme -
+        faintly in --text-muted by default, in --map-outline's color when a
+        theme sets one (War Room) - not only for themes that set it."""
+        read = JS_CONTENT.split('function readColors() {')[1].split('\n            }')[0]
+        self.assertIn("colors.outline = outline ? d3.rgb(outline) : colors.muted;", read)
+        draw = JS_CONTENT.split('function drawBg() {')[1].split('\n            }\n')[0]
+        self.assertIn('if (graticulePath) {', draw)
+        self.assertIn('if (outlinePath) {', draw)
+        self.assertNotIn('colors.outline &&', draw)
+        self.assertIn('--map-outline: #4fd1ff;', CSS_CONTENT.split('[data-theme="war-room"] {')[1].split('}')[0])
 
     STUBS = r"""
         localStorage.setItem('socrates_hideHelp', 'true');
@@ -23466,6 +23763,129 @@ class TestTrafficMap(unittest.TestCase):
     def test_menus_keep_their_own_arrow_keys(self):
         guard = JS_CONTENT.split('function isNavigableKeyContext(e) {')[1].split('\n        }')[0]
         self.assertIn("e.target.tagName !== 'SELECT'", guard)
+
+
+@unittest.skipUnless(__import__('shutil').which('tshark'), 'tshark not installed')
+class TestHostileRecordRendering(unittest.TestCase):
+    """Every string a tshark record carries came from a capture, so from
+    whoever sent its packets: a row, a detail panel and a Findings row
+    must show it as text, never run it as HTML. Real records of every
+    type tshark makes - every protocol fixture run through it - with every
+    string value and object key replaced by markup that tries to break out
+    of an element or an attribute, or a javascript: URL, then rendered:
+    no element or handler of the markup's may come out, and no link may
+    lead to script."""
+
+    MARKUP = '"\'><img src=x class=xss-probe onerror=window.__xss=1><svg class=xss-probe onload=window.__xss=1>'
+    PER_TYPE = 3
+
+    @classmethod
+    def _poison(cls, value, keys_from, depth=0, n=None):
+        """value with every string replaced by MARKUP (every seventh by a
+        javascript: URL), and the keys of objects keys_from deep or deeper -
+        a record's data, like its commands or errors by name - too. A
+        record's own fields keep their names, and its event_type stays, so
+        it still reaches its renderer."""
+        n = n if n is not None else [0]
+        if isinstance(value, dict):
+            out = {}
+            for key, item in value.items():
+                n[0] += 1
+                if depth == 0 and key == 'event_type':
+                    out[key] = item
+                    continue
+                name = f'{key}{cls.MARKUP}{n[0]}' if depth >= keys_from else key
+                out[name] = cls._poison(item, keys_from, depth + 1, n)
+            return out
+        if isinstance(value, list):
+            return [cls._poison(item, keys_from, depth + 1, n) for item in value]
+        if isinstance(value, str):
+            n[0] += 1
+            return 'javascript:window.__xss=1' if n[0] % 7 == 0 else value[:8] + cls.MARKUP
+        return value
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        import findings
+        import shark_analyzer
+        import tests.protocol_fixtures as fixtures
+        from tests.test_findings import MATCHES
+        records = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            for attr in sorted(dir(fixtures)):
+                if not (attr.startswith('write_') and attr.endswith('_pcap')) or attr == 'write_pcap':
+                    continue
+                path = os.path.join(tmp, attr + '.pcap')
+                getattr(fixtures, attr)(path)
+                for record in shark_analyzer.run_tshark(path):
+                    kept = records.setdefault(record['event_type'], [])
+                    if len(kept) < cls.PER_TYPE:
+                        kept.append(record)
+        cls.types = sorted(records)
+        # Each record twice: its values replaced, and its values and its
+        # data's keys (2 deep: a protocol's {'AUTH': 1}) replaced
+        hostile = [cls._poison(r, keys_from) for t in cls.types for r in records[t] for keys_from in (99, 2)]
+        cls.records = [dict(r, id=i + 1) for i, r in enumerate(hostile)]
+        # A Findings row per rule: its detail line made from a poisoned record
+        # that matches it, as the server would
+        cls.findings = []
+        for i, rule in enumerate(findings.RULES):
+            event_type, body = MATCHES[rule.id]
+            body = cls._poison(body, 99)
+            event = {'id': 100000 + i, 'event_type': event_type, 'timestamp': '2026-01-01T00:00:00',
+                     'src_ip': '10.0.0.1', 'dest_ip': '10.0.0.2', 'dest_port': 80, event_type: body}
+            cls.findings.append({'rule': rule.id, 'severity': rule.severity, 'title': cls.MARKUP,
+                                 'detail': rule.detail(body), 'event': event, 'count': 1, 'sources': 1,
+                                 'first': '2026-01-01T00:00:00', 'last': '2026-01-01T00:00:00'})
+        cls.rules = [{'id': r.id, 'title': cls.MARKUP, 'severity': r.severity, 'event_type': r.event_type,
+                      'why': cls.MARKUP, 'count': 2, 'groups': 1} for r in findings.RULES]
+
+    def test_the_fixtures_give_every_tshark_record_type(self):
+        """(so a type with no fixture can't slip past the next test)"""
+        import shark_protocols
+        made = {p.event_type for p in shark_protocols.PROTOCOLS + shark_protocols.STRUCTURED_PROTOCOLS}
+        self.assertEqual(made - set(self.types), set())
+
+    def test_hostile_strings_render_as_text(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(f"""
+            var records = {json.dumps(self.records)};
+            var findingsList = {json.dumps(self.findings)};
+            var rules = {json.dumps(self.rules)};
+            var bad = [];
+            function check(where, html) {{
+                var box = document.createElement('div');
+                box.innerHTML = html;
+                var probes = box.querySelectorAll('.xss-probe, [onerror], [onload]').length;
+                var links = [...box.querySelectorAll('[href], [src]')].filter(function(el) {{
+                    return /^\\s*javascript:/i.test(el.getAttribute('href') || el.getAttribute('src') || '');
+                }}).length;
+                if (probes || links) bad.push(where + ': ' + probes + ' elements, ' + links + ' script links');
+            }}
+            records.forEach(function(e) {{
+                var where = e.event_type + ' #' + e.id;
+                try {{
+                    check(where + ' row', '<table><tbody>' + buildRowForEvent(e) + '</tbody></table>');
+                    check(where + ' details', formatEvent(e));
+                }} catch (err) {{
+                    bad.push(where + ' threw ' + err);
+                }}
+            }});
+            findingsList.forEach(function(f) {{
+                try {{
+                    check('finding ' + f.rule, '<table><tbody>' + findingRowHtml(f) + '</tbody></table>');
+                }} catch (err) {{
+                    bad.push('finding ' + f.rule + ' threw ' + err);
+                }}
+            }});
+            check('findings card', findingsInfoCardHtml(rules));
+            window.__jsdom_result = {{bad: bad, rendered: records.length, findings: findingsList.length,
+                                     ran: !!window.__xss}};
+        """)
+        self.assertEqual(result['bad'], [])
+        self.assertFalse(result['ran'], 'no injected handler ran')
+        self.assertEqual((result['rendered'], result['findings']), (len(self.records), len(self.findings)))
 
 
 if __name__ == '__main__':

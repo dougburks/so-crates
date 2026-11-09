@@ -197,6 +197,17 @@
       }
       .sx-hero-copy .sx-tagline,
       .sx-hero-copy .sx-sub { margin-left: 0; margin-right: 0; }
+      /* the tagline on one line: its 69 characters and the cursor are 42em
+         of monospace, so the font follows the copy column's width (a
+         container's content no longer sizes it, so the hero, a flex item,
+         takes its full width rather than shrinking to fit) */
+      .sx-hero-inner { width: 100%; }
+      .sx-hero-copy { container-type: inline-size; }
+      .sx-hero-copy .sx-tagline {
+        white-space: nowrap;
+        font-size: min(.98rem, 100cqi / 43);
+        min-height: 1.5em;
+      }
       .sx-hero-copy .sx-ctas,
       .sx-hero-copy .sx-themes { justify-content: flex-start; }
       .sx-hero .sx-title { font-size: clamp(2.2rem, 4.3vw, 3.8rem); }
@@ -467,7 +478,7 @@
         <button class="sx-swatch" data-sxtheme="dracula" title="Dracula" aria-label="Dracula theme"></button>
         <button class="sx-swatch" data-sxtheme="gruvbox" title="Gruvbox" aria-label="Gruvbox theme"></button>
         <button class="sx-swatch" data-sxtheme="kanagawa" title="Kanagawa" aria-label="Kanagawa theme"></button>
-        <a class="sx-themes-more" href="themes/">35 themes in the app &rarr;</a>
+        <a class="sx-themes-more" href="themes/">42 themes in the app &rarr;</a>
       </div>
       </div>
       <div class="sx-hero-figure" aria-hidden="true"></div>

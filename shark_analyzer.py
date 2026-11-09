@@ -67,7 +67,7 @@ SHARK_ARTIFACTS = (SHARK_DB, SHARK_DB + '-wal', SHARK_DB + '-shm', SHARK_DB + '.
 # change here or in shark_protocols changes what a run produces: a
 # shark.db stamped with an older version is rebuilt the next time its
 # status is asked for, so existing analyses pick up the change.
-SHARK_FORMAT_VERSION = 38
+SHARK_FORMAT_VERSION = 55
 
 # The fields every packet is read for, one per column of tshark's
 # tab-separated output, in this order - then each of shark_protocols'
@@ -94,7 +94,8 @@ _FIELDS = (
 # The fields _is_reply reads to orient a flow by its first request or
 # reply - requested whether or not any protocol here keeps records of them.
 _ORIENTATION_FIELDS = ('dns.flags.response', 'nbns.flags.response', 'http.response.code', 'http.request.method',
-                       'ftp.response.code', 'ftp.request.command', 's7comm.header.rosctr', 'tls.handshake.type')
+                       'ftp.response.code', 'ftp.request.command', 's7comm.header.rosctr', 'tls.handshake.type',
+                       'pn_dcp.service_type')
 # The alerts a TLS connection's ends sent while they could still be read
 # (_TLSFailures) - TLS is most of a capture's connections, too many to
 # read again in the protocol pass for one field.
@@ -159,10 +160,16 @@ def shark_db_path(dir_path):
     return os.path.join(dir_path, SHARK_DB)
 
 
+# Ports tshark decodes as a protocol beyond its own defaults: IRC's whole
+# range (tshark takes only 6667), where IRC bots' servers listen as often
+# as on 6667 itself
+_DECODE_AS = ('-d', 'tcp.port==6660-6669,irc')
+
+
 def tshark_command(pcap_path, fields=_FIRST_PASS_FIELDS):
     """The tshark command that dumps these fields (the first pass's by
     default) for every packet."""
-    cmd = ['tshark', '-n', '-r', pcap_path, '--enable-protocol', 'communityid',
+    cmd = ['tshark', '-n', '-r', pcap_path, *_DECODE_AS, '--enable-protocol', 'communityid',
            '-T', 'fields', '-E', 'separator=\t', '-E', 'occurrence=a', '-E', 'aggregator=' + _AGGREGATOR]
     for field in fields:
         cmd += ['-e', field]
@@ -271,8 +278,10 @@ def _is_reply(cols):
     """Whether a packet is a server's reply (True), a client's request
     (False), or can't say (None), from the protocols that mark it:
     DNS/mDNS/LLMNR and NBNS's response flag, an HTTP/SSDP or FTP response
-    vs request, an S7comm ack vs job, a TLS server vs client hello.
-    Modbus marks neither."""
+    vs request, an S7comm ack vs job, a TLS server vs client hello, a
+    PROFINET DCP response vs request (a device's answer to an Identify is
+    often the first frame between it and the station that asked, by
+    multicast). Modbus marks neither."""
     for field in ('dns.flags.response', 'nbns.flags.response'):
         flag = _flag(_first_value(cols, field))
         if flag is not None:
@@ -286,6 +295,9 @@ def _is_reply(cols):
     rosctr = _first_value(cols, 's7comm.header.rosctr')
     if rosctr in ('1', '2', '3'):
         return rosctr != '1'
+    dcp = _first_value(cols, 'pn_dcp.service_type')
+    if dcp:
+        return dcp != '0'
     return {'1': False, '2': True}.get(_first_value(cols, 'tls.handshake.type'))
 
 
@@ -442,7 +454,7 @@ class _Flow:
 # for: it decodes tunnels to inspect what's inside but logs only the
 # inner flows - which is all tshark's flows here are (see _FIELDS).
 _TUNNEL_LAYERS = (('vxlan', 'VXLAN'), ('geneve', 'Geneve'), ('teredo', 'Teredo'), ('ayiya', 'AYIYA'),
-                  ('gtp', 'GTP-U'), ('erspan', 'ERSPAN'), ('gre', 'GRE'))
+                  ('gtp', 'GTP-U'), ('erspan', 'ERSPAN'), ('gre', 'GRE'), ('wg', 'WireGuard'))
 _BARE_TUNNELS = {('ip', 'ip'): 'IP-in-IP', ('ip', 'ipv6'): '6in4', ('ipv6', 'ip'): '4in6',
                  ('ipv6', 'ipv6'): 'IPv6-in-IPv6'}
 _TUNNEL_OUTER_PROTO = {'IP-in-IP': 'IP-in-IP', '6in4': 'IPv6', '4in6': 'IP-in-IP', 'IPv6-in-IPv6': 'IPv6', 'GRE': 'GRE',
@@ -733,6 +745,7 @@ def _add_outer(flows, f, app, when, length):
     cid = _community_id(src, dst, _PROTO_NUMBERS.get(proto, _int(f[_F_IP_PROTO] or f[_F_IP6_NXT])), sport, dport) \
         if not flow.community_id else ''
     flow.add(src, sport, length, when, app, cid, False)
+    return flow, src, dst, sport, dport
 
 
 class _LaterPasses:
@@ -835,7 +848,15 @@ def iter_records(lines, pcap_path=None, deadline=None, combined=()):
             tunnels.add(raw_cols, raw_cols[_F_PROTOS].split(':'), when, length,
                         None if bare else _packet_key(f, '')[-1])
             if split[2] is not None:
-                _add_outer(flows, split[2], split[3], when, length)
+                outer, *ends = _add_outer(flows, split[2], split[3], when, length)
+                # A tunnel with records of its own (decrypted WireGuard):
+                # each of its packets is the outer flow's message too
+                outer_frame = _int(split[2][_F_FRAME])
+                if split[3] in fed_apps:
+                    _feed(raw_cols, feeds, Packet(outer_frame, when, outer, ends[2], ends[3], split[3], *ends[:2]))
+                elif split[3] in pass_apps and outer_frame:
+                    outer.recorded = True
+                    spans.append((outer_frame, outer_frame))
             if bare:
                 continue
             # The packet inside is its flow's, as Suricata counts it: from its
@@ -919,7 +940,12 @@ def iter_records(lines, pcap_path=None, deadline=None, combined=()):
     finally:
         protocols += passes.wait()
     for handler in protocols + structured:
-        for flow, when, event_type, body in handler.finish():
+        try:
+            records = handler.finish()
+        except Exception as error:
+            _parser_failed(handler, error)
+            continue
+        for flow, when, event_type, body in records:
             yield flow.record(when, event_type, body)
     yield from tunnels.records()
     yield from tls_failures.records()
@@ -1097,7 +1123,10 @@ def _structured_pass(pcap_path, flows, handlers, total_frames, deadline=None, on
                     packet = Packet(_int(frame.get('frame.number')), when, flow, flow.cport, flow.sport)
                     for handler in active:
                         if any(name in layers for name in handler.layers):
-                            handler.feed_json(packet, layers)
+                            try:
+                                handler.feed_json(packet, layers)
+                            except Exception as error:
+                                _parser_failed(handler, error)
                 proc.wait()
             finally:
                 if killer:
@@ -1176,7 +1205,7 @@ def _mostly_recorded(pcap_path):
         try:
             if not pcap_subset.copy_frames(pcap_path, sample, windows):
                 return frozenset()
-            out = subprocess.run(['tshark', '-n', '-r', sample, '-T', 'fields', '-e', 'frame.protocols',
+            out = subprocess.run(['tshark', '-n', '-r', sample, *_DECODE_AS, '-T', 'fields', '-e', 'frame.protocols',
                                   '-e', 'tcp.stream', '-e', 'udp.stream'], capture_output=True, text=True,
                                  errors='replace', timeout=120, preexec_fn=_low_priority).stdout
         except (OSError, subprocess.SubprocessError):
@@ -1201,6 +1230,8 @@ def _feed_protocols(cols, index, feeds):
         return
     split = _split_tunnel(cols) if cols[_F_PROTOS].count(':ip') > 1 else None
     if split is not None:
+        if split[2] is not None and split[3] in _RECORDED_FIELD_APPS:
+            _feed_outer(cols, split[2], split[3], index, feeds)
         cols = split[1]
     f = [_last(c) for c in cols[:len(_FIELDS)]]
     try:
@@ -1221,6 +1252,38 @@ def _feed_protocols(cols, index, feeds):
     _feed(cols, feeds, Packet(_int(f[_F_FRAME]), when, _open_at(candidates, when), sport, dport, app, src, dst))
 
 
+def _feed_outer(cols, f, app, index, feeds):
+    """A tunneled packet to its tunnel's outer flow's records, for a
+    tunnel that has them (_split_tunnel's outer fields and app)."""
+    try:
+        when = float(f[_F_TIME])
+    except ValueError:
+        return
+    _, src, dst, proto, _, sport, dport, key = _packet_key(f, app)
+    candidates = index.get((proto, frozenset(((src, sport), (dst, dport))))
+                           if proto in ('TCP', 'UDP') else key)
+    if candidates:
+        _feed(cols, feeds, Packet(_int(f[_F_FRAME]), when, _open_at(candidates, when), sport, dport, app, src, dst))
+
+
+# A parser that raises on one packet skips that packet, rather than failing
+# the run and losing every protocol's records: bytes a capture's sender
+# chose shouldn't be able to do that. Each parser's count of skipped
+# packets and first error, for the run (build reports them in the server's
+# log); the tests set SOCRATES_STRICT_PARSERS, so a parser's bug fails them
+# instead of passing unseen.
+_STRICT_PARSERS = bool(os.environ.get('SOCRATES_STRICT_PARSERS'))
+_PARSER_ERRORS = {}
+_PARSER_ERROR_PREFIX = 'tshark parser skipped'
+
+
+def _parser_failed(handler, error):
+    if _STRICT_PARSERS:
+        raise error
+    entry = _PARSER_ERRORS.setdefault(type(handler).__name__, [0, f'{type(error).__name__}: {error}'[:200]])
+    entry[0] += 1
+
+
 def _feed(cols, feeds, packet):
     """A packet's fields to each protocol it's for."""
     app = packet.app
@@ -1234,8 +1297,11 @@ def _feed(cols, feeds, packet):
         values = [cols[i] if i < len(cols) else '' for i in columns]
         if not any(values):
             continue
-        handler.feed(packet, {name: [_unescape(x) for x in value.split(_AGGREGATOR)] if value else []
-                              for name, value in zip(handler.fields, values)})
+        try:
+            handler.feed(packet, {name: [_unescape(x) for x in value.split(_AGGREGATOR)] if value else []
+                                  for name, value in zip(handler.fields, values)})
+        except Exception as error:
+            _parser_failed(handler, error)
 
 
 def build_flows(lines):
@@ -1298,6 +1364,7 @@ def run_tshark(pcap_path, timeout=None, on_start=None, consume=list, notes=None)
     shark.db instead. Raises RuntimeError if tshark is missing, fails, is
     killed, or exceeds the timeout. on_start, if given, is called with the
     tshark process as soon as it starts."""
+    _PARSER_ERRORS.clear()
     if not shutil.which('tshark'):
         raise RuntimeError('tshark is not installed')
     # A capture mostly of protocols with records: one pass asking for the
@@ -1452,6 +1519,11 @@ def _analyze(dir_path, pcap_path, on_start, run_dir):
             proc.wait()
         watchdog.join()
         succeeded = not too_big.is_set() and proc.returncode == 0
+        if succeeded:
+            stderr_file.seek(0)
+            for line in stderr_file.read()[-64 * 1024:].splitlines():
+                if line.startswith(_PARSER_ERROR_PREFIX):
+                    print(f'Warning: {line}', file=sys.stderr)
         if not too_big.is_set() and (proc.returncode == 0 or _was_cancelled(dir_path)
                                      or os.path.exists(os.path.join(dir_path, SHARK_ERROR))):
             return succeeded
@@ -1514,6 +1586,8 @@ def build(dir_path, pcap_path, copy_dir=None, from_copy=False):
         finally:
             conn.close()
         os.replace(tmp_path, db_path)
+        for name, (count, error) in sorted(_PARSER_ERRORS.items()):
+            print(f'{_PARSER_ERROR_PREFIX} {count} packet(s) of {name} in {pcap_path} - {error}', file=sys.stderr)
         return True
     except Exception as e:
         _remove(tmp_path)
@@ -1752,6 +1826,15 @@ def format_version(db_path):
         return 0
 
 
+def is_current(db_path):
+    """Whether a shark.db is as new as this code's format - or newer: the
+    build runs in a child process (python3 -m shark_analyzer build), which
+    loads the code on disk, so a server left running while the code was
+    updated gets newer ones. Taken for older, it removed each as it was
+    built and queued it again, for good."""
+    return format_version(db_path) >= SHARK_FORMAT_VERSION
+
+
 # ----------------------------------------------------------------------
 # Merging into the analysis's own events.db: Suricata stays the source of
 # truth for every protocol it parses; tshark adds what it can't see.
@@ -1814,6 +1897,11 @@ def probe_only_protocols(shark_db):
     return frozenset(app for app, kept in rows if not kept and app not in _ONE_WAY_PROTOCOLS)
 
 
+# Record type -> the protocols Suricata takes that protocol for
+_SURICATA_MISREADS = {p.event_type: frozenset(p.suricata_misreads) for p in PROTOCOLS
+                      if getattr(p, 'suricata_misreads', ())}
+
+
 def merge_rows(shark_rows, identified, probed=frozenset(), tls_records=None):
     """The rows of a shark.db (its stored JSON, one at a time) that belong
     in the analysis's events.db: records of protocols Suricata doesn't
@@ -1823,7 +1911,9 @@ def merge_rows(shark_rows, identified, probed=frozenset(), tls_records=None):
     and backed it with records (by Community ID and time, from
     db.suricata_identified_flows): there Suricata's word stands, as on a
     scanner's HTTP request to an rsh port, which tshark, going by the port,
-    calls rsh. The connections of the protocols in probed
+    calls rsh - unless Suricata named it a protocol it's known to mistake
+    the record's for (a protocol's suricata_misreads: IRC that opens with
+    a password reads to it as FTP). The connections of the protocols in probed
     (probe_only_protocols) share one type, PROBED_CONNECTION_TYPE.
 
     The exception is TLS failures (_TLSFailures): alerts Suricata never
@@ -1834,8 +1924,9 @@ def merge_rows(shark_rows, identified, probed=frozenset(), tls_records=None):
     refused."""
     from db import CONNECTION_TYPE_PREFIX, PROBED_CONNECTION_TYPE
 
-    def suricata_knows(cid, first, last):
-        return any(start - 1 <= last and first <= end + 1 for start, end in identified.get(cid, ()))
+    def suricata_knows(cid, first, last, misreads=()):
+        return any(known[0] - 1 <= last and first <= known[1] + 1 and (known[2:3] or (None,))[0] not in misreads
+                   for known in identified.get(cid, ()))
     failures = []
     for data in shark_rows:
         event = json.loads(data)
@@ -1858,7 +1949,7 @@ def merge_rows(shark_rows, identified, probed=frozenset(), tls_records=None):
             if event_type.replace('_', '-') in SURICATA_RECORDED_APP_PROTOS:
                 continue
             when = _iso_epoch(event.get('timestamp'))
-            if when is not None and suricata_knows(cid, when, when):
+            if when is not None and suricata_knows(cid, when, when, _SURICATA_MISREADS.get(event_type, ())):
                 continue
         yield event
     known = tls_records({e['community_id'] for e in failures if e.get('community_id')}) \
@@ -1899,7 +1990,7 @@ def merge(dir_path):
     events_db = os.path.join(dir_path, 'events.db')
     with merge_lock(dir_path):
         if not (os.path.exists(shark_db) and os.path.exists(events_db)) or \
-                os.path.exists(os.path.join(dir_path, '.phase')) or format_version(shark_db) != SHARK_FORMAT_VERSION:
+                os.path.exists(os.path.join(dir_path, '.phase')) or not is_current(shark_db):
             return None
         stamp = _merge_stamp(shark_db)
         if tshark_merge_stamp(events_db) == stamp:
@@ -1951,12 +2042,13 @@ def status(dir_path, pcap_path=None):
     (with 'elapsed' seconds so far), 'error' (with 'message'), 'too_large'
     (over the background limit, not yet asked for) or 'not_started'. A shark.db built by an older
     tshark (see SHARK_FORMAT_VERSION) is removed here, so the
-    analysis reads as not started and gets rebuilt."""
+    analysis reads as not started and gets rebuilt - not a newer one
+    (is_current)."""
     db_path = shark_db_path(dir_path)
     if os.path.exists(db_path):
         with _lock:
             busy = dir_path == _running or dir_path in _pending
-        if busy or format_version(db_path) == SHARK_FORMAT_VERSION:
+        if busy or is_current(db_path):
             if not busy:
                 seconds, damaged = _run_info(db_path)
                 ready = {'status': 'ready'} if seconds is None else {'status': 'ready', 'seconds': round(seconds)}

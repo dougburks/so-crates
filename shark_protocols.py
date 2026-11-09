@@ -19,6 +19,7 @@ the addresses, ports and Community ID from the flow, oriented client to
 server like its flow records.
 """
 
+import json
 import math
 import re
 import socket
@@ -520,7 +521,7 @@ class RPC:
             if procedure is not None:
                 names = _RPCBIND_PROCEDURES if body['program'] == 'portmapper' and (version or 2) > 2 \
                     else _RPC_PROCEDURES.get(body['program'], ())
-                body['procedure'] = names[procedure] if procedure < len(names) else f'procedure {procedure}'
+                body['procedure'] = names[procedure] if 0 <= procedure < len(names) else f'procedure {procedure}'
             self.records.append((pkt.flow, pkt.when, self.event_type, body))
         if kind == 0:
             body['calls'] = body.get('calls', 0) + 1
@@ -2252,6 +2253,2983 @@ class Telnet:
         return records
 
 
+# ---------------------------------------------------------------- rsh, rlogin, rexec
+#
+# The BSD remote shells, all in the clear, which Suricata doesn't parse.
+# Each opens with NUL-terminated strings from the client - rsh (514): the
+# port for errors, the local and remote user names and the command;
+# rexec (512): the port, the user name, the password and the command;
+# rlogin (513): a NUL, the local and remote user names and the terminal -
+# then a byte from the server, 0 to go ahead or 1 and why not. After
+# that rsh and rexec carry the command's output, and rlogin a terminal
+# session, read like Telnet's (a password prompt, the lines typed). One
+# 'rsh' record per connection; a start that isn't one of these (a
+# scanner's HTTP request) is kept as the probe it is, with the answer.
+
+_RSH_SERVICES = {'rsh': 'rsh', 'rlogin': 'rlogin', 'exec': 'rexec'}
+_RSH_PORTS = {512: 'rexec', 513: 'rlogin', 514: 'rsh'}
+_RSH_MAX_START = 1024
+_RSH_MAX_TEXT = 200
+
+
+def _rsh_text(data, limit=_RSH_MAX_TEXT):
+    """Bytes as one line of text - for a command's output, an error, a
+    probe: line breaks and tabs as spaces (runs of them as one), other
+    bytes that aren't text as dots, as a hex dump shows them."""
+    text = ''.join(' ' if ch in '\t\r\n ' else ch if ch > ' ' and ch not in '\x7f\ufffd' else '.'
+                   for ch in data.decode('utf-8', 'replace'))
+    text = ' '.join(text.split())
+    return text if len(text) <= limit else text[:limit] + '...'
+
+
+def _rsh_names(fields):
+    """Whether a start's strings read as user names and a command: text,
+    with a user name to log in as - not a probe's bytes that happen to
+    hold NULs."""
+    try:
+        texts = [f.decode('utf-8') for f in fields]
+    except UnicodeDecodeError:
+        return False
+    return bool(texts[1]) and all(ch >= ' ' or ch == '\t' for t in texts for ch in t)
+
+
+class _RshSession:
+    __slots__ = ('flow', 'first', 'service', 'client', 'server', 'started', 'answered', 'body', 'terminal')
+
+    def __init__(self, flow, when, service):
+        self.flow, self.first, self.service = flow, when, service
+        self.client = b''          # the client's bytes until its start is read
+        self.server = b''          # the server's, after its answer, for output
+        self.started = False
+        self.answered = False
+        self.body = {'service': service}
+        self.terminal = None       # rlogin's session, read as Telnet's (_TelnetSession)
+
+
+class RShell:
+    """rsh, rlogin and rexec - see the comment above."""
+    event_type = 'rsh'
+    app_protos = ('rsh', 'rlogin', 'exec')
+    fields = ('@rsh', '@rlogin', '@exec')
+
+    def __init__(self):
+        self.sessions = {}         # flow key -> _RshSession
+
+    def feed(self, pkt, v):
+        service = _RSH_SERVICES.get(pkt.app)
+        data = _hex((v['@' + pkt.app] or [''])[0]) if service else b''
+        if not data:
+            return
+        session = self.sessions.get(pkt.flow.key)
+        if session is None:
+            session = self.sessions[pkt.flow.key] = _RshSession(pkt.flow, pkt.when, service)
+        # the server is whoever's on the service's port
+        if _RSH_PORTS.get(pkt.sport) == service:
+            self._from_server(session, data)
+        else:
+            self._from_client(session, data)
+
+    def _from_client(self, session, data):
+        if session.started:
+            if session.terminal is not None:
+                Telnet._from_client(session.terminal, data.decode('utf-8', 'replace'))
+            return
+        session.client = (session.client + data)[:_RSH_MAX_START]
+        start = session.client
+        if session.service == 'rlogin':
+            if start[:1] != b'\x00':
+                return
+            fields = start[1:].split(b'\x00')
+            if len(fields) < 4:
+                return
+            if not _rsh_names(fields[:3]):
+                session.started = True         # not rlogin's start: a probe
+                return
+            local, remote, terminal = (f.decode('utf-8', 'replace') for f in fields[:3])
+            session.body.update({'local_user': local, 'user': remote, 'terminal': terminal})
+            session.terminal = _TelnetSession(session.flow, session.first)
+            rest = b'\x00'.join(fields[3:])
+        else:
+            fields = start.split(b'\x00')
+            if len(fields) < 5:
+                return
+            if not (fields[0].isdigit() or not fields[0]) or not _rsh_names(fields[1:4]):
+                session.started = True         # not its start: a probe
+                return
+            port, first, second, command = (f.decode('utf-8', 'replace') for f in fields[:4])
+            if port not in ('', '0'):
+                session.body['stderr_port'] = int(port)
+            if session.service == 'rexec':
+                session.body.update({'user': first, 'password': second})
+            else:
+                session.body.update({'local_user': first, 'user': second})
+            session.body['command'] = command[:4 * _RSH_MAX_TEXT]
+            rest = b''
+        session.started = True
+        session.client = b''
+        if rest and session.terminal is not None:
+            Telnet._from_client(session.terminal, rest.decode('utf-8', 'replace'))
+
+    def _from_server(self, session, data):
+        if not session.answered:
+            session.answered = True
+            if data[:1] == b'\x00':
+                session.body['result'] = 'accepted'
+                data = data[1:]
+            else:
+                # a refusal: byte 1, then why
+                session.body['result'] = 'refused'
+                data = data[1:] if data[:1] == b'\x01' else data
+                session.server = data
+                return
+        if session.body.get('result') == 'refused':
+            session.server = (session.server + data)[:4 * _RSH_MAX_TEXT]
+        elif session.terminal is not None:
+            Telnet._from_server(session.terminal, data.decode('utf-8', 'replace'))
+        elif len(session.server) < 4 * _RSH_MAX_TEXT:
+            session.server += data
+
+    def finish(self):
+        records = []
+        for session in self.sessions.values():
+            body = dict(session.body)
+            if session.client and _rsh_text(session.client):
+                body['probe'] = _rsh_text(session.client)
+            if body.get('result') == 'refused' and session.server.strip(b'\x00\r\n'):
+                # the reason runs to the end of its line
+                body['error'] = _rsh_text(session.server.split(b'\n', 1)[0])
+            elif session.server:
+                body['output'] = _rsh_text(session.server)
+            if session.terminal is not None:
+                body.update({k: v for k, v in session.terminal.body.items() if k in ('password', 'login',
+                                                                                   'earlier_failures')})
+                if session.terminal.commands:
+                    body['commands'] = session.terminal.commands
+            body.setdefault('result', 'no response')
+            records.append((session.flow, session.first, 'rsh', body))
+        return records
+
+
+# ---------------------------------------------------------------- OpenVPN
+#
+# OpenVPN (UDP or TCP 1194), which Suricata doesn't parse. A client opens
+# with a hard reset (each retry is another, with a new session ID), the
+# server answers with its own, TLS runs inside the control channel - the
+# server's certificate readable, unless tls-crypt wraps it - and then the
+# tunnel's data flows, its keys renegotiated now and then. One record per
+# connection: how far it got, how often the client started over, how the
+# control channel is protected (tls-auth's HMAC, tls-crypt), the TLS
+# handshake's certificates and cipher suite, and the data packets each
+# way. tshark recognizes OpenVPN on port 1194 only.
+
+_OPENVPN_CLIENT_RESETS, _OPENVPN_SERVER_RESETS = {1, 7, 10}, {2, 8}
+_OPENVPN_SESSIONS_MAX = 1000       # client session IDs counted per connection (a flood's stop there)
+_OPENVPN_DATA = {6, 9}
+_OPENVPN_STAGES = ('client reset only', 'server answered', 'TLS handshake', 'established')
+
+
+class _OpenVPNSession:
+    __slots__ = ('flow', 'first', 'client', 'body', 'sessions', 'keys', 'stage')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.client = None         # the address that sent the hard reset
+        self.body = {'client_resets': 0, 'data_to_server': 0, 'data_to_client': 0}
+        self.sessions = set()      # the client's session IDs
+        self.keys = set()          # key IDs the data used
+        self.stage = 0
+
+
+class OpenVPN:
+    """OpenVPN - see the comment above."""
+    event_type = 'openvpn'
+    app_protos = ('openvpn',)
+    fields = ('openvpn.opcode', 'openvpn.keyid', 'openvpn.sessionid', 'openvpn.hmac', 'openvpn.wkc_len',
+              'openvpn.peerid', 'tls.handshake.type', 'tls.handshake.certificate', 'vals(tls.handshake.ciphersuite)',
+              'tls.handshake.ja4', 'tls.handshake.extensions_server_name')
+
+    def __init__(self):
+        self.sessions = {}         # flow key -> _OpenVPNSession
+
+    def feed(self, pkt, v):
+        opcodes = [_int(x) for x in v['openvpn.opcode']]
+        if not opcodes:
+            return
+        session = self.sessions.get(pkt.flow.key)
+        if session is None:
+            session = self.sessions[pkt.flow.key] = _OpenVPNSession(pkt.flow, pkt.when)
+        body = session.body
+        for i, opcode in enumerate(opcodes):
+            if opcode in _OPENVPN_CLIENT_RESETS:
+                session.client = pkt.src
+                body['client_resets'] += 1
+                body['version'] = 'V3 (tls-crypt-v2)' if opcode == 10 else 'V2' if opcode == 7 else 'V1'
+                if i < len(v['openvpn.sessionid']) and len(session.sessions) < _OPENVPN_SESSIONS_MAX:
+                    session.sessions.add(v['openvpn.sessionid'][i])
+            elif opcode in _OPENVPN_SERVER_RESETS:
+                session.stage = max(session.stage, 1)
+            elif opcode in _OPENVPN_DATA:
+                to_server = session.client is None or pkt.src == session.client
+                body['data_to_server' if to_server else 'data_to_client'] += 1
+                if i < len(v['openvpn.keyid']):
+                    session.keys.add(v['openvpn.keyid'][i])
+                if body['data_to_server'] and body['data_to_client']:
+                    session.stage = 3
+            elif opcode == 3:
+                body['soft_resets'] = body.get('soft_resets', 0) + 1
+        if v['openvpn.hmac']:
+            body['control_protection'] = 'tls-auth'
+        if v['openvpn.wkc_len'] or body.get('version', '').startswith('V3'):
+            body['control_protection'] = 'tls-crypt-v2'
+        self._tls(session, pkt, v)
+
+    @staticmethod
+    def _tls(session, pkt, v):
+        body = session.body
+        if v['tls.handshake.type']:
+            session.stage = max(session.stage, 2)
+        from_client = session.client is not None and pkt.src == session.client
+        for hexbytes in v['tls.handshake.certificate'][:1]:
+            key = 'client_certificate' if from_client else 'certificate'
+            if key not in body:
+                cert = _x509(hexbytes)
+                if cert:
+                    body[key] = {k: cert[k] for k in ('subject', 'issuerdn', 'notbefore', 'notafter', 'serial',
+                                                     'fingerprint') if k in cert}
+        if v['vals(tls.handshake.ciphersuite)'] and not from_client and '2' in v['tls.handshake.type']:
+            body['cipher_suite'] = v['vals(tls.handshake.ciphersuite)'][0]
+        if from_client and v['tls.handshake.ja4']:
+            body.setdefault('ja4', v['tls.handshake.ja4'][0])
+        if from_client and v['tls.handshake.extensions_server_name']:
+            body.setdefault('sni', v['tls.handshake.extensions_server_name'][0])
+
+    def finish(self):
+        records = []
+        for session in self.sessions.values():
+            body = dict(session.body)
+            body['stage'] = _OPENVPN_STAGES[session.stage]
+            if len(session.sessions) > 1:
+                body['client_sessions'] = len(session.sessions)
+            if len(session.keys) > 1:
+                body['data_keys'] = len(session.keys)
+            body.setdefault('control_protection', 'none' if session.stage >= 1 else '')
+            if not body['control_protection']:
+                del body['control_protection']
+            records.append((session.flow, session.first, 'openvpn', body))
+        return records
+
+
+# ---------------------------------------------------------------- WireGuard
+#
+# WireGuard (UDP, any port - tshark finds it by its messages' shape), which
+# Suricata doesn't parse. A peer opens with a handshake initiation, the
+# other answers with a response (or, under load, a cookie reply first),
+# and the tunnel's data follows - a new handshake every two minutes while
+# it's in use, by either side. Everything after the initiation's ephemeral
+# key is encrypted, so one record per connection holds what shows: how far
+# it got, the handshakes started and answered, the data packets each way
+# and the keepalives among them. The shape tshark goes by is loose - any
+# UDP payload starting 04 00 00 00 at a multiple of 16 bytes passes as
+# data - so a connection is kept only with an initiation, or data
+# addressed to one receiver index more than once.
+
+_WG_STAGES = ('initiation only', 'handshake', 'established')
+_WG_RECEIVERS_MAX = 4096           # receiver indexes tracked per connection (a flood's stop there)
+
+
+class _WireGuardSession:
+    __slots__ = ('flow', 'first', 'body', 'initiators', 'senders', 'answered', 'receivers', 'stage')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'initiations': 0, 'handshakes': 0, 'data_to_server': 0, 'data_to_client': 0}
+        self.initiators = set()    # the addresses that sent an initiation
+        self.senders = set()       # the initiations' sender indexes
+        self.answered = set()      # the sender indexes a response answered
+        self.receivers = {}        # (data packet's sender, receiver index) -> packets
+        self.stage = -1            # nothing that counts yet
+
+
+class WireGuard:
+    """WireGuard - see the comment above."""
+    event_type = 'wireguard'
+    app_protos = ('wg',)
+    fields = ('wg.type', 'wg.sender', 'wg.receiver', 'wg.keepalive', 'wg.mac2', 'wg.static', 'wg.receiver_pubkey')
+
+    def __init__(self):
+        self.sessions = {}         # flow key -> _WireGuardSession
+
+    def feed(self, pkt, v):
+        kind = _int(_first(v['wg.type']))
+        if kind not in (1, 2, 3, 4):
+            return
+        session = self.sessions.get(pkt.flow.key)
+        if session is None:
+            session = self.sessions[pkt.flow.key] = _WireGuardSession(pkt.flow, pkt.when)
+        body = session.body
+        if kind == 1:
+            body['initiations'] += 1
+            session.initiators.add(pkt.src)
+            session.senders.add(_first(v['wg.sender']))
+            session.stage = max(session.stage, 0)
+            if v['wg.static']:
+                body.setdefault('initiator_key', v['wg.static'][0])
+            if v['wg.receiver_pubkey']:
+                body.setdefault('responder_key', v['wg.receiver_pubkey'][0])
+        elif kind == 2:
+            receiver = _first(v['wg.receiver'])
+            if receiver in session.senders and receiver not in session.answered:
+                session.answered.add(receiver)
+                body['handshakes'] += 1
+                session.stage = max(session.stage, 1)
+        elif kind == 3:
+            body['cookie_replies'] = body.get('cookie_replies', 0) + 1
+        else:
+            to_server = pkt.src == pkt.flow.client
+            body['data_to_server' if to_server else 'data_to_client'] += 1
+            if v['wg.keepalive']:
+                body['keepalives'] = body.get('keepalives', 0) + 1
+            index = (pkt.src, _first(v['wg.receiver']))
+            if index in session.receivers or len(session.receivers) < _WG_RECEIVERS_MAX:
+                session.receivers[index] = session.receivers.get(index, 0) + 1
+        if kind in (1, 2) and _first(v['wg.mac2']).strip('0:'):
+            body['under_load'] = True
+
+    def finish(self):
+        records = []
+        for session in self.sessions.values():
+            body = dict(session.body)
+            data = body['data_to_server'] and body['data_to_client']
+            if session.stage >= 0:
+                body['stage'] = 'established' if data else _WG_STAGES[session.stage]
+            elif any(n > 1 for n in session.receivers.values()):
+                body['stage'] = 'established' if data else 'data only'    # began before the capture
+            else:
+                continue                   # a stray packet of the right shape
+            if len(session.initiators) > 1:
+                body['both_initiated'] = True
+            body['unanswered'] = body['initiations'] - body['handshakes']
+            records.append((session.flow, session.first, 'wireguard', body))
+        return records
+
+
+# ---------------------------------------------------------------- Oracle TNS
+#
+# Oracle's database protocol (TCP 1521), which Suricata doesn't parse. A
+# client connects to the listener naming a service or SID, its program,
+# host and OS user; the listener accepts, refuses (an unknown SID, which
+# is how SIDs are guessed), or redirects it. Then the login - the database
+# user and the client's terminal, program and machine, in the clear, the
+# password encrypted - and SQL, in the clear too, answered by the
+# server's ORA- errors. tshark names the connect and the listener's
+# answer; the login and SQL, inside the TTC calls tshark only partly
+# decodes, are read from the messages' bytes here. Two record types:
+# 'tns', one per connection, and 'tns_statement', one per distinct
+# statement on it - counted, so an application repeating a query doesn't
+# make a record of each. A connection to the listener can be a command
+# instead (lsnrctl's status, version, stop...), its answer kept.
+
+_TNS_SQL = re.compile(r'\s*(SELECT|WITH|INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|'
+                      r'BEGIN|DECLARE|CALL|EXPLAIN|LOCK|COMMENT|RENAME|AUDIT|NOAUDIT|PURGE|FLASHBACK|COMMIT|'
+                      r'ROLLBACK|SAVEPOINT|SET\s+(?:ROLE|TRANSACTION|CONSTRAINTS?))\b', re.I)
+_TNS_OBJECT_VERBS = ('CREATE', 'ALTER', 'DROP', 'TRUNCATE')
+_TNS_ORA = re.compile(rb'ORA-(\d{5}): ?([^\x00\n]*)')
+# A password a statement sets: Oracle's and MySQL's IDENTIFIED BY (MySQL's
+# also WITH <plugin> BY and BY PASSWORD), MySQL's SET PASSWORD, SQL
+# Server's PASSWORD = '...' (CREATE and ALTER LOGIN) - and the old one
+# changing it gives, and SQL Server's sp_addlogin and sp_password
+_SQL_PASSWORDS = (re.compile(r'(\bIDENTIFIED\s+(?:WITH\s+\S+\s+)?(?:BY|AS)\s+(?:PASSWORD\s+)?)'
+                             r'(\'[^\']*\'|"[^"]*"|[^\s;,]+)', re.I),
+                  re.compile(r'(\bSET\s+PASSWORD\b[^=]*=\s*(?:PASSWORD\s*\(\s*)?)(\'[^\']*\'|"[^"]*")', re.I),
+                  re.compile(r"(\bPASSWORD\s*=\s*N?)('[^']*')", re.I),
+                  # ALTER LOGIN's OLD_PASSWORD, Oracle's IDENTIFIED BY ... REPLACE <old>
+                  re.compile(r"(\bOLD_PASSWORD\s*=\s*N?)('[^']*')", re.I),
+                  re.compile(r'(\bIDENTIFIED\s+BY\s+\S+\s+REPLACE\s+)(\'[^\']*\'|"[^"]*"|[^\s;,]+)', re.I),
+                  # sp_addlogin's password (its second argument), sp_password's
+                  # old and new ones (its first and second)
+                  re.compile(r"(\bsp_addlogin\s+(?:@\w+\s*=\s*)?N?'[^']*'\s*,\s*(?:@\w+\s*=\s*)?N?)('[^']*')", re.I),
+                  re.compile(r"(\bsp_password\s+(?:@\w+\s*=\s*)?N?)('[^']*')", re.I),
+                  re.compile(r"(\bsp_password\s+(?:@\w+\s*=\s*)?(?:N?'[^']*'|NULL|\*\*\*)\s*,\s*(?:@\w+\s*=\s*)?N?)('[^']*')",
+                             re.I))
+
+
+def _sql_password(statement):
+    """A statement with any password it sets masked (***), and that
+    password, or None."""
+    password = None
+    for pattern in _SQL_PASSWORDS:
+        match = pattern.search(statement)
+        if match and password is None:
+            password = match.group(2).strip('\'"')
+        statement = pattern.sub(r'\1***', statement)
+    return statement, password
+_TNS_NO_DATA = '01403'                  # a fetch's end, not a failure
+_TNS_LOGIN_KEYS = {'AUTH_TERMINAL': 'terminal', 'AUTH_PROGRAM_NM': 'program', 'AUTH_MACHINE': 'machine',
+                   'AUTH_PID': 'pid', 'AUTH_SID': 'os_user'}
+_TNS_SERVER_KEYS = {'AUTH_DBNAME': 'database', 'AUTH_INSTANCENAME': 'instance', 'AUTH_SC_SERVER_HOST': 'server_host'}
+_TNS_STATEMENT_MAX = 2000               # characters of a statement kept
+_TNS_STATEMENTS_MAX = 500               # distinct statements kept per connection
+_TNS_TEXT_MAX = 300
+
+
+def _tns_text(data):
+    """Bytes as text if they're printable UTF-8 - else None."""
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        return None
+    return text if text and all(ch.isprintable() or ch in '\t\r\n' for ch in text) else None
+
+
+def _tns_dechunk(data, at):
+    """A long TTC string (one past its 0xfe): its chunks, each led by its
+    length, to the empty one that ends them."""
+    out, end = bytearray(), len(data)
+    while at < end and data[at]:
+        out += data[at + 1:at + 1 + data[at]]
+        at += 1 + data[at]
+    return bytes(out)
+
+
+def _tns_sql(data):
+    """The SQL a client's call carries - the longest length-prefixed string
+    (or chunked one) starting like a statement - or, failing that, a run
+    of text that does, after binary (newer clients send it unprefixed,
+    its length given earlier in the call) - or None."""
+    if not _TNS_SQL.search(data.decode('latin-1')):
+        return None
+    best = None
+    for i, length in enumerate(data):
+        if i and 0x20 <= length < 0x7f and 0x20 <= data[i - 1] < 0x7f:
+            continue        # (a letter inside text, not a length before it)
+        raw = _tns_dechunk(data, i + 1) if length == 0xfe else data[i + 1:i + 1 + length] if length else b''
+        if len(raw) < 4 or (best and len(raw) <= len(best)) or (length != 0xfe and len(raw) != length):
+            continue
+        text = _tns_text(raw[:-1] if raw.endswith(b'\x00') else raw)     # (older clients count a NUL)
+        if text and _TNS_SQL.match(text) and (not text.lstrip().upper().startswith('WITH') or
+                                              re.search(r'\bSELECT\b', text, re.I)):
+            best = text
+    if best is None:
+        for match in re.finditer(rb'(?<![\x20-\x7e])[\x20-\x7e\t\r\n]{6,}', data):
+            text = match.group().decode()
+            if (not best or len(text) > len(best)) and _TNS_SQL.match(text) and (
+                    not text.lstrip().upper().startswith('WITH') or re.search(r'\bSELECT\b', text, re.I)):
+                best = text
+    return best.strip() if best else None
+
+
+def _tns_value(data, at):
+    """The printable value after a login key: its length (one byte) comes
+    after up to five bytes of the value's encoded length."""
+    for skip in range(6):
+        if at + skip >= len(data):
+            break
+        length = data[at + skip]
+        value = data[at + skip + 1:at + skip + 1 + length]
+        if length and len(value) == length:
+            text = _tns_text(value)
+            if text is not None:
+                return '' if text.startswith('AUTH_') else text
+    return ''
+
+
+def _tns_login(data):
+    """A login message's (user, {key: value}): its AUTH_ keys, each led by
+    its own length - and the user, the length-prefixed name just before
+    the first of them (a client's), or None."""
+    pairs, first = {}, None
+    for match in re.finditer(rb'AUTH_[A-Z0-9_]+', data):
+        # (its length says where the name ends: a value's length can follow
+        # as a letter - 0x48 is H)
+        length = data[match.start() - 1] if match.start() else 0
+        if not 5 < length <= len(match.group()):
+            continue
+        if first is None:
+            first = match.start() - 1
+        pairs.setdefault(match.group()[:length].decode(), _tns_value(data, match.start() + length))
+    user = None
+    for gap in range(6):
+        end = (first or 0) - gap
+        for length in range(1, min(end, 129)):
+            start = end - length
+            if start > 0 and data[start - 1] == length:
+                name = _tns_text(data[start:end])
+                if name and re.fullmatch(r'[\w$#@."-]+', name) and not name.startswith('AUTH_'):
+                    user = name
+                    break
+        if user or first is None:
+            break
+    return user, pairs
+
+
+def _tns_descriptor(text):
+    """A connect descriptor's (KEY=value) pairs, the first of each key -
+    but the client's PROGRAM, HOST and USER from its CID, whose HOST isn't
+    the ADDRESS's (the server's)."""
+    pairs = {}
+    text = text or ''
+    cid = re.search(r'\(\s*CID\s*=((?:\([^()]*\))*)\)', text, re.I)
+    if cid:
+        pairs.update(('CID_' + k, v) for k, v in _tns_descriptor(cid.group(1)).items())
+    for key, value in re.findall(r'\(\s*([A-Za-z_]+)\s*=\s*([^()]*?)\s*\)', text):
+        pairs.setdefault(key.upper(), value)
+    return pairs
+
+
+def _tns_vsnnum(text):
+    """A listener's VSNNUM as its version: 153092352 -> 9.2.0.1.0."""
+    n = _int(_tns_descriptor(text).get('VSNNUM'))
+    if not n:
+        return None
+    return f'{n >> 24}.{n >> 20 & 0xf}.{n >> 12 & 0xff}.{n >> 8 & 0xf}.{n & 0xff}'
+
+
+def _tns_verb(statement):
+    """A statement's kind: its first word - and for DDL the object's kind
+    too (CREATE USER, DROP TABLE, CREATE OR REPLACE PROCEDURE)."""
+    words = statement.upper().split()
+    if words[0] in _TNS_OBJECT_VERBS and len(words) > 1:
+        rest = words[1:4] if words[1:3] == ['OR', 'REPLACE'] else words[1:2]
+        if rest in (['SERVER'], ['APPLICATION']) and len(words) > 2:
+            rest = words[1:3]                 # (SQL Server's SERVER ROLE, SERVER AUDIT, APPLICATION ROLE)
+        if rest and rest[-1] in ('PUBLIC', 'GLOBAL', 'UNIQUE', 'BITMAP') and len(words) > len(rest) + 1:
+            rest = words[1:len(rest) + 2]
+        return ' '.join([words[0]] + rest)
+    return words[0]
+
+
+class _TNSConnection:
+    __slots__ = ('flow', 'first', 'client', 'body', 'statements', 'waiting', 'logging_in')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.client = None
+        self.body = {'statements': 0}
+        self.statements = {}      # statement -> its record's [when, body]
+        self.waiting = None       # the statement whose answer is next
+        self.logging_in = False   # a login's second message sent, not yet answered
+
+
+class TNS:
+    """Oracle TNS - see the comment above."""
+    event_type = 'tns'
+    app_protos = ('tns',)
+    fields = ('tns.type', 'tns.version', 'tns.connect_data', 'tns.accept_data', 'tns.refuse_data',
+              'tns.redirect_data', 'tns.data_setp_req.cli_plat', 'tns.data_opi.vers2.banner', '@tns')
+
+    def __init__(self):
+        self.connections = {}     # flow key -> _TNSConnection
+
+    def feed(self, pkt, v):
+        if not v['tns.type']:
+            return
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _TNSConnection(pkt.flow, pkt.when)
+        body = conn.body
+        types = [_int(t) for t in v['tns.type']]
+        if 1 in types and conn.client is None:
+            conn.client = pkt.src
+            descriptor = _tns_descriptor(_first(v['tns.connect_data']))
+            for key, name in (('SERVICE_NAME', 'service_name'), ('SID', 'sid'), ('CID_PROGRAM', 'client_program'),
+                              ('CID_HOST', 'client_host'), ('CID_USER', 'client_user'), ('COMMAND', 'command')):
+                if descriptor.get(key):
+                    body[name] = descriptor[key][:_TNS_TEXT_MAX]
+            if v['tns.version']:
+                body['version'] = _int(v['tns.version'][0])
+        from_client = pkt.src == (conn.client or pkt.flow.client)
+        self._listener(body, types, v)
+        if from_client and v['tns.data_setp_req.cli_plat']:
+            body.setdefault('client_platform', v['tns.data_setp_req.cli_plat'][0])
+        if v['tns.data_opi.vers2.banner']:
+            body.setdefault('banner', v['tns.data_opi.vers2.banner'][0].replace('\\n', '\n').split('\n')[0])
+        for kind, raw in zip(types, v['@tns']):
+            if kind == 6:
+                data = _hex(raw)
+                if from_client:
+                    self._call(conn, pkt.when, data)
+                else:
+                    self._reply(conn, data)
+
+    @staticmethod
+    def _listener(body, types, v):
+        if 'result' in body:
+            return
+        if 2 in types:
+            body['result'] = 'accepted'
+            if body.get('command') and v['tns.accept_data']:
+                body['response'] = v['tns.accept_data'][0][:_TNS_TEXT_MAX]
+        elif 4 in types:
+            refuse = _first(v['tns.refuse_data'])
+            error = _tns_descriptor(refuse).get('ERR')
+            # (a listener answers a command with a refuse - ERR=0 when it's done)
+            body['result'] = 'answered' if body.get('command') and error in (None, '0') else 'refused'
+            if error and error != '0':
+                body['error'] = f'ORA-{int(error):05d}' if error.isascii() and error.isdigit() else error
+            version = _tns_vsnnum(refuse)
+            if version:
+                body['listener_version'] = version
+            if body.get('command'):
+                body['response'] = refuse[:_TNS_TEXT_MAX]
+        elif 5 in types:
+            body['result'] = 'redirected'
+            body['redirect'] = _first(v['tns.redirect_data'])[:_TNS_TEXT_MAX]
+
+    def _call(self, conn, when, data):
+        body = conn.body
+        if b'AUTH_' in data:
+            user, pairs = _tns_login(data)
+            if user:
+                body.setdefault('db_user', user)
+            for key, name in _TNS_LOGIN_KEYS.items():
+                if pairs.get(key):
+                    body.setdefault(name, pairs[key][:_TNS_TEXT_MAX])
+            if 'AUTH_PASSWORD' in pairs:
+                conn.logging_in = True
+            return
+        statement = _tns_sql(data)
+        if not statement:
+            return
+        body['statements'] += 1
+        record = conn.statements.get(statement)
+        if record is None:
+            if len(conn.statements) >= _TNS_STATEMENTS_MAX:
+                body['statements_not_kept'] = body.get('statements_not_kept', 0) + 1
+                conn.waiting = None
+                return
+            shown, password = _sql_password(statement)
+            record = conn.statements[statement] = [when, {'statement': shown[:_TNS_STATEMENT_MAX],
+                                                          'verb': _tns_verb(statement), 'count': 0}]
+            if password:
+                record[1]['password'] = password
+        record[1]['count'] += 1
+        conn.waiting = record[1]
+
+    def _reply(self, conn, data):
+        body = conn.body
+        errors = [(code.decode(), (b'ORA-' + code + b': ' + text).decode('utf-8', 'replace').strip())
+                  for code, text in _TNS_ORA.findall(data)]
+        errors = [(code, text[:_TNS_TEXT_MAX]) for code, text in errors if code != _TNS_NO_DATA]
+        if b'AUTH_' in data:
+            _, pairs = _tns_login(data)
+            for key, name in _TNS_SERVER_KEYS.items():
+                if pairs.get(key):
+                    body.setdefault(name, pairs[key][:_TNS_TEXT_MAX])
+            if conn.logging_in and ('AUTH_SESSION_ID' in pairs or 'AUTH_VERSION_NO' in pairs):
+                body['login'] = 'succeeded'
+                body.pop('login_error', None)
+                conn.logging_in = False
+        if conn.logging_in and errors:
+            body['login'], body['login_error'] = 'failed', errors[0][1]
+            conn.logging_in = False
+            return
+        for code, _ in errors:
+            counts = body.setdefault('errors', {})
+            counts[f'ORA-{code}'] = counts.get(f'ORA-{code}', 0) + 1
+        if conn.waiting is not None:
+            conn.waiting.setdefault('result', errors[0][1] if errors else 'ok')
+            conn.waiting = None
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            body = dict(conn.body)
+            body.setdefault('result', 'no response' if conn.client else 'no connect seen')
+            if body.get('login') is None and conn.logging_in:
+                body['login'] = 'no response'
+            records.append((conn.flow, conn.first, 'tns', body))
+            for when, statement in conn.statements.values():
+                statement = dict(statement, result=statement.get('result', 'no response'))
+                for key in ('db_user', 'service_name', 'sid'):
+                    if key in body:
+                        statement[key] = body[key]
+                records.append((conn.flow, when, 'tns_statement', statement))
+        return records
+
+
+# ---------------------------------------------------------------- memcached
+#
+# memcached (TCP or UDP 11211), which Suricata doesn't parse: a cache with
+# no login (but the binary protocol's rarely used SASL), whose UDP port
+# answered anyone - a request's source address spoofed, its stats or a
+# large value went to the victim, up to tens of thousands of times the
+# request's size: the 2018 attacks' amplifier (CVE-2018-1000115). One
+# record per connection or UDP exchange: the commands and keys, the
+# version the server gave, its errors, and the bytes each way - for UDP,
+# the amplification. Read from the messages' bytes, text or binary
+# protocol: tshark decodes neither over UDP (each datagram leads with an
+# 8-byte frame header), and leaves gaps in TCP. A stored or returned value
+# is skipped by its length - its contents are never read as commands -
+# and a packet that's neither (scanners send random bytes to the port)
+# makes no record.
+
+_MEMCACHE_COMMANDS = frozenset(
+    'get gets gat gats set add replace append prepend cas delete incr decr touch stats flush_all version '
+    'verbosity quit shutdown cache_memlimit slabs lru_crawler lru watch mn mg ms md ma me misbehave'.split())
+_MEMCACHE_STORAGE = frozenset('set add replace append prepend cas'.split())
+_MEMCACHE_REPLIES = frozenset('VALUE END STORED NOT_STORED EXISTS NOT_FOUND DELETED TOUCHED OK ERROR CLIENT_ERROR '
+                              'SERVER_ERROR STAT VERSION RESET HD VA EN NF NS EX MN'.split())
+_MEMCACHE_CHANGES = frozenset('set add replace append prepend cas delete incr decr touch flush_all ms md ma'.split())
+_MEMCACHE_OPCODES = {0x00: 'get', 0x01: 'set', 0x02: 'add', 0x03: 'replace', 0x04: 'delete', 0x05: 'incr',
+                     0x06: 'decr', 0x07: 'quit', 0x08: 'flush_all', 0x09: 'get', 0x0a: 'noop', 0x0b: 'version',
+                     0x0c: 'get', 0x0d: 'get', 0x0e: 'append', 0x0f: 'prepend', 0x10: 'stats', 0x11: 'set',
+                     0x12: 'add', 0x13: 'replace', 0x14: 'delete', 0x15: 'incr', 0x16: 'decr', 0x17: 'quit',
+                     0x18: 'flush_all', 0x19: 'append', 0x1a: 'prepend', 0x1b: 'verbosity', 0x1c: 'touch',
+                     0x1d: 'gat', 0x1e: 'gat', 0x20: 'sasl_list_mechs', 0x21: 'sasl_auth', 0x22: 'sasl_step'}
+_MEMCACHE_STATUS = {0x01: 'key not found', 0x02: 'key exists', 0x03: 'value too large', 0x04: 'invalid arguments',
+                    0x05: 'item not stored', 0x06: 'non-numeric value', 0x20: 'authentication error',
+                    0x21: 'authentication continue', 0x81: 'unknown command', 0x82: 'out of memory'}
+_MEMCACHE_KEYS_MAX = 10
+_MEMCACHE_PORT = 11211
+
+
+class _MemcacheExchange:
+    __slots__ = ('flow', 'first', 'body', 'keys', 'skip', 'known')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'request_bytes': 0, 'response_bytes': 0}
+        self.keys = {}                 # key -> None, in first-seen order
+        self.skip = [0, 0]             # value bytes still to come: from the client, from the server
+        self.known = False             # a message of memcached's seen
+
+
+class Memcache:
+    """memcached - see the comment above."""
+    event_type = 'memcache'
+    app_protos = ('memcache',)
+    fields = ('@memcache',)
+
+    def __init__(self):
+        self.exchanges = {}            # flow key -> _MemcacheExchange
+
+    def feed(self, pkt, v):
+        if not v['@memcache']:
+            return
+        exchange = self.exchanges.get(pkt.flow.key)
+        if exchange is None:
+            exchange = self.exchanges[pkt.flow.key] = _MemcacheExchange(pkt.flow, pkt.when)
+        if _MEMCACHE_PORT in (pkt.sport, pkt.dport):
+            from_client = pkt.dport == _MEMCACHE_PORT and pkt.sport != _MEMCACHE_PORT
+        else:
+            from_client = pkt.src == pkt.flow.client
+        udp = pkt.flow.proto == 'UDP'
+        for raw in v['@memcache']:
+            data = _hex(raw)
+            exchange.body['request_bytes' if from_client else 'response_bytes'] += len(data)
+            if udp:
+                if len(data) < 8:
+                    continue
+                if from_client:
+                    exchange.skip[0] = 0          # each request is whole in its datagram
+                data = data[8:]
+            self._chunk(exchange, data, from_client)
+
+    def _chunk(self, exchange, data, from_client):
+        side = 0 if from_client else 1
+        at = min(exchange.skip[side], len(data))
+        exchange.skip[side] -= at
+        while at < len(data):
+            if data[at] in (0x80, 0x81):
+                at = self._binary(exchange, data, at, side)
+            else:
+                at = self._text(exchange, data, at, side)
+            if at is None:
+                return
+
+    def _binary(self, exchange, data, at, side):
+        if len(data) - at < 24:
+            return None
+        magic, opcode, keylen, extlen, _, status, bodylen = struct.unpack('!BBHBBHI', data[at:at + 12])
+        if (magic == 0x80) != (side == 0) or extlen + keylen > bodylen:
+            return None
+        body, exchange.known = exchange.body, True
+        body['encoding'] = 'binary'
+        payload = data[at + 24:at + 24 + bodylen]
+        exchange.skip[side] = bodylen - len(payload)
+        name = _MEMCACHE_OPCODES.get(opcode, f'opcode 0x{opcode:02x}')
+        key = payload[extlen:extlen + keylen]
+        value = payload[extlen + keylen:]
+        if side == 0:
+            self._command(exchange, name, [key.decode('utf-8', 'replace')] if key else [])
+        else:
+            body['answered'] = True
+            if status and status != 0x21:
+                text = _MEMCACHE_STATUS.get(status, f'status 0x{status:04x}')
+                if status == 0x01:
+                    body['not_found'] = body.get('not_found', 0) + 1
+                else:
+                    body['errors'] = body.get('errors', 0) + 1
+                    body['last_error'] = text
+            if name == 'version' and not status and value:
+                body['version'] = value.decode('utf-8', 'replace')[:64]
+            if name in ('sasl_auth', 'sasl_step') and status in (0, 0x20):
+                body['login'] = 'succeeded' if status == 0 else 'failed'
+        return at + 24 + bodylen
+
+    def _text(self, exchange, data, at, side):
+        end = data.find(b'\n', at)
+        line = data[at:end if end >= 0 else len(data)].rstrip(b'\r')
+        words = line.decode('utf-8', 'replace').split()
+        next_at = len(data) if end < 0 else end + 1
+        if not words:
+            return next_at
+        body = exchange.body
+        if side == 0:
+            name = words[0].lower()
+            if name not in _MEMCACHE_COMMANDS:
+                if exchange.known:
+                    body['unknown'] = body.get('unknown', 0) + 1
+                return None             # not memcached's - nothing more of it is read
+            exchange.known = True
+            body.setdefault('encoding', 'text')
+            keys = words[2:] if name in ('gat', 'gats') else words[1:] if name in ('get', 'gets') else \
+                words[1:2] if name not in ('stats', 'flush_all', 'version', 'verbosity', 'quit', 'shutdown') else []
+            self._command(exchange, name, keys)
+            size = _int(words[4]) if name in _MEMCACHE_STORAGE and len(words) > 4 else \
+                _int(words[2]) if name == 'ms' and len(words) > 2 else None
+            if name == 'stats':
+                asked = body.setdefault('stats', [])
+                request = ' '.join(words[:2]).lower()[:40]
+                if request not in asked and len(asked) < _MEMCACHE_KEYS_MAX:
+                    asked.append(request)
+        else:
+            reply = words[0]
+            # (a number - incr's or decr's answer - only once memcached's own
+            # messages were seen: a random byte string can start '3\n' too)
+            if reply not in _MEMCACHE_REPLIES and not (reply.isdigit() and exchange.known):
+                return None
+            exchange.known = True
+            body['answered'] = True
+            size = _int(words[3]) if reply == 'VALUE' and len(words) > 3 else \
+                _int(words[1]) if reply == 'VA' and len(words) > 1 else None
+            if reply == 'VERSION' and len(words) > 1:
+                body['version'] = words[1][:64]
+            elif reply == 'STAT' and len(words) > 2 and words[1] == 'version':
+                body['version'] = words[2][:64]
+            elif reply in ('ERROR', 'CLIENT_ERROR', 'SERVER_ERROR'):
+                body['errors'] = body.get('errors', 0) + 1
+                body['last_error'] = ' '.join(words)[:120]
+            elif reply in ('NOT_FOUND', 'EN', 'NF'):
+                body['not_found'] = body.get('not_found', 0) + 1
+        if size and size > 0:                   # (a negative size would step back onto this line)
+            value_end = next_at + size + 2
+            exchange.skip[side] = max(0, value_end - len(data))
+            return min(value_end, len(data))
+        return next_at
+
+    @staticmethod
+    def _command(exchange, name, keys):
+        commands = exchange.body['commands']
+        commands[name] = commands.get(name, 0) + 1
+        for key in keys:
+            if len(exchange.keys) < _MEMCACHE_KEYS_MAX:
+                exchange.keys.setdefault(key[:250], None)
+
+    def finish(self):
+        records = []
+        for exchange in self.exchanges.values():
+            if not exchange.known:
+                continue
+            body = dict(exchange.body)
+            body.setdefault('answered', False)
+            if exchange.keys:
+                body['keys'] = list(exchange.keys)
+            changes = sum(n for c, n in body['commands'].items() if c in _MEMCACHE_CHANGES)
+            if changes:
+                body['changes'] = changes
+            if exchange.flow.proto == 'UDP' and body['answered'] and body['request_bytes']:
+                body['amplification'] = round(body['response_bytes'] / body['request_bytes'], 1)
+            records.append((exchange.flow, exchange.first, 'memcache', body))
+        return records
+
+
+# ---------------------------------------------------------------- Omron FINS
+#
+# Omron's PLC protocol (UDP or TCP 9600), which Suricata doesn't parse:
+# commands to a PLC's memory, program, mode, clock and files, with no
+# login - only a program area's protection password, sent in the clear.
+# Two record types: 'fins', one per connection (FINS/TCP) or exchange
+# (UDP): the commands, the PLC's model and version if a Controller Data
+# Read was answered, the nodes, the end codes; and 'fins_action', one per
+# command that changes or controls the PLC - a memory or program write, a
+# run or stop, a forced set, a file deleted - with its answer. Reads (the
+# polling an HMI does) are only counted.
+
+_FINS_READS = frozenset({0x0101, 0x0104, 0x0201, 0x0220, 0x0306, 0x0501, 0x0502, 0x0601, 0x0602, 0x0603, 0x0620,
+                         0x0701, 0x0801, 0x0802, 0x0920, 0x2102, 0x2201, 0x2202, 0x220f, 0x2210, 0x230a, 0x2603})
+_FINS_DATA_PREVIEW = 32
+
+
+class _FINSConnection:
+    __slots__ = ('flow', 'first', 'body', 'waiting')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'answered': False}
+        self.waiting = {}         # (service ID, command) -> [when, action body]
+
+
+class FINS:
+    """Omron FINS - see the comment above."""
+    event_type = 'fins'
+    app_protos = ('omron',)
+    fields = ('omron.tcp.command', 'omron.tcp.client_node_address', 'omron.tcp.server_node_address', 'omron.icf',
+              'omron.sid', 'omron.command', 'vals(omron.command)', 'omron.response.code', 'vals(omron.response.code)',
+              'vals(omron.memory.area.read)', 'omron.memory.address', 'omron.memory.numitems', 'omron.command.data',
+              'omron.program_number', 'vals(omron.mode_code)', 'omron.controller.model', 'omron.controller.version',
+              'omron.password', 'omron.da1', 'omron.sa1')
+
+    def __init__(self):
+        self.connections = {}     # flow key -> _FINSConnection
+        self.actions = []         # (flow, when, body)
+
+    def feed(self, pkt, v):
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _FINSConnection(pkt.flow, pkt.when)
+        body = conn.body
+        first = lambda name: _first(v[name])
+        for name, key in (('omron.tcp.client_node_address', 'client_node'), ('omron.tcp.server_node_address', 'server_node')):
+            if _int(first(name)):
+                body.setdefault(key, _int(first(name)))
+        icf, command = _int(first('omron.icf')), _int(first('omron.command'))
+        if icf is None or command is None:
+            if first('omron.tcp.command') and pkt.src != pkt.flow.client:
+                body['answered'] = True
+            return
+        name = first('vals(omron.command)') or f'command 0x{command:04x}'
+        key = (first('omron.sid'), command)
+        if not icf & 0x40:                   # a command
+            commands = body['commands']
+            commands[name] = commands.get(name, 0) + 1
+            for field, k in (('omron.da1', 'node'), ('omron.sa1', 'source_node')):
+                if first(field):
+                    body.setdefault(k, _int(first(field)))
+            if command in _FINS_READS:
+                conn.waiting[key] = None
+                return
+            action = {'command': name, 'code': f'0x{command:04x}'}
+            if first('vals(omron.memory.area.read)'):
+                action['area'] = first('vals(omron.memory.area.read)')
+            if first('omron.memory.address'):
+                action['address'] = first('omron.memory.address')
+            if first('omron.memory.numitems'):
+                action['count'] = _int(first('omron.memory.numitems'))
+            if first('vals(omron.mode_code)'):
+                action['mode'] = first('vals(omron.mode_code)')
+            if first('omron.program_number') and command >= 0x0300:
+                action['program'] = first('omron.program_number')
+            if first('omron.password'):
+                action['password'] = first('omron.password')
+            data = _hex(first('omron.command.data'))
+            if data:
+                action['data'] = data[:_FINS_DATA_PREVIEW].hex() + ('...' if len(data) > _FINS_DATA_PREVIEW else '')
+            if 'node' in body:
+                action['node'] = body['node']
+            conn.waiting[key] = [pkt.when, action]
+            self.actions.append((pkt.flow, conn.waiting[key]))
+            return
+        body['answered'] = True
+        code = _int(first('omron.response.code'))
+        result = 'ok' if code == 0 else first('vals(omron.response.code)') or (f'0x{code:04x}' if code is not None else '')
+        if code:
+            errors = body.setdefault('errors', {})
+            errors[result] = errors.get(result, 0) + 1
+        if command == 0x0501 and code == 0:
+            for field, k in (('omron.controller.model', 'model'), ('omron.controller.version', 'version')):
+                if first(field).strip():
+                    body[k] = first(field).strip()
+        pending = conn.waiting.pop(key, None)
+        if pending is not None and result:
+            pending[1].setdefault('result', result)
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            if conn.body['commands'] or conn.body['answered']:
+                records.append((conn.flow, conn.first, 'fins', dict(conn.body)))
+        for flow, (when, action) in self.actions:
+            records.append((flow, when, 'fins_action', dict(action, result=action.get('result', 'no response'))))
+        return records
+
+
+# ---------------------------------------------------------------- HART-IP
+#
+# HART over IP (UDP or TCP 5094), which Suricata doesn't parse: a host -
+# an asset manager, a DCS - opens a session with a gateway or instrument,
+# then passes HART commands through to the field devices behind it:
+# reading their identity and process values, or writing their tag, range,
+# damping, units - or fixing their 4-20 mA output, trimming it, resetting
+# them. HART-IP 1 has no login. Two record types: 'hart_ip', one per
+# session - its host type, the commands, the devices that answered (who
+# made them, their tag, their primary variable), the errors; and
+# 'hart_ip_action', one per command that changes or commands a device,
+# with its answer. Reads are only counted.
+
+_HART_COMMANDS = {
+    0: 'Read Unique Identifier', 1: 'Read Primary Variable', 2: 'Read Loop Current and Percent of Range',
+    3: 'Read Dynamic Variables and Loop Current', 6: 'Write Polling Address', 7: 'Read Loop Configuration',
+    8: 'Read Dynamic Variable Classifications', 9: 'Read Device Variables with Status',
+    11: 'Read Unique Identifier Associated With Tag', 12: 'Read Message', 13: 'Read Tag, Descriptor, Date',
+    14: 'Read Primary Variable Transducer Information', 15: 'Read Device Information',
+    16: 'Read Final Assembly Number', 17: 'Write Message', 18: 'Write Tag, Descriptor, Date',
+    19: 'Write Final Assembly Number', 20: 'Read Long Tag', 21: 'Read Unique Identifier Associated With Long Tag',
+    22: 'Write Long Tag', 33: 'Read Device Variables', 34: 'Write Primary Variable Damping Value',
+    35: 'Write Primary Variable Range Values', 36: 'Set Primary Variable Upper Range Value',
+    37: 'Set Primary Variable Lower Range Value', 38: 'Reset Configuration Changed Flag',
+    40: 'Enter/Exit Fixed Current Mode', 41: 'Perform Self Test', 42: 'Perform Device Reset',
+    43: 'Set Primary Variable Zero', 44: 'Write Primary Variable Units', 45: 'Trim Loop Current Zero',
+    46: 'Trim Loop Current Gain', 47: 'Write Primary Variable Transfer Function', 48: 'Read Additional Device Status',
+    49: 'Write Primary Variable Transducer Serial Number', 50: 'Read Dynamic Variable Assignments',
+    51: 'Write Dynamic Variable Assignments', 52: 'Set Device Variable Zero', 53: 'Write Device Variable Units',
+    54: 'Read Device Variable Information', 55: 'Write Device Variable Damping Value',
+    56: 'Write Device Variable Transducer Serial Number', 57: 'Read Unit Tag, Descriptor, Date',
+    58: 'Write Unit Tag, Descriptor, Date', 59: 'Write Number of Response Preambles',
+    60: 'Read Analog Channel and Percent of Range', 66: 'Enter/Exit Fixed Analog Channel Mode',
+    67: 'Trim Analog Channel Zero', 68: 'Trim Analog Channel Gain', 71: 'Lock Device', 72: 'Squawk',
+    73: 'Find Device', 74: 'Read I/O System Capabilities', 75: 'Poll Sub-Device', 76: 'Read Lock Device State',
+    77: 'Send Command to Sub-Device', 78: 'Read Aggregated Commands', 79: 'Write Device Variable',
+    80: 'Read Device Variable Trim Points', 82: 'Write Device Variable Trim Point', 83: 'Reset Device Variable Trim',
+    89: 'Set Real-Time Clock', 90: 'Read Real-Time Clock', 512: 'Read Country Code', 513: 'Write Country Code'}
+_HART_READS = frozenset({0, 1, 2, 3, 7, 8, 9, 11, 12, 13, 14, 15, 16, 20, 21, 33, 48, 50, 54, 57, 60, 72, 73, 74, 75,
+                         76, 78, 80, 90, 512})
+_HART_RESPONSES = {0: 'success', 2: 'invalid selection', 3: 'passed parameter too large',
+                   4: 'passed parameter too small', 5: 'too few data bytes', 6: 'device-specific command error',
+                   7: 'in write protect mode', 16: 'access restricted', 32: 'busy', 33: 'delayed response initiated',
+                   64: 'command not implemented'}
+_HART_MESSAGES = {0: 'Session Initiate', 1: 'Session Close', 2: 'Keep Alive', 3: 'Pass Through', 4: 'Direct PDU',
+                  5: 'Read Audit Log'}
+_HART_DEVICES_MAX = 10
+
+
+def _hart_address(text):
+    """A HART long address without its first byte's top two bits - the
+    master and burst-mode bits - so a device has one address, whoever asks."""
+    data = _hex(text)
+    return (bytes([data[0] & 0x3f]) + data[1:]).hex() if len(data) == 5 else text
+
+
+class _HARTSession:
+    __slots__ = ('flow', 'first', 'body', 'devices', 'waiting', 'host', 'gateway')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'answered': False}
+        self.devices = {}         # address -> what it said
+        self.waiting = {}         # sequence number -> [when, action body] or None (a read)
+        self.host = self.gateway = None   # the requests' (address, port), and where they went
+
+
+class HARTIP:
+    """HART-IP - see the comment above."""
+    event_type = 'hart_ip'
+    app_protos = ('hart_ip',)
+    fields = ('hart_ip.version', 'hart_ip.message_type', 'hart_ip.message_id', 'hart_ip.status', 'hart_ip.transaction_id',
+              'hart_ip.session_init.master_type', 'hart_ip.pt.command', 'hart_ip.pt.response_code',
+              'hart_ip.pt.long_address', 'hart_ip.pt.short_addr', 'hart_ip.pt.payload',
+              'hart_ip.pt.rsp.manufacturer_Id', 'hart_ip.pt.rsp.expanded_device_type', 'hart_ip.pt.rsp.device_id',
+              'hart_ip.pt.rsp.device_rev', 'hart_ip.pt.rsp.software_rev', 'hart_ip.pt.rsp.configure_change',
+              'hart_ip.pt.rsp.tag', 'hart_ip.pt.rsp.descriptor', 'hart_ip.pt.rsp.message', 'hart_ip.pt.rsp.pv',
+              'hart_ip.pt.rsp.pv_loop_current', 'hart_ip.pt.rsp.write_protect_code')
+
+    def __init__(self):
+        self.sessions = {}        # flow key -> _HARTSession
+        self.actions = []         # [when, action body], with their flows
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        kind, message = _int(first('hart_ip.message_type')), _int(first('hart_ip.message_id'))
+        # (versions 1 and 2 - tshark takes a scanner's text template, '{' and
+        # all, for version 123)
+        if kind is None or message is None or _int(first('hart_ip.version')) not in (1, 2):
+            return
+        session = self.sessions.get(pkt.flow.key)
+        if session is None:
+            session = self.sessions[pkt.flow.key] = _HARTSession(pkt.flow, pkt.when)
+        body, seq = session.body, first('hart_ip.transaction_id')
+        status = _int(first('hart_ip.status'), 0)
+        if kind == 0:                        # a request
+            session.host, session.gateway = (pkt.src, pkt.sport), (pkt.dst, pkt.dport)
+            if message == 0:
+                master = _int(first('hart_ip.session_init.master_type'))
+                if master is not None:
+                    body['host_type'] = 'primary master' if master == 1 else 'secondary master'
+                body.setdefault('session', 'requested')
+            if message != 3:
+                name = _HART_MESSAGES.get(message, f'message {message}')
+                body['commands'][name] = body['commands'].get(name, 0) + 1
+                session.waiting[seq] = None
+                return
+            command = _int(first('hart_ip.pt.command'))
+            if command is None:
+                return
+            name = _HART_COMMANDS.get(command, f'Command {command}')
+            body['commands'][name] = body['commands'].get(name, 0) + 1
+            if command in _HART_READS:
+                session.waiting[seq] = None
+                return
+            action = {'command': name, 'number': command}
+            device = _hart_address(first('hart_ip.pt.long_address')) or first('hart_ip.pt.short_addr')
+            if device:
+                action['device'] = device
+            data = _hex(first('hart_ip.pt.payload'))
+            if command == 40 and len(data) == 4:
+                current = struct.unpack('!f', data)[0]
+                action['data'] = f'{current:g} mA' if current else 'exit fixed current mode'
+            elif data:
+                text = _tns_text(data.rstrip(b'\x00'))
+                action['data'] = text if text else data[:32].hex()
+            session.waiting[seq] = [pkt.when, action]
+            self.actions.append((pkt.flow, session.waiting[seq]))
+            return
+        body['answered'] = True
+        if message == 0:
+            body['session'] = 'accepted' if status == 0 else 'refused'
+        if kind == 3 or status:
+            errors = body.setdefault('errors', {})
+            label = 'NAK' if kind == 3 else f'status {status}'
+            errors[label] = errors.get(label, 0) + 1
+        pending = session.waiting.pop(seq, None)
+        if message != 3:
+            return
+        code = _int(first('hart_ip.pt.response_code'))
+        result = 'NAK' if kind == 3 else _HART_RESPONSES.get(code, f'response code {code}') if code is not None else ''
+        if code:
+            errors = body.setdefault('errors', {})
+            errors[result] = errors.get(result, 0) + 1
+        if pending is not None and result:
+            pending[1].setdefault('result', result)
+            if pending[1]['number'] in (18, 22) and first('hart_ip.pt.rsp.tag').strip():
+                pending[1].setdefault('data', 'tag ' + first('hart_ip.pt.rsp.tag').strip())   # (as the device echoes it)
+        self._device(session, v)
+
+    @staticmethod
+    def _device(session, v):
+        first = lambda name: _first(v[name])
+        address = _hart_address(first('hart_ip.pt.long_address')) or first('hart_ip.pt.short_addr')
+        # (Command 0, asked by polling address, answers with what makes up the
+        # long address: the expanded device type and the device ID)
+        kind, number = _int(first('hart_ip.pt.rsp.expanded_device_type')), first('hart_ip.pt.rsp.device_id')
+        if kind is not None and number:
+            address = f'{kind & 0x3fff:04x}{number}'
+        if not address:
+            return
+        device = session.devices.get(address)
+        if device is None:
+            if len(session.devices) >= _HART_DEVICES_MAX:
+                return
+            device = session.devices[address] = {'address': address}
+        for field, key in (('hart_ip.pt.rsp.manufacturer_Id', 'manufacturer_id'),
+                           ('hart_ip.pt.rsp.expanded_device_type', 'device_type'),
+                           ('hart_ip.pt.rsp.device_id', 'device_id'), ('hart_ip.pt.rsp.device_rev', 'device_revision'),
+                           ('hart_ip.pt.rsp.software_rev', 'software_revision'),
+                           ('hart_ip.pt.rsp.configure_change', 'config_changes'),
+                           ('hart_ip.pt.rsp.write_protect_code', 'write_protect'),
+                           ('hart_ip.pt.rsp.tag', 'tag'), ('hart_ip.pt.rsp.descriptor', 'descriptor'),
+                           ('hart_ip.pt.rsp.message', 'message')):
+            value = first(field).strip()
+            if value:
+                device[key] = _int(value, value) if key in ('manufacturer_id', 'device_revision', 'software_revision',
+                                                            'config_changes', 'write_protect') else value
+        for field, key in (('hart_ip.pt.rsp.pv', 'pv'), ('hart_ip.pt.rsp.pv_loop_current', 'loop_current')):
+            if first(field):
+                device[key] = _finite(first(field))
+
+    def _join_moved(self):
+        """A gateway can answer a UDP Session Initiate from a port of its
+        own and carry on the session there: that flow, its requests from the
+        initiate's host address and port to the same gateway, is the
+        initiate's session."""
+        sessions = list(self.sessions.values())
+        for asked in sessions:
+            if asked.flow.proto != 'UDP' or asked.body.get('session') != 'requested' or asked.body['answered']:
+                continue
+            moved = next((s for s in sessions if s is not asked and s.flow.key in self.sessions
+                          and s.flow.proto == 'UDP' and s.host == asked.host
+                          and s.gateway[0] == asked.gateway[0] and s.gateway != asked.gateway), None)
+            if moved is None:
+                continue
+            body = asked.body
+            for name, n in moved.body['commands'].items():
+                body['commands'][name] = body['commands'].get(name, 0) + n
+            for label, n in moved.body.get('errors', {}).items():
+                errors = body.setdefault('errors', {})
+                errors[label] = errors.get(label, 0) + n
+            body['answered'] = moved.body['answered']
+            body['session'] = moved.body.get('session', 'accepted' if moved.body['answered'] else 'requested')
+            for address, device in moved.devices.items():
+                asked.devices.setdefault(address, {}).update(device)
+            body['moved_to_port'] = moved.gateway[1]
+            del self.sessions[moved.flow.key]
+
+    def finish(self):
+        self._join_moved()
+        records = []
+        for session in self.sessions.values():
+            if not session.body['commands'] and not session.body['answered']:
+                continue
+            body = dict(session.body)
+            if session.devices:
+                body['devices'] = list(session.devices.values())
+                tags = [d['tag'] for d in body['devices'] if d.get('tag')]
+                if tags:
+                    body['tags'] = tags
+            records.append((session.flow, session.first, 'hart_ip', body))
+        for flow, (when, action) in self.actions:
+            records.append((flow, when, 'hart_ip_action', dict(action, result=action.get('result', 'no response'))))
+        return records
+
+
+# ---------------------------------------------------------------- RakNet
+#
+# RakNet (UDP, 19132 and others), the transport of Minecraft Bedrock and
+# other games, which Suricata doesn't parse. A client pings for servers
+# (an Unconnected Ping) and a server's pong advertises it - for Bedrock,
+# its edition, MOTD, version, players and world; then the client opens a
+# connection (MTU discovery, then the connection request and replies).
+# One record per flow: the messages, the GUIDs, the MTU, whether a
+# connection opened, the server's advertisement, and the connected
+# datagrams each way. Its offline messages carry a 16-byte magic, which a
+# record needs: tshark names any packet to port 19132 RakNet, and random
+# bytes reach it too. Scanners ping it across the internet, looking for
+# game servers to list or to use as reflectors.
+
+_RAKNET_MAGIC = bytes.fromhex('00ffff00fefefefefdfdfdfd12345678')
+_RAKNET_OFFLINE = {0x01: 'Unconnected Ping', 0x02: 'Unconnected Ping (open connections)', 0x05: 'Open Connection Request 1',
+                   0x06: 'Open Connection Reply 1', 0x07: 'Open Connection Request 2', 0x08: 'Open Connection Reply 2',
+                   0x11: 'Out Of Band Internal', 0x12: 'Connection Attempt Failed', 0x14: 'No Free Incoming Connections',
+                   0x17: 'Connection Banned', 0x19: 'Incompatible Protocol Version', 0x1a: 'IP Recently Connected',
+                   0x1c: 'Unconnected Pong'}
+_RAKNET_REPLIES = frozenset({0x06, 0x08, 0x12, 0x14, 0x17, 0x19, 0x1a, 0x1c})
+_RAKNET_ADVERTISEMENT = ('edition', 'motd', 'protocol', 'game_version', 'players', 'max_players', 'server_unique_id',
+                         'level', 'gamemode')
+
+
+class _RakNetFlow:
+    __slots__ = ('flow', 'first', 'body', 'known')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'messages': {}, 'answered': False}
+        self.known = False        # an offline message with RakNet's magic seen
+
+
+class RakNet:
+    """RakNet - see the comment above."""
+    event_type = 'raknet'
+    app_protos = ('raknet', 'mcpe')
+    fields = ('@raknet', 'raknet.packet.is_for_connected')
+
+    def __init__(self):
+        self.flows = {}           # flow key -> _RakNetFlow
+
+    def feed(self, pkt, v):
+        data = _hex(_first(v['@raknet']))
+        flow = self.flows.get(pkt.flow.key)
+        if flow is None:
+            flow = self.flows[pkt.flow.key] = _RakNetFlow(pkt.flow, pkt.when)
+        body = flow.body
+        from_client = pkt.src == pkt.flow.client
+        if not data:
+            # (a datagram carrying a message tshark decodes as RakNet again:
+            # the field's bytes are ambiguous, so it comes back empty)
+            if flow.known and _first(v['raknet.packet.is_for_connected']) in ('1', 'True'):
+                key = 'datagrams_to_server' if from_client else 'datagrams_to_client'
+                body[key] = body.get(key, 0) + 1
+            return
+        kind = data[0]
+        magic = data.find(_RAKNET_MAGIC)
+        if kind in _RAKNET_OFFLINE and 0 < magic <= 25:
+            flow.known = True
+            name = _RAKNET_OFFLINE[kind]
+            body['messages'][name] = body['messages'].get(name, 0) + 1
+            self._offline(body, kind, data, magic)
+            if kind in _RAKNET_REPLIES:
+                body['answered'] = True
+        elif flow.known and kind & 0x80:     # a connected datagram, ACK or NAK
+            key = 'datagrams_to_server' if from_client else 'datagrams_to_client'
+            body[key] = body.get(key, 0) + 1
+
+    @staticmethod
+    def _offline(body, kind, data, magic):
+        after = data[magic + 16:]
+        if kind in (0x01, 0x02) and len(after) >= 8:
+            body.setdefault('client_guid', after[:8].hex())
+        elif kind == 0x1c and magic == 17 and len(after) >= 2:
+            body.setdefault('server_guid', data[9:17].hex())
+            length = struct.unpack('!H', after[:2])[0]
+            text = after[2:2 + length].decode('utf-8', 'replace')
+            if text:
+                body['advertisement'] = text[:300]
+                parts = text.split(';')
+                for key, value in zip(_RAKNET_ADVERTISEMENT, parts):
+                    if value:
+                        body[key] = _int(value, value) if key in ('players', 'max_players', 'protocol') else value[:120]
+        elif kind == 0x05 and after:
+            body.setdefault('protocol_version', after[0])
+            body.setdefault('mtu', len(data) + 28)          # (padded to the MTU tried, with IP and UDP headers)
+        elif kind in (0x06, 0x08) and len(after) >= 8:
+            body.setdefault('server_guid', after[:8].hex())
+            if kind == 0x06 and len(after) >= 11:
+                body['mtu'] = struct.unpack('!H', after[9:11])[0]
+            if kind == 0x08:
+                body['connected'] = True
+        elif kind == 0x07 and len(after) >= 10:
+            body.setdefault('client_guid', after[-8:].hex())
+        elif kind == 0x19 and magic == 2:
+            body['protocol_version'] = data[1]
+
+    def finish(self):
+        return [(f.flow, f.first, 'raknet', dict(f.body)) for f in self.flows.values() if f.known]
+
+
+# ---------------------------------------------------------------- TACACS+
+#
+# TACACS+ (TCP 49), which Suricata doesn't parse: network devices asking a
+# server whether a user may log in, whether a command may run, and
+# telling it what was done. One record per session - an authentication,
+# authorization or accounting exchange, several of which can share a
+# connection. Bodies are encrypted with a key the devices and the server
+# share, so most records hold only what kind of exchange it was and how
+# far it got. A body sent unencrypted - a flag RFC 8907 says must never be
+# used in production - shows everything: the user, the line and the
+# address they came from, the command authorized and the answer, the
+# accounting, and the password.
+
+_TACACS_TYPES = {1: 'authentication', 2: 'authorization', 3: 'accounting'}
+# A secret a command sets (username x password 0 <it>, enable secret 5
+# <it>, snmp-server community <it>, key-string <it>): masked in the
+# command, which Findings shows, and kept beside it
+_TACACS_SECRET = re.compile(r'(\b(?:password|secret|key-string|key|community)\s+(?:\d\s+)?)(\S+)', re.I)
+
+
+class _TACACSSession:
+    __slots__ = ('flow', 'first', 'body', 'asked')
+
+    def __init__(self, flow, when, kind):
+        self.flow, self.first = flow, when
+        self.body = {'type': _TACACS_TYPES.get(kind, f'type {kind}'), 'packets': 0}
+        self.asked = None         # what the server last asked for: 'user' or 'password'
+
+
+class TACACS:
+    """TACACS+ - see the comment above."""
+    event_type = 'tacacs'
+    app_protos = ('tacplus',)
+    fields = ('tacplus.type', 'tacplus.seqno', 'tacplus.session_id', 'tacplus.flags.unencrypted',
+              'vals(tacplus.authen_action)', 'vals(tacplus.authentication_type)', 'vals(tacplus.service)',
+              'tacplus.privilege_level', 'tacplus.user', 'tacplus.port', 'tacplus.remote_address', 'tacplus.auth_password',
+              'tacplus.body_authen_rep.status', 'vals(tacplus.body_authen_rep.status)', 'tacplus.body_authen_rep.server_msg',
+              'tacplus.body_authen_req_cont.user', 'tacplus.arg_value', 'vals(tacplus.body_author_rep.auth_status)',
+              'vals(tacplus.body_acct.status)', 'tacplus.acct.flags.start', 'tacplus.acct.flags.stop',
+              'tacplus.acct.flags.watchdog', 'tacplus.body_acct.server_msg')
+
+    def __init__(self):
+        self.sessions = {}        # (flow key, session ID) -> _TACACSSession
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        kind, seq = _int(first('tacplus.type')), _int(first('tacplus.seqno'))
+        if kind is None or seq is None:
+            return
+        key = (pkt.flow.key, first('tacplus.session_id'))
+        session = self.sessions.get(key)
+        if session is None:
+            session = self.sessions[key] = _TACACSSession(pkt.flow, pkt.when, kind)
+        body = session.body
+        body['packets'] += 1
+        body['encrypted'] = first('tacplus.flags.unencrypted') not in ('1', 'True')
+        if body['encrypted']:
+            body['answered'] = body.get('answered', False) or seq % 2 == 0
+            return
+        if seq % 2:                              # the device's
+            self._request(session, kind, v)
+        else:
+            self._reply(session, kind, v)
+
+    @staticmethod
+    def _request(session, kind, v):
+        first = lambda name: _first(v[name])
+        body = session.body
+        for field, key in (('vals(tacplus.authen_action)', 'action'), ('vals(tacplus.authentication_type)', 'authentication'),
+                           ('vals(tacplus.service)', 'service'), ('tacplus.user', 'user'), ('tacplus.port', 'port'),
+                           ('tacplus.remote_address', 'remote_address')):
+            if first(field):
+                body.setdefault(key, first(field))
+        if first('tacplus.privilege_level'):
+            body.setdefault('privilege', _int(first('tacplus.privilege_level')))
+        if first('tacplus.auth_password'):
+            body['password'] = first('tacplus.auth_password')
+        text = first('tacplus.body_authen_req_cont.user')
+        if text and session.asked == 'password':
+            body['password'] = text
+        elif text:
+            body.setdefault('user', text)
+        args = v['tacplus.arg_value']
+        if args:
+            body['args'] = args[:32]
+            # (a command and its arguments, each its own cmd= or cmd-arg= -
+            # '*' instead of '=' marks one optional - and <cr> ending it)
+            words = [re.split('[=*]', a, maxsplit=1)[1] for a in args if re.match(r'cmd(-arg)?[=*]', a)]
+            words = [w for w in words if w and w != '<cr>']
+            if kind == 2 and words:
+                command = ' '.join(words)
+                secret = _TACACS_SECRET.search(command)
+                if secret:
+                    body['command_secret'] = secret.group(2)[:120]
+                body['command'] = _TACACS_SECRET.sub(r'\1***', command)[:300]
+        if kind == 3:
+            body['record'] = ', '.join(name for name, field in (('start', 'tacplus.acct.flags.start'),
+                                                                   ('stop', 'tacplus.acct.flags.stop'),
+                                                                   ('watchdog', 'tacplus.acct.flags.watchdog'))
+                                       if first(field) in ('1', 'True')) or None
+            if not body['record']:
+                del body['record']
+
+    @staticmethod
+    def _reply(session, kind, v):
+        first = lambda name: _first(v[name])
+        body = session.body
+        body['answered'] = True
+        status = first({1: 'vals(tacplus.body_authen_rep.status)', 2: 'vals(tacplus.body_author_rep.auth_status)',
+                        3: 'vals(tacplus.body_acct.status)'}.get(kind, 'vals(tacplus.body_authen_rep.status)'))
+        if status:
+            body['result'] = status
+        code = _int(first('tacplus.body_authen_rep.status'))
+        session.asked = {4: 'user', 5: 'password'}.get(code)
+        message = first('tacplus.body_authen_rep.server_msg') or first('tacplus.body_acct.server_msg')
+        if message.strip() and code not in (3, 4, 5):
+            body['server_message'] = message.strip()[:200]
+        if kind == 2 and v['tacplus.arg_value']:
+            body['reply_args'] = v['tacplus.arg_value'][:32]
+
+    def finish(self):
+        records = []
+        for session in self.sessions.values():
+            body = dict(session.body)
+            body.setdefault('answered', False)
+            records.append((session.flow, session.first, 'tacacs', body))
+        return records
+
+
+# ---------------------------------------------------------------- C37.118
+#
+# IEEE C37.118 synchrophasors (TCP 4712, UDP 4713), which Suricata doesn't
+# parse: phasor measurement units (PMUs) in substations streaming the
+# grid's voltages, currents and frequency, time-stamped by GPS, to a
+# phasor data concentrator (PDC) for wide-area monitoring and protection.
+# The PDC asks for a PMU's header and configuration, turns its data on
+# and off. One record per stream: the commands, each PMU's station name,
+# ID, channel names and nominal frequency (read from the configuration
+# frame's bytes - tshark shows CFG-1 and CFG-2's station names only in its
+# tree), the data rate, the header's text, the data frames, and how many
+# said the PMU had lost time sync, triggered, or changed configuration.
+# There's no login: anyone who reaches a PMU can read its configuration or
+# stop its data.
+
+_SYNPHASOR_FRAMES = {0: 'data', 1: 'header', 2: 'configuration 1', 3: 'configuration 2', 4: 'command',
+                     5: 'configuration 3'}
+_SYNPHASOR_PMUS_MAX = 20
+
+
+def _synphasor_config(data):
+    """A CFG-1 or CFG-2 frame's PMU blocks: (station, ID, phasor names,
+    analog names, digital status labels, nominal frequency) each."""
+    if len(data) < 22:
+        return []
+    count, at, pmus = struct.unpack('!H', data[18:20])[0], 20, []
+    for _ in range(min(count, _SYNPHASOR_PMUS_MAX)):
+        if at + 26 > len(data):
+            break
+        station = data[at:at + 16].decode('latin-1').strip(' \x00')
+        ident, _, phasors, analogs, digitals = struct.unpack('!HHHHH', data[at + 16:at + 26])
+        names_at, names = at + 26, phasors + analogs + 16 * digitals
+        if names_at + 16 * names + 4 * (phasors + analogs + digitals) + 4 > len(data):
+            break
+        label = lambda i: data[names_at + 16 * i:names_at + 16 * (i + 1)].decode('latin-1').strip(' \x00')
+        at = names_at + 16 * names + 4 * (phasors + analogs + digitals)
+        fnom = struct.unpack('!H', data[at:at + 2])[0]
+        pmus.append({'station': station, 'id': ident, 'phasors': [label(i) for i in range(phasors)],
+                     'analogs': [label(phasors + i) for i in range(analogs)],
+                     'digitals': [n for n in (label(phasors + analogs + i) for i in range(16 * digitals)) if n][:32],
+                     'nominal_frequency': 50 if fnom & 1 else 60})
+        at += 4
+    return pmus
+
+
+class _SynphasorStream:
+    __slots__ = ('flow', 'first', 'body')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'frames': {}}
+
+
+class Synphasor:
+    """IEEE C37.118 - see the comment above."""
+    event_type = 'synphasor'
+    app_protos = ('synphasor',)
+    fields = ('synphasor.frtype', 'synphasor.version', 'synphasor.idcode_stream_source', 'vals(synphasor.command)',
+              'synphasor.station_name', 'synphasor.idcode_data_source', 'synphasor.rate_of_transmission',
+              'synphasor.data', 'synphasor.data.sync', 'synphasor.data.trigger', 'synphasor.data.CFGchange',
+              'synphasor.data.data_modified', '@synphasor')
+
+    def __init__(self):
+        self.streams = {}         # flow key -> _SynphasorStream
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        kind = _int(first('synphasor.frtype'))
+        if kind is None:
+            return
+        stream = self.streams.get(pkt.flow.key)
+        if stream is None:
+            stream = self.streams[pkt.flow.key] = _SynphasorStream(pkt.flow, pkt.when)
+        body = stream.body
+        name = _SYNPHASOR_FRAMES.get(kind, f'type {kind}')
+        body['frames'][name] = body['frames'].get(name, 0) + 1
+        if first('synphasor.idcode_stream_source'):
+            body.setdefault('stream_id', _int(first('synphasor.idcode_stream_source')))
+        if first('synphasor.version'):
+            body.setdefault('version', _int(first('synphasor.version')))
+        if kind == 4:
+            command = first('vals(synphasor.command)') or 'unknown'
+            body['commands'][command] = body['commands'].get(command, 0) + 1
+            if 'transmission on' in command:
+                body['data_on'] = True
+            elif 'transmission off' in command:
+                body['data_on'] = False
+        elif kind == 1:
+            text = _hex(first('synphasor.data')).decode('latin-1').strip(' \x00')
+            if text:
+                body['header'] = text[:300]
+        elif kind in (2, 3):
+            pmus = _synphasor_config(_hex(first('@synphasor')))
+            if pmus:
+                body['pmus'] = pmus
+            if first('synphasor.rate_of_transmission'):
+                rate = _int(first('synphasor.rate_of_transmission'))
+                if rate:
+                    body['data_rate'] = f'{rate} per second' if rate > 0 else f'1 per {-rate} seconds'
+        elif kind == 5:
+            stations = [n.strip() for n in v['synphasor.station_name'] if n.strip()]
+            if stations:
+                body.setdefault('pmus', [{'station': n} for n in stations[:_SYNPHASOR_PMUS_MAX]])
+            if first('synphasor.rate_of_transmission'):
+                rate = _int(first('synphasor.rate_of_transmission'))
+                if rate:
+                    body['data_rate'] = f'{rate} per second' if rate > 0 else f'1 per {-rate} seconds'
+        elif kind == 0:
+            for field, key in (('synphasor.data.sync', 'not_synced'), ('synphasor.data.trigger', 'triggered'),
+                               ('synphasor.data.CFGchange', 'config_changed'),
+                               ('synphasor.data.data_modified', 'data_modified')):
+                if any(x in ('1', 'True') for x in v[field]):
+                    body[key] = body.get(key, 0) + 1
+
+    def finish(self):
+        records = []
+        for stream in self.streams.values():
+            body = dict(stream.body)
+            if body.get('pmus'):
+                body['stations'] = [p['station'] for p in body['pmus'] if p.get('station')]
+            records.append((stream.flow, stream.first, 'synphasor', body))
+        return records
+
+
+# ---------------------------------------------------------------- EtherCAT
+#
+# EtherCAT, the fieldbus inside machines: a master's frames (EtherType
+# 0x88a4, or UDP 34980 when routed) pass through every slave - drives,
+# I/O modules - each reading and writing its part, and come back. Suricata
+# doesn't parse it. One record per flow: the datagram commands, how many
+# slaves answered a broadcast read, the states the master asked the slaves
+# for through their AL Control register (dropping out of OP stops a
+# machine's outputs), EEPROM writes (a slave's identity and configuration
+# rewritten), and the mailbox traffic - CoE, and FoE files read or written
+# (how firmware goes onto a drive). The datagrams are read from the
+# frame's bytes; the mailboxes from tshark's fields. A capture sees each
+# frame twice - as the master sent it, and back from the slaves, its
+# source MAC's locally administered bit set - and a mailbox's frames as a
+# flow of their own: one master's are one record, on the flow its first
+# frame went out on, the commands counted as it sent them and the working
+# counters as they came back. Scanners probe UDP 34980 for EtherCAT
+# reachable over IP.
+
+_ECAT_COMMANDS = {0: 'NOP', 1: 'APRD', 2: 'APWR', 3: 'APRW', 4: 'FPRD', 5: 'FPWR', 6: 'FPRW', 7: 'BRD', 8: 'BWR',
+                  9: 'BRW', 10: 'LRD', 11: 'LWR', 12: 'LRW', 13: 'ARMW', 14: 'FRMW'}
+_ECAT_WRITES = frozenset({2, 3, 5, 6, 8, 9, 13, 14})
+_ECAT_STATES = {1: 'INIT', 2: 'PRE-OP', 3: 'BOOT', 4: 'SAFE-OP', 8: 'OP'}
+_ECAT_FOE = {1: 'read', 2: 'write'}
+
+
+def _ecat_datagrams(data):
+    """An EtherCAT frame's datagrams (its header already off): (command,
+    ADP, ADO, data, working counter) each - logical ones with ADP/ADO as
+    the logical address's halves."""
+    at, out = 0, []
+    while at + 12 <= len(data):
+        command, _, adp, ado, length = struct.unpack('<BBHHH', data[at:at + 8])
+        size = length & 0x7ff
+        if at + 10 + size + 2 > len(data) or command > 14:
+            break
+        payload = data[at + 10:at + 10 + size]
+        wkc = struct.unpack('<H', data[at + 10 + size:at + 12 + size])[0]
+        out.append((command, adp, ado, payload, wkc))
+        at += 12 + size
+        if not length & 0x8000:
+            break
+    return out
+
+
+class _ECATMaster:
+    __slots__ = ('flow', 'first', 'body', 'sent', 'returned', 'outgoing')
+
+    def __init__(self, flow, when, outgoing):
+        self.flow, self.first, self.outgoing = flow, when, outgoing
+        self.body = {}
+        self.sent = {'commands': {}}       # counted from the master's frames
+        self.returned = {'commands': {}}   # from the frames back - for a capture that saw only those
+
+
+def _ecat_master(pkt):
+    """The master a frame belongs to, and whether it's on its way back:
+    on Ethernet, the source MAC without its locally administered bit (set
+    by the slaves on the way back) and the destination; over UDP, the flow,
+    a frame back coming from port 34980."""
+    if pkt.flow.proto == 'UDP':
+        return pkt.flow.key, pkt.sport == 34980 and pkt.dport != 34980
+    octets = pkt.src.split(':')
+    first = _int('0x' + octets[0], 0) if octets and octets[0] else 0
+    return (':'.join([f'{first & ~0x02:02x}'] + octets[1:]), pkt.dst), bool(first & 0x02)
+
+
+class ECAT:
+    """EtherCAT - see the comment above."""
+    event_type = 'ecat'
+    app_protos = ('ecat', 'ecatf', 'ecat_mailbox')
+    fields = ('ecatf.type', '@ecat', 'vals(ecat_mailbox.type)', 'ecat_mailbox.foe_opmode', 'ecat_mailbox.foe_filename',
+              'ecat_mailbox.coe.sdoidx')
+
+    def __init__(self):
+        self.masters = {}         # see _ecat_master -> _ECATMaster
+
+    def feed(self, pkt, v):
+        if _int(_first(v['ecatf.type'])) != 1:            # (1: EtherCAT commands; the rest - ADS, NV - aren't)
+            return
+        datagrams = _ecat_datagrams(_hex(_first(v['@ecat'])))
+        if not datagrams:
+            return
+        key, back = _ecat_master(pkt)
+        master = self.masters.get(key)
+        if master is None:
+            master = self.masters[key] = _ECATMaster(pkt.flow, pkt.when, not back)
+        elif not back and not master.outgoing:
+            master.flow, master.outgoing = pkt.flow, True     # (on the master's own flow, when there is one)
+        for command, adp, ado, payload, wkc in datagrams:
+            if wkc:
+                master.body['answered'] = True
+            if back and command == 7 and ado == 0x0130:
+                master.body['slaves'] = max(master.body.get('slaves', 0), wkc)
+        self._sent(master.returned if back else master.sent, datagrams, v)
+
+    @staticmethod
+    def _sent(body, datagrams, v):
+        for command, adp, ado, payload, wkc in datagrams:
+            name = _ECAT_COMMANDS[command]
+            body['commands'][name] = body['commands'].get(name, 0) + 1
+            if command not in _ECAT_WRITES:
+                continue
+            if ado <= 0x0120 < ado + len(payload) and command != 13:
+                state = payload[0x0120 - ado] & 0x0f
+                label = _ECAT_STATES.get(state, f'state {state}')
+                requested = body.setdefault('state_requests', {})
+                requested[label] = requested.get(label, 0) + 1
+                if command in (8, 9):
+                    body['broadcast_state_change'] = True
+            if ado <= 0x0502 < ado + len(payload) - 1:
+                control = struct.unpack('<H', payload[0x0502 - ado:0x0504 - ado])[0]
+                if control & 0x0700 == 0x0200:
+                    body['eeprom_writes'] = body.get('eeprom_writes', 0) + 1
+        for kind in v['vals(ecat_mailbox.type)']:
+            mailbox = body.setdefault('mailbox', {})
+            mailbox[kind] = mailbox.get(kind, 0) + 1
+        for op, name in zip(v['ecat_mailbox.foe_opmode'], v['ecat_mailbox.foe_filename'] + [''] * 8):
+            label = _ECAT_FOE.get(_int(op))
+            if label:
+                files = body.setdefault('foe', [])
+                entry = f'{label} {name}'.strip()
+                if entry not in files and len(files) < 20:
+                    files.append(entry)
+        indexes = body.setdefault('sdo_objects', []) if v['ecat_mailbox.coe.sdoidx'] else None
+        for index in v['ecat_mailbox.coe.sdoidx']:
+            if index not in indexes and len(indexes) < 32:
+                indexes.append(index)
+
+    def finish(self):
+        records = []
+        for master in self.masters.values():
+            body = dict(master.sent if master.sent['commands'] else master.returned, **master.body)
+            body.setdefault('answered', False)
+            records.append((master.flow, master.first, 'ecat', body))
+        return records
+
+
+# ---------------------------------------------------------------- MySQL
+#
+# MySQL and MariaDB (TCP 3306), which Suricata doesn't parse. The server
+# greets with its version; the client logs in - its user, the database,
+# the auth plugin, and attributes naming its program and library - unless
+# it asks for TLS first, which hides the rest; then SQL, in the clear,
+# answered OK (with rows affected), with a result set, or with an error.
+# Two record types, as for Oracle TNS: 'mysql', one per connection, and
+# 'mysql_statement', one per distinct statement on it - counted. A
+# password a statement sets is masked in it and kept beside it; the
+# login's own is a hash of a challenge, not the password, and only
+# whether one was sent is kept.
+
+_MYSQL_STATEMENTS_MAX = 500
+_MYSQL_STATEMENT_MAX = 2000
+
+
+class _MySQLConnection:
+    __slots__ = ('flow', 'first', 'body', 'statements', 'waiting', 'logging_in')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'statements': 0}
+        self.statements = {}      # statement -> [when, body]
+        self.waiting = None       # the statement whose answer is next
+        self.logging_in = False
+
+
+class MySQL:
+    """MySQL - see the comment above."""
+    event_type = 'mysql'
+    app_protos = ('mysql',)
+    fields = ('mysql.version', 'mysql.thread_id', 'mysql.login_request', 'mysql.user', 'mysql.schema', 'mysql.passwd',
+              'mysql.caps.sl', 'mysql.client_auth_plugin', 'mysql.connattrs.name', 'mysql.connattrs.value',
+              'vals(mysql.command)', 'mysql.query', 'mysql.response_code', 'mysql.error_code', 'mysql.error.message',
+              'mysql.affected_rows')
+
+    def __init__(self):
+        self.connections = {}     # flow key -> _MySQLConnection
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _MySQLConnection(pkt.flow, pkt.when)
+        body = conn.body
+        if first('mysql.version'):
+            body.setdefault('server_version', first('mysql.version')[:80])
+        if v['mysql.login_request']:
+            self._login(conn, v)
+        elif v['mysql.query'] or first('vals(mysql.command)'):
+            self._command(conn, pkt.when, v)
+        code = first('mysql.response_code')
+        if code:
+            self._reply(conn, code, v)
+
+    @staticmethod
+    def _login(conn, v):
+        first = lambda name: _first(v[name])
+        body = conn.body
+        if first('mysql.caps.sl') in ('1', 'True') and not first('mysql.user'):
+            body['ssl'] = True                # (TLS from here on: the login is inside it)
+            return
+        for field, key in (('mysql.user', 'user'), ('mysql.schema', 'database'),
+                           ('mysql.client_auth_plugin', 'auth_plugin')):
+            if first(field):
+                body.setdefault(key, first(field)[:120])
+        body['password_sent'] = bool(_hex(first('mysql.passwd')).strip(b'\x00'))
+        attrs = dict(zip(v['mysql.connattrs.name'], v['mysql.connattrs.value']))
+        client = ' '.join(filter(None, (attrs.get('program_name'), attrs.get('_client_name'),
+                                        attrs.get('_client_version'))))
+        if client:
+            body['client'] = client[:120]
+        if attrs.get('_os') or attrs.get('_platform'):
+            body['client_os'] = ' '.join(filter(None, (attrs.get('_os'), attrs.get('_platform'))))[:80]
+        conn.logging_in = True
+
+    @staticmethod
+    def _command(conn, when, v):
+        body = conn.body
+        name = _first(v['vals(mysql.command)'])
+        if name:
+            commands = body.setdefault('commands', {})
+            commands[name] = commands.get(name, 0) + 1
+        statement = ' '.join(_first(v['mysql.query']).split())
+        if not statement:
+            conn.waiting = None
+            return
+        body['statements'] += 1
+        record = conn.statements.get(statement)
+        if record is None:
+            if len(conn.statements) >= _MYSQL_STATEMENTS_MAX:
+                body['statements_not_kept'] = body.get('statements_not_kept', 0) + 1
+                conn.waiting = None
+                return
+            shown, password = _sql_password(statement)
+            record = conn.statements[statement] = [when, {'statement': shown[:_MYSQL_STATEMENT_MAX],
+                                                          'verb': _tns_verb(statement), 'count': 0}]
+            if password:
+                record[1]['password'] = password
+        record[1]['count'] += 1
+        conn.waiting = record[1]
+
+    @staticmethod
+    def _reply(conn, code, v):
+        body = conn.body
+        error = None
+        if code == '0xff' or _first(v['mysql.error_code']):
+            error = f"ERROR {_first(v['mysql.error_code'])}: {_first(v['mysql.error.message'])}".strip()[:300]
+            errors = body.setdefault('errors', {})
+            key = _first(v['mysql.error_code']) or '?'
+            errors[key] = errors.get(key, 0) + 1
+        if conn.logging_in and code in ('0x00', '0xff'):
+            conn.logging_in = False
+            body['login'] = 'succeeded' if code == '0x00' else 'failed'
+            if error:
+                body['login_error'] = error
+            return
+        if conn.waiting is not None:
+            statement = conn.waiting
+            statement.setdefault('result', error or 'ok')
+            rows = _int(_first(v['mysql.affected_rows']))
+            if code == '0x00' and rows:
+                statement['rows_affected'] = statement.get('rows_affected', 0) + rows
+            conn.waiting = None
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            body = dict(conn.body)
+            if conn.logging_in:
+                body['login'] = 'no response'
+            records.append((conn.flow, conn.first, 'mysql', body))
+            for when, statement in conn.statements.values():
+                statement = dict(statement, result=statement.get('result', 'no response'))
+                for key in ('user', 'database'):
+                    if key in body:
+                        statement[key] = body[key]
+                records.append((conn.flow, when, 'mysql_statement', statement))
+        return records
+
+
+# ---------------------------------------------------------------- Microsoft SQL Server (TDS)
+#
+# SQL Server's Tabular Data Stream (TCP 1433), which Suricata doesn't
+# parse. A pre-login says whether to encrypt: not at all (the login and
+# everything after it in the clear - its password only obfuscated, which
+# tshark reverses), the login only (the usual: TLS for the login, the SQL
+# after it in the clear), or everything. Then SQL batches and RPC calls -
+# sp_executesql's statement, or a stored procedure by name - answered
+# with row counts or errors. Two record types, as for Oracle and MySQL:
+# 'mssql', one per connection, and 'mssql_statement', one per distinct
+# statement on it, counted. tshark 4.4 leaves TDS 7.2+ batches and RPC
+# parameters undecoded, so they're read from the packet's bytes; the
+# login, pre-login, errors and row counts from tshark's fields.
+
+_TDS_ENCRYPTION = {0: 'off', 1: 'on', 2: 'not supported', 3: 'required'}
+_TDS_PROCS = {1: 'sp_cursor', 2: 'sp_cursoropen', 3: 'sp_cursorprepare', 4: 'sp_cursorexecute',
+              5: 'sp_cursorprepexec', 6: 'sp_cursorunprepare', 7: 'sp_cursorfetch', 8: 'sp_cursoroption',
+              9: 'sp_cursorclose', 10: 'sp_executesql', 11: 'sp_prepare', 12: 'sp_execute', 13: 'sp_prepexec',
+              14: 'sp_prepexecrpc', 15: 'sp_unprepare'}
+_TDS_STATEMENTS_MAX = 500
+_TDS_STATEMENT_MAX = 2000
+
+
+def _tds_body(data):
+    """A batch's or RPC call's body without its ALL_HEADERS (TDS 7.2 on):
+    a total length, then headers each led by its own."""
+    if len(data) >= 10:
+        total, first = struct.unpack('<II', data[:8])
+        if 8 <= total <= len(data) and 4 <= first <= total - 4:
+            return data[total:]
+    return data
+
+
+def _tds_text(data):
+    try:
+        return data.decode('utf-16-le').strip('\x00')
+    except UnicodeDecodeError:
+        return ''
+
+
+def _tds_rpc(data):
+    """An RPC call's procedure, and the first of its string parameters that
+    reads as SQL - sp_executesql's or sp_prepexec's statement - or None."""
+    data, at = _tds_body(data), 2
+    if len(data) < 4:
+        return None, None
+    length = struct.unpack('<H', data[:2])[0]
+    if length == 0xffff:
+        proc = _TDS_PROCS.get(struct.unpack('<H', data[2:4])[0], f'procedure {struct.unpack("<H", data[2:4])[0]}')
+        at = 4
+    else:
+        proc = _tds_text(data[2:2 + 2 * length])
+        at = 2 + 2 * length
+    at += 2                                   # option flags
+    for _ in range(8):                        # (the statement comes in the first few)
+        if at + 2 > len(data):
+            break
+        at += 1 + 2 * data[at] + 1            # name, status
+        kind = data[at] if at < len(data) else 0
+        if kind not in (0xe7, 0xef, 0xa7, 0xaf):
+            break                             # (past the strings - a type this doesn't size)
+        if at + 8 > len(data):
+            break                             # (cut short)
+        size = struct.unpack('<H', data[at + 1:at + 3])[0]
+        at += 1 + 2 + 5
+        if size == 0xffff:                    # PLP: a total length, then chunks to an empty one
+            at += 8
+            value = bytearray()
+            while at + 4 <= len(data):
+                chunk = struct.unpack('<I', data[at:at + 4])[0]
+                at += 4
+                if not chunk:
+                    break
+                value += data[at:at + chunk]
+                at += chunk
+        else:
+            if at + 2 > len(data):
+                break
+            length = struct.unpack('<H', data[at:at + 2])[0]
+            at += 2
+            value = b'' if length == 0xffff else data[at:at + length]
+            at += 0 if length == 0xffff else length
+        text = _tds_text(bytes(value)) if kind in (0xe7, 0xef) else bytes(value).decode('latin-1')
+        if _TNS_SQL.match(text) or text.strip().upper().startswith(('EXEC', 'DECLARE', 'IF ', 'USE ')):
+            return proc, text
+    return proc, None
+
+
+class _TDSConnection:
+    __slots__ = ('flow', 'first', 'body', 'statements', 'waiting', 'logging_in', 'client')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'statements': 0}
+        self.statements = {}      # statement -> [when, body]
+        self.waiting = None
+        self.logging_in = False
+        self.client = None
+
+
+class TDS:
+    """Microsoft SQL Server's TDS - see the comment above."""
+    event_type = 'mssql'
+    app_protos = ('tds',)
+    fields = ('tds.type', 'tds.prelogin.option.encryption', 'tds.prelogin.option.version', 'tds.7login.username',
+              'tds.7login.password', 'tds.7login.appname', 'tds.7login.clientname', 'tds.7login.databasename',
+              'tds.7login.libraryname', 'tds.7login.servername', 'tds.loginack.progname', 'tds.query', 'tds.rpc.name',
+              'tds.error.number', 'tds.error.msgtext', 'tds.done.donerowcount', '@tds')
+
+    def __init__(self):
+        self.connections = {}     # flow key -> _TDSConnection
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        kind = _int(first('tds.type'))
+        if kind is None:
+            return
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _TDSConnection(pkt.flow, pkt.when)
+        body = conn.body
+        if v['tds.prelogin.option.encryption']:
+            self._prelogin(conn, kind == 4, v)     # (the server answers in a response packet)
+        elif kind == 0x10:
+            conn.client = pkt.src
+            for field, key in (('tds.7login.username', 'user'), ('tds.7login.password', 'password'),
+                               ('tds.7login.appname', 'application'), ('tds.7login.clientname', 'client_host'),
+                               ('tds.7login.databasename', 'database'), ('tds.7login.libraryname', 'library'),
+                               ('tds.7login.servername', 'server_name')):
+                if first(field):
+                    body[key] = first(field)[:120]
+            conn.logging_in = True
+        elif kind in (1, 3):
+            conn.client = conn.client or pkt.src
+            self._request(conn, pkt.when, kind, v)
+        elif kind == 4:
+            self._reply(conn, v)
+
+    @staticmethod
+    def _prelogin(conn, from_server, v):
+        body = conn.body
+        encryption = _int(_first(v['tds.prelogin.option.encryption']))
+        if encryption is None:
+            return
+        if not from_server:
+            body['client_encryption'] = _TDS_ENCRYPTION.get(encryption, str(encryption))
+            return
+        body['server_encryption'] = _TDS_ENCRYPTION.get(encryption, str(encryption))
+        version = _int(_first(v['tds.prelogin.option.version']))
+        if version:
+            body['server_version'] = f'{version >> 24}.{version >> 16 & 0xff}.{version & 0xffff}'
+        client = body.get('client_encryption')
+        if encryption in (1, 3) or client in ('on', 'required'):
+            body['encryption'] = 'everything'
+        elif encryption == 2 or client == 'not supported':
+            body['encryption'] = 'none'
+        else:
+            body['encryption'] = 'login only'
+        if body['encryption'] != 'none':
+            conn.logging_in = True            # (inside TLS: what's next is its answer)
+
+    def _request(self, conn, when, kind, v):
+        body = conn.body
+        data = _hex(_first(v['@tds']))[8:]
+        if kind == 1:
+            statement = _first(v['tds.query']) or _tds_text(_tds_body(data))
+            proc = None
+        else:
+            proc, statement = _tds_rpc(data)
+            proc = proc or _first(v['tds.rpc.name'])
+            if not statement and proc and not proc.startswith('sp_'):
+                statement = f'EXEC {proc}'
+        statement = ' '.join((statement or '').split())
+        if not statement:
+            conn.waiting = None
+            return
+        body['statements'] += 1
+        record = conn.statements.get(statement)
+        if record is None:
+            if len(conn.statements) >= _TDS_STATEMENTS_MAX:
+                body['statements_not_kept'] = body.get('statements_not_kept', 0) + 1
+                conn.waiting = None
+                return
+            shown, password = _sql_password(statement)
+            record = conn.statements[statement] = [when, {'statement': shown[:_TDS_STATEMENT_MAX],
+                                                          'verb': _tns_verb(statement), 'count': 0}]
+            if proc:
+                record[1]['procedure'] = proc
+            if password:
+                record[1]['password'] = password
+        record[1]['count'] += 1
+        conn.waiting = record[1]
+
+    @staticmethod
+    def _reply(conn, v):
+        body = conn.body
+        errors = [f'Error {n}: {m}'[:300] for n, m in zip(v['tds.error.number'], v['tds.error.msgtext'] + [''] * 8)]
+        for number in v['tds.error.number']:
+            counts = body.setdefault('errors', {})
+            counts[number] = counts.get(number, 0) + 1
+        if _first(v['tds.loginack.progname']):
+            body['product'] = _first(v['tds.loginack.progname'])[:80]
+        if conn.logging_in:
+            if v['tds.loginack.progname']:
+                body['login'] = 'succeeded'
+                conn.logging_in = False
+            elif errors:
+                body['login'], body['login_error'] = 'failed', errors[0]
+                conn.logging_in = False
+            return
+        if conn.waiting is not None:
+            statement = conn.waiting
+            statement.setdefault('result', errors[0] if errors else 'ok')
+            rows = sum(_int(n, 0) for n in v['tds.done.donerowcount'])
+            if rows and not errors:
+                statement['rows'] = statement.get('rows', 0) + rows
+            conn.waiting = None
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            body = dict(conn.body)
+            if conn.logging_in and 'login' not in body:
+                body['login'] = 'encrypted' if body.get('encryption') == 'everything' else 'no response'
+            records.append((conn.flow, conn.first, 'mssql', body))
+            for when, statement in conn.statements.values():
+                statement = dict(statement, result=statement.get('result', 'no response'))
+                for key in ('user', 'database'):
+                    if key in body:
+                        statement[key] = body[key]
+                records.append((conn.flow, when, 'mssql_statement', statement))
+        return records
+
+
+# ---------------------------------------------------------------- Redis
+#
+# Redis and its forks (Valkey, KeyDB) on TCP 6379, which Suricata doesn't
+# parse. Often reachable without a password, or with one sent in the
+# clear (AUTH); and its own admin commands are the usual way in: CONFIG
+# SET dir and dbfilename then SAVE writes the database - with a key
+# holding an SSH key, a cron line or a web shell - over a file of the
+# attacker's choosing; REPLICAOF a rogue server hands it the data, and
+# MODULE LOAD runs a library from it; EVAL runs Lua (CVE-2022-0543's
+# sandbox escape). Two record types: 'redis', one per connection - the
+# commands counted, the first keys, the login and its password, the
+# server's version (from INFO or HELLO), the errors - and
+# 'redis_command', one per distinct admin command (CONFIG, REPLICAOF,
+# MODULE, ACL, EVAL, SAVE, FLUSHALL...) with its answer, counted. Read
+# from the messages' bytes: RESP arrays, or the inline commands netcat
+# sends. A password a command sets (ACL SETUSER's >, CONFIG SET
+# requirepass) is masked in it and kept beside it.
+
+_REDIS_ADMIN = frozenset('CONFIG SLAVEOF REPLICAOF MODULE EVAL EVALSHA EVAL_RO EVALSHA_RO FCALL FCALL_RO FUNCTION '
+                         'SCRIPT SAVE BGSAVE BGREWRITEAOF FLUSHALL FLUSHDB SHUTDOWN DEBUG ACL MIGRATE SYNC PSYNC '
+                         'FAILOVER CLUSTER'.split())
+_REDIS_SUBCOMMANDS = frozenset('CONFIG MODULE FUNCTION SCRIPT ACL CLIENT DEBUG CLUSTER COMMAND MEMORY OBJECT '
+                               'XINFO XGROUP SLOWLOG LATENCY'.split())
+_REDIS_CLIENT_ADMIN = frozenset(('KILL', 'PAUSE', 'NO-EVICT', 'NO-TOUCH'))
+_REDIS_NO_KEY = frozenset('AUTH HELLO PING ECHO INFO CONFIG CLIENT SELECT DBSIZE KEYS SCAN RANDOMKEY FLUSHALL FLUSHDB '
+                          'SAVE BGSAVE BGREWRITEAOF LASTSAVE SHUTDOWN SLAVEOF REPLICAOF MODULE EVAL EVALSHA EVAL_RO '
+                          'EVALSHA_RO FCALL FCALL_RO FUNCTION SCRIPT ACL DEBUG COMMAND TIME ROLE MONITOR SUBSCRIBE '
+                          'PSUBSCRIBE SSUBSCRIBE UNSUBSCRIBE PUNSUBSCRIBE SUNSUBSCRIBE PUBLISH SPUBLISH PUBSUB SLOWLOG '
+                          'LATENCY MEMORY MULTI EXEC DISCARD UNWATCH QUIT RESET CLUSTER READONLY READWRITE WAIT '
+                          'WAITAOF SYNC PSYNC REPLCONF SWAPDB MIGRATE FAILOVER LOLWUT'.split())
+_REDIS_WRITES = frozenset('SET SETEX PSETEX SETNX MSET MSETNX APPEND SETRANGE SETBIT GETSET GETDEL GETEX DEL UNLINK '
+                          'INCR INCRBY INCRBYFLOAT DECR DECRBY HSET HSETNX HMSET HDEL HINCRBY HINCRBYFLOAT LPUSH '
+                          'LPUSHX RPUSH RPUSHX LPOP RPOP LSET LREM LTRIM LINSERT LMOVE RPOPLPUSH SADD SREM SPOP SMOVE '
+                          'SINTERSTORE SUNIONSTORE SDIFFSTORE ZADD ZREM ZINCRBY ZPOPMIN ZPOPMAX ZREMRANGEBYSCORE '
+                          'ZREMRANGEBYRANK ZREMRANGEBYLEX ZUNIONSTORE ZINTERSTORE RENAME RENAMENX EXPIRE PEXPIRE '
+                          'EXPIREAT PEXPIREAT PERSIST MOVE COPY RESTORE XADD XDEL XTRIM PFADD PFMERGE GEOADD '
+                          'FLUSHALL FLUSHDB SWAPDB'.split())
+_REDIS_SECRET_SETTINGS = frozenset(('requirepass', 'masterauth', 'tls-key-file-pass', 'tls-client-key-file-pass'))
+_REDIS_COMMANDS_MAX = 500           # distinct admin commands kept per connection
+_REDIS_ARG_MAX = 200
+_REDIS_COMMAND_MAX = 1000
+_REDIS_KEYS_MAX = 10
+_REDIS_WAITING_MAX = 1000           # commands sent and not yet answered
+_REDIS_BUFFER_MAX = 1 << 20         # bytes of a message split across packets held for the rest
+_REDIS_DEPTH_MAX = 8
+
+
+class _RESPIncomplete(Exception):
+    pass
+
+
+class _RESPError(str):
+    """A RESP error reply: its text."""
+
+
+def _resp_line(data, at):
+    end = data.find(b'\r\n', at)
+    if end < 0:
+        if len(data) - at > 65536:
+            raise ValueError('no line end')
+        raise _RESPIncomplete
+    return data[at:end], end + 2
+
+
+def _resp_value(data, at, depth=0):
+    """One RESP2/RESP3 value at data[at]: (value, where the next starts) -
+    a bulk string as bytes, an array, set or map as a list (a map's keys
+    and values in turn), an error as _RESPError. _RESPIncomplete if the
+    data ends before it does, ValueError if it isn't RESP."""
+    if at >= len(data):
+        raise _RESPIncomplete
+    if depth > _REDIS_DEPTH_MAX:
+        raise ValueError('too deep')
+    kind = data[at:at + 1]
+    line, at = _resp_line(data, at + 1)
+    if kind in (b'+', b'-', b':', b',', b'(', b'#', b'_'):
+        text = line.decode('utf-8', 'replace')
+        return (_RESPError(text) if kind == b'-' else None if kind == b'_' else text), at
+    if kind in (b'$', b'!', b'='):
+        size = int(line)
+        if size < 0:
+            return None, at
+        if len(data) < at + size + 2:
+            raise _RESPIncomplete
+        value = data[at:at + size]
+        return (_RESPError(value.decode('utf-8', 'replace')) if kind == b'!' else value), at + size + 2
+    if kind in (b'*', b'~', b'>', b'%', b'|'):
+        count = int(line)
+        if count < 0:
+            return None, at
+        count *= 2 if kind in (b'%', b'|') else 1
+        items = []
+        for _ in range(count):
+            item, at = _resp_value(data, at, depth + 1)
+            if len(items) < 256:
+                items.append(item)
+        if kind == b'|':                     # an attribute: the reply itself follows
+            return _resp_value(data, at, depth + 1)
+        return (('push', items) if kind == b'>' else items), at
+    raise ValueError('not RESP')
+
+
+def _resp_text(value):
+    return value.decode('utf-8', 'replace') if isinstance(value, bytes) else str(value)
+
+
+def _redis_quote(arg):
+    text = arg[:_REDIS_ARG_MAX]
+    if not text or any(ch in text for ch in ' "\'\\') or not text.isprintable():
+        text = '"' + text.replace('\\', '\\\\').replace('"', '\\"').encode('unicode_escape').decode('ascii') + '"'
+    return text + ('...' if len(arg) > _REDIS_ARG_MAX else '')
+
+
+class _RedisConnection:
+    __slots__ = ('flow', 'first', 'body', 'buffers', 'waiting', 'commands', 'keys', 'known', 'pubsub')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}}
+        self.buffers = [b'', b'']    # bytes of a message still to come: from the client, from the server
+        self.waiting = []            # (command name, args, admin record or None), oldest first
+        self.commands = {}           # command text -> [when, body]
+        self.keys = {}               # key -> None, in first-seen order
+        self.known = False           # a message of Redis's seen
+        self.pubsub = False          # subscribed: the server sends messages unasked
+
+
+class Redis:
+    """Redis - see the comment above."""
+    event_type = 'redis'
+    app_protos = ('resp',)
+    fields = ('@resp',)
+
+    def __init__(self):
+        self.connections = {}        # flow key -> _RedisConnection
+
+    def feed(self, pkt, v):
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _RedisConnection(pkt.flow, pkt.when)
+        side = 0 if (pkt.src, pkt.sport) == (pkt.flow.client, pkt.flow.cport) else 1
+        for raw in v['@resp']:
+            data = conn.buffers[side] + _hex(raw)
+            conn.buffers[side] = b''
+            at = 0
+            while at < len(data):
+                inline = side == 0 and data[at:at + 1] != b'*'
+                try:
+                    if inline:
+                        line, end = _resp_line(data, at)
+                        value = [w.encode() for w in line.decode('utf-8', 'replace').split()]
+                    else:
+                        value, end = _resp_value(data, at)
+                except _RESPIncomplete:
+                    if len(data) - at <= _REDIS_BUFFER_MAX:
+                        conn.buffers[side] = data[at:]
+                    break
+                except ValueError:
+                    break                    # not Redis's - or the capture started mid-message
+                at = end
+                if side == 0:
+                    self._command(conn, pkt.when, value, inline)
+                else:
+                    self._reply(conn, value)
+
+    def _command(self, conn, when, value, inline):
+        if not isinstance(value, list) or not value or not all(isinstance(a, bytes) for a in value):
+            return
+        args = [a.decode('utf-8', 'replace') for a in value]
+        name = args[0].upper()
+        if not name.replace('_', '').replace('.', '').replace('-', '').isalnum() or len(name) > 40:
+            return
+        conn.known = True
+        if inline:
+            conn.body['inline'] = True
+        if name in _REDIS_SUBCOMMANDS and len(args) > 1:
+            name = f'{name} {args[1].upper()}'
+        body = conn.body
+        commands = body['commands']
+        commands[name] = commands.get(name, 0) + 1
+        verb = name.split()[0]
+        if verb in _REDIS_WRITES:
+            body['changes'] = body.get('changes', 0) + 1
+        if verb not in _REDIS_NO_KEY and verb not in _REDIS_SUBCOMMANDS and len(args) > 1 \
+                and len(conn.keys) < _REDIS_KEYS_MAX:
+            conn.keys.setdefault(args[1][:_REDIS_ARG_MAX], None)
+        if verb == 'AUTH' and len(args) > 1:
+            body['user'] = args[1][:120] if len(args) > 2 else body.get('user', 'default')
+            body['password'] = args[-1][:120]
+        elif verb == 'HELLO' and 'AUTH' in (a.upper() for a in args):
+            at = [a.upper() for a in args].index('AUTH')
+            if len(args) > at + 2:
+                body['user'], body['password'] = args[at + 1][:120], args[at + 2][:120]
+        elif name == 'CLIENT SETNAME' and len(args) > 2:
+            body['client_name'] = args[2][:120]
+        elif name == 'CLIENT SETINFO' and len(args) > 3:
+            library = body.get('client', '').split()
+            library = (library + ['', ''])[:2]
+            library[0 if args[2].upper() == 'LIB-NAME' else 1] = args[3][:60]
+            body['client'] = ' '.join(filter(None, library))
+        elif verb in ('SUBSCRIBE', 'PSUBSCRIBE', 'SSUBSCRIBE'):
+            conn.pubsub = True
+        record = None
+        if verb in _REDIS_ADMIN or (verb == 'CLIENT' and len(args) > 1 and args[1].upper() in _REDIS_CLIENT_ADMIN):
+            record = self._admin(conn, when, name, args)
+        if len(conn.waiting) >= _REDIS_WAITING_MAX:
+            conn.waiting.pop(0)
+        conn.waiting.append((name, args, record))
+
+    @staticmethod
+    def _admin(conn, when, name, args):
+        shown, password = list(args), None
+        upper = [a.upper() for a in args]
+        if name == 'ACL SETUSER':
+            for i, arg in enumerate(shown[3:], 3):
+                if arg[:1] in '><' and len(arg) > 1:
+                    password = password or arg[1:]
+                    shown[i] = arg[0] + '***'
+        elif name == 'CONFIG SET':
+            for i in range(2, len(shown) - 1, 2):
+                if shown[i].lower() in _REDIS_SECRET_SETTINGS:
+                    password = password or shown[i + 1]
+                    shown[i + 1] = '***'
+        elif name.split()[0] == 'MIGRATE':
+            for word, skip in (('AUTH', 1), ('AUTH2', 2)):
+                if word in upper:
+                    at = upper.index(word) + skip
+                    if at < len(shown):
+                        password = password or shown[at]
+                        shown[at] = '***'
+        text = ' '.join(_redis_quote(a) for a in shown)[:_REDIS_COMMAND_MAX]
+        record = conn.commands.get(text)
+        if record is None:
+            if len(conn.commands) >= _REDIS_COMMANDS_MAX:
+                conn.body['commands_not_kept'] = conn.body.get('commands_not_kept', 0) + 1
+                return None
+            body = {'command': text, 'name': name, 'count': 0}
+            if name == 'CONFIG SET' and len(args) > 2:
+                body['settings'] = [s.lower() for s in args[2::2]][:20]
+            elif name.split()[0] in ('SLAVEOF', 'REPLICAOF') and len(args) > 2:
+                if upper[1:3] != ['NO', 'ONE']:
+                    body['master'] = f'{args[1]}:{args[2]}'
+            elif name == 'MODULE LOAD' and len(args) > 2:
+                body['module'] = args[2][:_REDIS_ARG_MAX]
+            if password:
+                body['password'] = password[:120]
+            record = conn.commands[text] = [when, body]
+        record[1]['count'] += 1
+        return record[1]
+
+    def _reply(self, conn, value):
+        if isinstance(value, tuple):                 # a RESP3 push: not an answer
+            return
+        if conn.pubsub and isinstance(value, list) and value and \
+                _resp_text(value[0]).lower() in ('message', 'pmessage', 'smessage'):
+            return
+        if not conn.waiting:
+            return
+        conn.known = True
+        body = conn.body
+        body['answered'] = True
+        name, args, record = conn.waiting.pop(0)
+        verb = name.split()[0]
+        if isinstance(value, _RESPError):
+            code = value.split(' ', 1)[0][:40] or 'ERR'
+            errors = body.setdefault('errors', {})
+            errors[code] = errors.get(code, 0) + 1
+            body['last_error'] = str(value)[:200]
+            if code == 'NOAUTH':
+                body.setdefault('auth', 'required')
+            if verb in ('AUTH', 'HELLO') and code in ('WRONGPASS', 'ERR', 'NOPERM', 'WRONGTYPE') \
+                    and 'password' in body:
+                body['auth'] = 'failed'
+                body['login_failures'] = body.get('login_failures', 0) + 1
+            result = str(value)[:300]
+        else:
+            if verb in ('AUTH', 'HELLO') and 'password' in body:
+                body['auth'] = 'succeeded'
+            elif verb not in ('AUTH', 'HELLO', 'PING', 'QUIT', 'ECHO', 'RESET') and 'auth' not in body:
+                body['auth'] = 'none'
+            if verb == 'INFO' and isinstance(value, bytes):
+                for line in value.split(b'\r\n'):
+                    key, _, val = line.decode('utf-8', 'replace').partition(':')
+                    if key in ('redis_version', 'valkey_version') and val:
+                        body['server_version'] = val[:40]
+                        body.setdefault('server', key.split('_')[0])
+                    elif key == 'server_name' and val:
+                        body['server'] = val[:40]
+                    elif key == 'os' and val:
+                        body['server_os'] = val[:80]
+                    elif key == 'role' and val:
+                        body['role'] = val[:20]
+            elif verb == 'HELLO' and isinstance(value, list):
+                pairs = dict(zip((_resp_text(k) for k in value[::2]), value[1::2]))
+                if pairs.get('version'):
+                    body['server_version'] = _resp_text(pairs['version'])[:40]
+                if pairs.get('server'):
+                    body['server'] = _resp_text(pairs['server'])[:40]
+                if pairs.get('role'):
+                    body['role'] = _resp_text(pairs['role'])[:20]
+            result = value if isinstance(value, str) and len(value) < 40 else \
+                f'{len(value)} items' if isinstance(value, list) else 'ok'
+            result = 'ok' if result == 'OK' else result
+        if record is not None:
+            record.setdefault('result', result)
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            if not conn.known:
+                continue
+            body = dict(conn.body)
+            body.setdefault('answered', False)
+            if conn.keys:
+                body['keys'] = list(conn.keys)
+            records.append((conn.flow, conn.first, 'redis', body))
+            for when, command in conn.commands.values():
+                command = dict(command, result=command.get('result', 'no response'))
+                if 'user' in body:
+                    command['user'] = body['user']
+                records.append((conn.flow, when, 'redis_command', command))
+        return records
+
+
+# ---------------------------------------------------------------- Zabbix
+#
+# Zabbix's agent and server protocol (TCP 10050 to an agent, 10051 to a
+# server or proxy), which Suricata doesn't parse: a server asking an
+# agent for items (passive checks), an agent asking the server which
+# items to send and sending them (active checks, agent data), zabbix_sender
+# pushing values, proxies fetching their configuration and sending their
+# data, and the frontend asking the server to run a script. One item,
+# system.run[...], runs a shell command on the agent - remote code
+# execution by design, and attackers' too, through a stolen server or a
+# rogue one an agent trusts, or zabbix_get against an agent that allows
+# it; an active agent also runs the commands a server sends it. And a
+# proxy's configuration carries its hosts' IPMI and SNMP passwords, TLS
+# PSKs and secret macros, unencrypted unless TLS was set up. Agents open
+# a connection per exchange, every few seconds, so one 'zabbix' record
+# per client, server and request kind - the connections counted: the
+# host name, version, item keys, commands with their output, errors, and
+# which kinds of credentials a configuration carried (never the values).
+# Read from tshark's fields: a message without Zabbix's header (a bare
+# key from netcat, which today's agents refuse) isn't decoded.
+
+_ZABBIX_KEYS_MAX = 20
+_ZABBIX_COMMANDS_MAX = 20
+_ZABBIX_ERRORS_MAX = 10
+_ZABBIX_OUTPUT_MAX = 300
+_ZABBIX_SECRET_FIELDS = frozenset(('ipmi_password', 'tls_psk', 'password', 'privatekey', 'snmp_community', 'community',
+                                   'snmpv3_authpassphrase', 'snmpv3_privpassphrase', 'authpassphrase',
+                                   'privpassphrase', 'http_password', 'ssl_key_password'))
+_ZABBIX_MACRO_SECRET = 1             # a macro's type: secret text
+
+
+def _zabbix_json(text):
+    if not text.startswith(('{', '[')):
+        return None
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _zabbix_list(value):
+    """A message's list - or none, for anything else in its place."""
+    return value if isinstance(value, list) else ()
+
+
+def _zabbix_id(value):
+    """An item's or command's ID - None for one that can't be a key."""
+    return value if isinstance(value, (str, int)) and not isinstance(value, bool) else None
+
+
+def _zabbix_text(value):
+    return value if isinstance(value, str) else None
+
+
+def _zabbix_command(key):
+    """system.run[<command>,<mode>]'s command, or None for another key."""
+    if not key.startswith('system.run[') or not key.endswith(']'):
+        return None
+    inner = key[len('system.run['):-1]
+    if inner.endswith((',wait', ',nowait')):
+        inner = inner.rsplit(',', 1)[0]
+    if len(inner) > 1 and inner[0] == inner[-1] == '"':
+        inner = inner[1:-1].replace('\\"', '"')
+    return inner
+
+
+def _zabbix_secrets(tree, found, depth=0):
+    """The kinds of credentials a proxy configuration carries: a table's
+    (fields and rows) non-empty secret columns, and secret macros."""
+    if depth > 6:
+        return
+    if isinstance(tree, dict):
+        fields, rows = tree.get('fields'), tree.get('data')
+        if isinstance(fields, list) and isinstance(rows, list):
+            for i, name in enumerate(fields):
+                if name in _ZABBIX_SECRET_FIELDS:
+                    n = sum(1 for row in rows if isinstance(row, list) and i < len(row) and row[i] not in ('', None))
+                    if n:
+                        found[name] = found.get(name, 0) + n
+            if 'macro' in fields and 'type' in fields and 'value' in fields:
+                kind, value = fields.index('type'), fields.index('value')
+                n = sum(1 for row in rows if isinstance(row, list) and len(row) > max(kind, value)
+                        and row[kind] == _ZABBIX_MACRO_SECRET and row[value] not in ('', None))
+                if n:
+                    found['secret_macro'] = found.get('secret_macro', 0) + n
+            return
+        for value in tree.values():
+            _zabbix_secrets(value, found, depth + 1)
+
+
+class _ZabbixGroup:
+    __slots__ = ('flow', 'first', 'body', 'keys', 'commands', 'errors', 'flows')
+
+    def __init__(self, flow, when, kind):
+        self.flow, self.first = flow, when
+        self.body = {'request': kind, 'connections': 0, 'answered': False}
+        self.keys = {}               # item key -> None, in first-seen order
+        self.commands = {}           # (where it came from, command) -> {'command', 'result'}
+        self.errors = {}
+        self.flows = set()
+
+
+class Zabbix:
+    """Zabbix - see the comment above."""
+    event_type = 'zabbix'
+    app_protos = ('zabbix',)
+    fields = ('zabbix.request', 'zabbix.response', 'zabbix.agent.passive', 'zabbix.data', 'zabbix.error',
+              'zabbix.version', 'zabbix.agent.name', 'zabbix.proxy.name', 'zabbix.sender.name')
+
+    def __init__(self):
+        self.groups = {}             # (client, server, server port, kind) -> _ZabbixGroup
+        self.pending = {}            # flow key -> (group, request's JSON or passive key)
+        self.active = {}             # (agent, server, host) -> {'items': itemid -> key, 'commands': id -> entry}
+
+    def _group(self, pkt, kind):
+        flow = pkt.flow
+        key = (flow.client, flow.server, flow.sport, kind)
+        group = self.groups.get(key)
+        if group is None:
+            group = self.groups[key] = _ZabbixGroup(flow, pkt.when, kind)
+        if flow.key not in group.flows:
+            group.flows.add(flow.key)
+            group.body['connections'] += 1
+        return group
+
+    def feed(self, pkt, v):
+        first = lambda name: _first(v[name])
+        text = first('zabbix.data')
+        if first('zabbix.request') in ('1', 'True'):
+            message = _zabbix_json(text)
+            passive = first('zabbix.agent.passive') in ('1', 'True')
+            if message is not None and isinstance(message.get('request'), str):
+                kind = message['request'][:40]
+            elif passive or pkt.dport == 10050:
+                kind, message = 'passive check', None
+            else:
+                return
+            group = self._group(pkt, kind)
+            body = group.body
+            host = message.get('host') if message else None
+            host = host if isinstance(host, str) else first('zabbix.agent.name') or first('zabbix.proxy.name') \
+                or first('zabbix.sender.name')
+            if host:
+                body.setdefault('host', host[:120])
+            version = (message or {}).get('version') or first('zabbix.version')
+            if isinstance(version, str) and version:
+                body['version'] = version[:20]
+            self.pending[pkt.flow.key] = (group, message if message is not None else text)
+            self._request(pkt, group, message, text)
+        elif first('zabbix.response') in ('1', 'True'):
+            waiting = self.pending.pop(pkt.flow.key, None)
+            if waiting is None:
+                return
+            group, request = waiting
+            group.body['answered'] = True
+            self._response(pkt, group, request, _zabbix_json(text), text, first('zabbix.error'))
+
+    def _key(self, group, key):
+        if isinstance(key, str) and key and len(group.keys) < _ZABBIX_KEYS_MAX:
+            group.keys.setdefault(key[:250], None)
+
+    def _command(self, group, where, command, result=None):
+        if (where, command) not in group.commands and len(group.commands) >= _ZABBIX_COMMANDS_MAX:
+            return None
+        entry = group.commands.setdefault((where, command), {'command': command[:500], 'via': where})
+        if result is not None:
+            entry['result'] = result
+        return entry
+
+    def _request(self, pkt, group, message, text):
+        body = group.body
+        if message is None:                                # a passive check of one key
+            self._key(group, text)
+            command = _zabbix_command(text)
+            if command is not None:
+                self._command(group, 'system.run', command)
+            return
+        kind = body['request']
+        items = _zabbix_list(message.get('data'))
+        host = _zabbix_text(message.get('host')) or body.get('host')
+        state = self.active.get((pkt.flow.client, pkt.flow.server, host))
+        if kind == 'passive checks':
+            for item in items:
+                if isinstance(item, dict):
+                    self._key(group, item.get('key'))
+                    command = _zabbix_command(str(item.get('key', '')))
+                    if command is not None:
+                        self._command(group, 'system.run', command)
+        elif kind in ('agent data', 'sender data'):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get('key') or (state['items'].get(_zabbix_id(item.get('itemid'))) if state else None)
+                self._key(group, key)
+                if state and isinstance(key, str) and _zabbix_command(key) is not None:
+                    entry = state['commands'].get(('item', key))
+                    if entry is not None and 'value' in item:
+                        entry['result'] = str(item['value'])[:_ZABBIX_OUTPUT_MAX]
+            for item in _zabbix_list(message.get('commands')):
+                if isinstance(item, dict) and state:
+                    entry = state['commands'].get(('id', _zabbix_id(item.get('id'))))
+                    if entry is not None:
+                        entry['result'] = str(item.get('value', item.get('error', '')))[:_ZABBIX_OUTPUT_MAX]
+                        if 'error' in item:
+                            entry['refused'] = True
+        elif kind == 'command':                            # the frontend running a script on a host
+            target = ' '.join(f'{k} {message[k]}' for k in ('scriptid', 'hostid', 'eventid') if message.get(k))
+            self._command(group, 'script', target or 'script')
+        if isinstance(message.get('commands'), list) and kind == 'agent data':
+            body['command_results'] = body.get('command_results', 0) + len(message['commands'])
+
+    def _response(self, pkt, group, request, message, text, error):
+        body = group.body
+        status = (message or {}).get('response')
+        if isinstance(status, str):
+            responses = body.setdefault('responses', {})
+            responses[status[:20]] = responses.get(status[:20], 0) + 1
+        info = (message or {}).get('info')
+        if status == 'failed' and isinstance(info, str):
+            self._error(group, info)
+        redirect = (message or {}).get('redirect')
+        if isinstance(redirect, dict) and redirect.get('address'):
+            body['redirect'] = str(redirect['address'])[:80]
+        kind = body['request']
+        if kind == 'passive check' and isinstance(request, str):
+            value = text if not error else None
+            if text == 'ZBX_NOTSUPPORTED' or error:
+                body['not_supported'] = body.get('not_supported', 0) + 1
+                self._error(group, error or 'not supported')
+            if request == 'agent.version' and value:
+                body['version'] = value[:20]
+            command = _zabbix_command(request)
+            if command is not None:
+                self._command(group, 'system.run', command,
+                              f'refused: {error}'[:_ZABBIX_OUTPUT_MAX] if error or value is None else
+                              value[:_ZABBIX_OUTPUT_MAX])
+        elif kind == 'passive checks' and isinstance(request, dict) and message:
+            if isinstance(message.get('version'), str):
+                body['version'] = message['version'][:20]
+            keys = [i.get('key') for i in _zabbix_list(request.get('data')) if isinstance(i, dict)]
+            for key, item in zip(keys, _zabbix_list(message.get('data'))):
+                if not isinstance(item, dict):
+                    continue
+                if 'error' in item:
+                    body['not_supported'] = body.get('not_supported', 0) + 1
+                    self._error(group, str(item['error']))
+                command = _zabbix_command(str(key or ''))
+                if command is not None:
+                    self._command(group, 'system.run', command,
+                                  ('refused: ' + str(item['error']) if 'error' in item
+                                   else str(item.get('value', '')))[:_ZABBIX_OUTPUT_MAX])
+        elif kind == 'active checks' and message:
+            host = _zabbix_text(request.get('host')) if isinstance(request, dict) else None
+            state = self.active.setdefault((pkt.flow.client, pkt.flow.server, host or body.get('host')),
+                                           {'items': {}, 'commands': {}})
+            for item in _zabbix_list(message.get('data')):
+                if not isinstance(item, dict) or not isinstance(item.get('key'), str):
+                    continue
+                if _zabbix_id(item.get('itemid')) is not None:
+                    state['items'][item['itemid']] = item['key']
+                self._key(group, item['key'])
+                command = _zabbix_command(item['key'])
+                if command is not None:
+                    entry = self._command(group, 'item', command)
+                    if entry is not None:
+                        state['commands'][('item', item['key'])] = entry
+            for item in _zabbix_list(message.get('commands')):
+                if isinstance(item, dict) and isinstance(item.get('command'), str):
+                    entry = self._command(group, 'remote command', item['command'])
+                    if entry is not None and _zabbix_id(item.get('id')) is not None:
+                        state['commands'][('id', item['id'])] = entry
+        elif kind == 'command' and message:
+            entry = next(iter(group.commands.values()), None) if group.commands else None
+            if entry is not None:
+                entry['result'] = str(message.get('data') or info or status or '')[:_ZABBIX_OUTPUT_MAX]
+                if status == 'failed':
+                    entry['refused'] = True
+        elif kind in ('proxy config', 'config') and message:
+            found = {}
+            _zabbix_secrets(message, found)
+            if found:
+                credentials = body.setdefault('credentials', {})
+                for name, n in found.items():
+                    credentials[name] = max(credentials.get(name, 0), n)
+
+    @staticmethod
+    def _error(group, text):
+        text = text.strip()[:200]
+        if text not in group.errors and len(group.errors) < _ZABBIX_ERRORS_MAX:
+            group.errors[text] = None
+
+    def finish(self):
+        records = []
+        for group in self.groups.values():
+            body = dict(group.body)
+            if group.keys:
+                body['keys'] = list(group.keys)
+            if group.commands:
+                body['commands'] = [dict(c, result=c.get('result', 'no response')) for c in group.commands.values()]
+            if group.errors:
+                body['errors'] = list(group.errors)
+            records.append((group.flow, group.first, 'zabbix', body))
+        return records
+
+
+# ---------------------------------------------------------------- IRC
+#
+# IRC (TCP 6667, and the 6660-6669 range shark_analyzer has tshark decode
+# as IRC), which Suricata doesn't parse: chat, and still a botnet's way to
+# take orders - a bot with a nickname like USA|83621 joins its herder's
+# channel, often with a key, and reads commands from the topic or the
+# channel: !download a URL, !ddos.syn a target, .scan a range. One 'irc'
+# record per connection: the nicknames tried and the one the server
+# registered, the user and real name, the server's name, network and
+# version, the channels joined and their topics, the messages each way
+# (the first ones kept, with who sent them and to whom), CTCP requests and
+# replies (a client's VERSION), DCC file offers, and the server's errors.
+# The server, channel, operator and NickServ passwords go in the clear and
+# are kept in their own fields (a NickServ IDENTIFY's masked in the
+# message). Read from the messages' bytes, a line at a time; a message
+# that looks like a bot's command - !, . or @ and a verb bots use - is
+# noted apart.
+
+_IRC_MESSAGES_MAX = 50
+_IRC_TEXT_MAX = 300
+_IRC_LIST_MAX = 20
+_IRC_LINE_MAX = 8192            # bytes of a line split across packets held for the rest
+_IRC_BOT_VERBS = frozenset('download dl get update upd exec execute cmd sh shell run system ddos flood syn synflood '
+                           'udp udpflood tcp tcpflood ack http httpflood slowloris icmp ping scan scanner advscan '
+                           'portscan spread kill die remove uninstall visit open sniff keylog stealer botkill '
+                           'socks proxy'.split())
+_IRC_BOT_PREFIXES = '!.@$'
+# Nicknames bots generate: a country or OS code and a number (USA|83621,
+# [USA|XP|8732], {DEU-W10}123456), or a bracket or pipe and a long number
+_IRC_BOT_NICK = re.compile(r'^(?:[\[{(]?[A-Z]{2,4}[|\-_\]})][^\s]*\d{3,}|[^\s]*[|\[\]{}][^\s]*\d{4,})')
+_IRC_ERROR_CODES = range(400, 600)
+
+
+def _irc_split(line):
+    """An IRC line's (prefix, command, params) - the trailing parameter
+    last, whole."""
+    prefix = ''
+    if line.startswith('@'):                        # IRCv3 message tags
+        line = line.partition(' ')[2]
+    if line.startswith(':'):
+        prefix, _, line = line[1:].partition(' ')
+    line, _, trailing = line.partition(' :')
+    words = line.split()
+    if not words:
+        return prefix, '', []
+    params = words[1:] + ([trailing] if _ else [])
+    return prefix, words[0].upper(), params
+
+
+def _irc_bot_command(text):
+    """Whether a message reads as a bot's command: !, ., @ or $ and a verb
+    bots use (!ddos.syn, .download, @update...)."""
+    if len(text) < 2 or text[0] not in _IRC_BOT_PREFIXES:
+        return False
+    verb = text[1:].split(None, 1)[0].lower() if text[1:].strip() else ''
+    return verb.split('.')[0] in _IRC_BOT_VERBS
+
+
+class _IRCConnection:
+    __slots__ = ('flow', 'first', 'body', 'buffers', 'nicks', 'channels', 'pending_oper', 'nick')
+
+    def __init__(self, flow, when):
+        self.flow, self.first = flow, when
+        self.body = {'commands': {}, 'messages_sent': 0, 'messages_received': 0}
+        self.buffers = [b'', b'']   # a line still to come: from the client, from the server
+        self.nicks = {}             # nicknames tried, in order
+        self.channels = {}          # channels joined, in order
+        self.pending_oper = False
+        self.nick = None            # the client's nickname, once the server registered it
+
+
+class IRC:
+    """IRC - see the comment above."""
+    event_type = 'irc'
+    app_protos = ('irc',)
+    fields = ('@irc',)
+    # A client that opens with PASS and USER reads to Suricata as FTP (it
+    # logs FTP records of the IRC commands), which mustn't keep this out
+    suricata_misreads = ('ftp',)
+
+    def __init__(self):
+        self.connections = {}       # flow key -> _IRCConnection
+
+    def feed(self, pkt, v):
+        conn = self.connections.get(pkt.flow.key)
+        if conn is None:
+            conn = self.connections[pkt.flow.key] = _IRCConnection(pkt.flow, pkt.when)
+        side = 0 if (pkt.src, pkt.sport) == (pkt.flow.client, pkt.flow.cport) else 1
+        for raw in v['@irc']:
+            data = conn.buffers[side] + _hex(raw)
+            lines = data.split(b'\n')
+            rest = lines.pop()
+            conn.buffers[side] = rest if len(rest) <= _IRC_LINE_MAX else b''
+            for line in lines:
+                text = line.rstrip(b'\r').decode('utf-8', 'replace')
+                if text:
+                    (self._client if side == 0 else self._server)(conn, text)
+
+    @staticmethod
+    def _add(body, key, value, limit=_IRC_LIST_MAX):
+        items = body.setdefault(key, [])
+        if value not in items and len(items) < limit:
+            items.append(value)
+
+    def _message(self, conn, sent, sender, target, text):
+        body = conn.body
+        body['messages_sent' if sent else 'messages_received'] += 1
+        if len(text) > 1 and text[0] == text[-1] == '\x01':           # CTCP
+            ctcp = text[1:-1]
+            if ctcp.upper().startswith('DCC SEND'):
+                # DCC SEND <file> <address> <port> [<size>]: the address an
+                # IPv4 one as a number, or an IPv6 one as text
+                words = ctcp.split()
+                sized = len(words) >= 6
+                if len(words) >= 5 and len(body.get('dcc', [])) < _IRC_LIST_MAX:
+                    address, port = words[-3:-1] if sized else words[-2:]
+                    try:
+                        address = socket.inet_ntoa(struct.pack('!I', int(address))) \
+                            if address.isascii() and address.isdigit() else address
+                    except (OverflowError, struct.error):
+                        pass
+                    offer = {'file': ' '.join(words[2:-3] if sized else words[2:-2]).strip('"')[:200],
+                             'address': f'{address}:{port}', 'direction': 'sent' if sent else 'received',
+                             'from': sender or conn.nick or '', 'to': target}
+                    if sized and _int(words[-1]) is not None:
+                        offer['size'] = _int(words[-1])
+                    body.setdefault('dcc', []).append(offer)
+            else:
+                self._add(body, 'ctcp', f"{'sent' if sent else 'received'}: {ctcp}"[:_IRC_TEXT_MAX])
+            return
+        if sent and target.lower() == 'nickserv' and text.upper().startswith('IDENTIFY'):
+            words = text.split()
+            if len(words) > 1:
+                body['services_password'] = words[-1][:120]
+                text = ' '.join(words[:-1] + ['***'])
+        if _irc_bot_command(text):
+            self._add(body, 'bot_commands', text[:_IRC_TEXT_MAX])
+        messages = body.setdefault('messages', [])
+        if len(messages) < _IRC_MESSAGES_MAX:
+            messages.append({'direction': 'sent' if sent else 'received', 'from': sender or conn.nick or '',
+                             'to': target, 'text': text[:_IRC_TEXT_MAX]})
+
+    def _client(self, conn, line):
+        prefix, command, params = _irc_split(line)
+        if not command or not command.isalnum() or len(command) > 20:
+            return
+        body = conn.body
+        body['commands'][command] = body['commands'].get(command, 0) + 1
+        if command == 'PASS' and params:
+            body['password'] = params[-1][:120]
+        elif command == 'NICK' and params:
+            if len(conn.nicks) < _IRC_LIST_MAX:
+                conn.nicks.setdefault(params[0][:60], None)
+        elif command == 'USER' and params:
+            body['user'] = params[0][:60]
+            if len(params) > 3:
+                body['realname'] = params[-1][:120]
+        elif command == 'JOIN' and params:
+            keys = params[1].split(',') if len(params) > 1 else []
+            for channel, key in zip(params[0].split(','), keys):
+                if key:
+                    body.setdefault('channel_keys', {})[channel[:60]] = key[:120]
+        elif command == 'MODE' and len(params) > 2 and params[1].startswith('+') and 'k' in params[1]:
+            body.setdefault('channel_keys', {})[params[0][:60]] = params[-1][:120]
+        elif command == 'TOPIC' and len(params) > 1:
+            self._topic(conn, params[0], params[1])
+        elif command in ('PRIVMSG', 'NOTICE') and len(params) > 1:
+            self._message(conn, True, conn.nick, params[0][:60], params[1])
+        elif command == 'OPER' and len(params) > 1:
+            body['oper'] = {'name': params[0][:60], 'password': params[1][:120]}
+            conn.pending_oper = True
+        elif command == 'QUIT':
+            body['quit'] = (params[-1] if params else '')[:_IRC_TEXT_MAX]
+
+    def _topic(self, conn, channel, text):
+        topics = conn.body.setdefault('topics', {})
+        if channel in topics or len(topics) < _IRC_LIST_MAX:
+            topics[channel[:60]] = text[:_IRC_TEXT_MAX]
+        if _irc_bot_command(text):
+            self._add(conn.body, 'bot_commands', text[:_IRC_TEXT_MAX])
+
+    def _server(self, conn, line):
+        prefix, command, params = _irc_split(line)
+        if not command:
+            return
+        body = conn.body
+        sender = prefix.split('!', 1)[0]
+        if command == '001' and params:
+            body['login'] = 'registered'
+            conn.nick = body['nick'] = params[0][:60]
+            body['server'] = prefix[:120]
+        elif command == '004' and len(params) > 2:
+            body['server_version'] = params[2][:80]
+        elif command == '005':
+            for param in params[1:]:
+                if param.upper().startswith('NETWORK='):
+                    body['network'] = param.split('=', 1)[1][:80]
+        elif command == '332' and len(params) > 2:
+            self._topic(conn, params[1], params[2])
+        elif command == 'TOPIC' and len(params) > 1:
+            self._topic(conn, params[0], params[1])
+        elif command == 'JOIN' and params and (conn.nick is None or sender == conn.nick):
+            for channel in params[0].split(','):
+                if len(conn.channels) < _IRC_LIST_MAX:
+                    conn.channels.setdefault(channel[:60], None)
+        elif command == 'NICK' and params and sender == conn.nick:
+            conn.nick = body['nick'] = params[0][:60]
+        elif command in ('PRIVMSG', 'NOTICE') and len(params) > 1 and '!' in prefix:
+            self._message(conn, False, sender[:60], params[0][:60], params[1])
+        elif command == '381':
+            if 'oper' in body:
+                body['oper']['result'] = 'succeeded'
+            conn.pending_oper = False
+        elif command == 'ERROR':
+            body['closed'] = (params[-1] if params else '')[:_IRC_TEXT_MAX]
+            if 'login' not in body:
+                body['login'] = 'failed' if 'password' in body['closed'].lower() else 'refused'
+        elif command.isascii() and command.isdigit() and int(command) in _IRC_ERROR_CODES:
+            text = (params[-1] if params else '')[:200]
+            if command in ('464', '491') and conn.pending_oper:
+                body['oper']['result'] = 'failed: ' + text
+                conn.pending_oper = False
+            elif command == '464' and 'login' not in body:
+                body['login'] = 'failed'
+            errors = body.setdefault('errors', {})
+            if command in errors or len(errors) < _IRC_LIST_MAX:
+                errors[command] = text
+        elif command == 'PING':
+            body['pings'] = body.get('pings', 0) + 1
+
+    def finish(self):
+        records = []
+        for conn in self.connections.values():
+            body = dict(conn.body)
+            if not body['commands'] and 'login' not in body:
+                continue                                    # nothing of IRC's
+            if conn.nicks:
+                body['nicks'] = list(conn.nicks)
+            if conn.channels:
+                body['channels'] = list(conn.channels)
+            body.setdefault('login', 'not registered')
+            if conn.nicks:
+                body.setdefault('nick', list(conn.nicks)[-1])     # (unregistered: the last one tried)
+            if _IRC_BOT_NICK.match(body.get('nick', '')):
+                body['bot_like_nick'] = True
+            records.append((conn.flow, conn.first, 'irc', body))
+        return records
+
+
 # ---------------------------------------------------------------- IEC 60870-5-104
 #
 # Telecontrol between a power grid's control centre and its substations.
@@ -3044,6 +6022,154 @@ class CDP(_Neighbors):
             body['duplex'] = 'full' if first('cdp.duplex') in ('1', 'True') else 'half'
 
 
+# ---------------------------------------------------------------- PROFINET DCP
+#
+# PROFINET's Discovery and Configuration Protocol, straight over Ethernet:
+# an engineering tool or IO controller finds devices (Identify - all of
+# them, or one by its station name), reads their settings (Get), and
+# assigns their station name and IP address (Set) - unauthenticated, so
+# anyone on the segment can rename a device, readdress it, reset it to
+# factory settings, or blink its LED (Signal). Two record types:
+# 'pn_dcp', one per action - an Identify query, folded with its repeats,
+# or a Set or Get with its result - and 'pn_device', one per device that
+# described itself (an Identify or Get response, or a Hello).
+
+_PN_DCP_SERVICES = {3: 'Get', 4: 'Set', 5: 'Identify', 6: 'Hello'}
+# Control block suboptions a Set can carry (1 and 2 bracket a
+# transaction, 4 is a response)
+_PN_DCP_CONTROLS = {3: 'signal', 5: 'reset factory settings', 6: 'reset to factory'}
+_PN_DCP_ERRORS = {1: 'option unsupported', 2: 'suboption unsupported', 3: 'suboption not set',
+                  4: 'resource error', 5: 'not possible (local reasons)', 6: 'not possible (in operation)'}
+_PN_DCP_ROLES = ((0x01, 'IO device'), (0x02, 'IO controller'), (0x04, 'IO multidevice'), (0x08, 'supervisor'))
+_PN_DCP_MAX_WAITING = 256
+
+
+def _pn_role(value):
+    bits = _int(value)
+    return ', '.join(name for bit, name in _PN_DCP_ROLES if bits & bit) if bits else ''
+
+
+class PNDCP:
+    """PROFINET DCP - see the comment above."""
+    event_type = 'pn_dcp'
+    app_protos = ('pn_dcp',)
+    fields = ('pn_dcp.service_id', 'pn_dcp.service_type', 'pn_dcp.xid', 'pn_dcp.suboption_all',
+              'pn_dcp.suboption_device_nameofstation', 'pn_dcp.suboption_device_devicevendorvalue',
+              'pn_dcp.suboption_device_aliasname', 'pn_dcp.suboption_vendor_id', 'pn_dcp.suboption_device_id',
+              'pn_dcp.suboption_device_role', 'pn_dcp.suboption_ip_ip', 'pn_dcp.suboption_ip_subnetmask',
+              'pn_dcp.suboption_ip_standard_gateway', 'pn_dcp.block_qualifier', 'pn_dcp.suboption_control',
+              'pn_dcp.suboption_dhcp', 'pn_dcp.block_error')
+
+    def __init__(self):
+        self.queries = {}      # (requester MAC, query) -> [flow, first seen, body]
+        self.devices = {}      # device MAC -> [flow, first seen, body]
+        self.actions = []      # (flow, when, body) of each Set and Get
+        self.waiting = {}      # (requester MAC, device MAC or None, xid) -> body
+
+    def feed(self, pkt, v):
+        def first(name):
+            return (v[name] or [''])[0]
+        service = _PN_DCP_SERVICES.get(_int(first('pn_dcp.service_id')))
+        kind = _int(first('pn_dcp.service_type'))
+        if service is None or kind is None:
+            return
+        xid = first('pn_dcp.xid')
+        if kind == 0:
+            if service == 'Hello':
+                self._device(pkt, pkt.src, v)
+            elif service == 'Identify':
+                self._identify(pkt, v, xid)
+            else:
+                self._request(pkt, service, v, xid)
+        else:
+            self._response(pkt, service, kind, v, xid)
+
+    def _identify(self, pkt, v, xid):
+        name = (v['pn_dcp.suboption_device_nameofstation'] or [''])[0]
+        alias = (v['pn_dcp.suboption_device_aliasname'] or [''])[0]
+        query = 'all' if v['pn_dcp.suboption_all'] else name or alias or 'by vendor or role'
+        key = (pkt.src, query)
+        entry = self.queries.get(key)
+        if entry is None:
+            entry = self.queries[key] = [pkt.flow, pkt.when, {'service': 'Identify', 'query': query,
+                                                              'count': 0, 'responses': 0}]
+        entry[2]['count'] += 1
+        self._wait((pkt.src, None, xid), entry[2])
+
+    def _request(self, pkt, service, v, xid):
+        body = {'service': service, 'result': 'no response'}
+        if service == 'Set':
+            changes = []
+            if v['pn_dcp.suboption_device_nameofstation']:
+                changes.append('station name')
+                body['station_name'] = v['pn_dcp.suboption_device_nameofstation'][0]
+            if v['pn_dcp.suboption_ip_ip']:
+                changes.append('IP address')
+                for key, field in (('ip', 'pn_dcp.suboption_ip_ip'), ('subnet_mask', 'pn_dcp.suboption_ip_subnetmask'),
+                                   ('gateway', 'pn_dcp.suboption_ip_standard_gateway')):
+                    if v[field]:
+                        body[key] = v[field][0]
+            if v['pn_dcp.suboption_dhcp']:
+                changes.append('DHCP')
+            changes += [_PN_DCP_CONTROLS[c] for c in (_int(x) for x in v['pn_dcp.suboption_control'])
+                        if c in _PN_DCP_CONTROLS]
+            if changes:
+                body['changes'] = list(dict.fromkeys(changes))
+            # a name or address set permanently (qualifier 1), or until the
+            # device restarts (0)
+            qualifier = _int((v['pn_dcp.block_qualifier'] or [''])[0])
+            if qualifier is not None and (v['pn_dcp.suboption_device_nameofstation'] or v['pn_dcp.suboption_ip_ip']):
+                body['permanent'] = bool(qualifier & 1)
+        self.actions.append((pkt.flow, pkt.when, body))
+        self._wait((pkt.src, pkt.dst, xid), body)
+
+    def _wait(self, key, body):
+        self.waiting[key] = body
+        if len(self.waiting) > _PN_DCP_MAX_WAITING:
+            self.waiting.pop(next(iter(self.waiting)))
+
+    def _response(self, pkt, service, kind, v, xid):
+        if service in ('Identify', 'Get'):
+            self._device(pkt, pkt.src, v)
+        body = self.waiting.get((pkt.dst, pkt.src, xid)) or self.waiting.get((pkt.dst, None, xid))
+        if body is None:
+            return
+        if service == 'Identify':
+            body['responses'] = body.get('responses', 0) + 1     # (its xid can match a Set's or Get's)
+            return
+        errors = [_PN_DCP_ERRORS.get(e, f'error {e}') for e in (_int(x) for x in v['pn_dcp.block_error']) if e]
+        body['result'] = ', '.join(dict.fromkeys(errors)) if errors else 'ok' if kind == 1 else 'not supported'
+
+    def _device(self, pkt, mac, v):
+        def first(name):
+            return (v[name] or [''])[0]
+        entry = self.devices.get(mac)
+        if entry is None:
+            entry = self.devices[mac] = [pkt.flow, pkt.when, {'mac': mac, 'count': 0}]
+        body = entry[2]
+        body['count'] += 1
+        body['last_seen'] = pkt.when
+        for key, field in (('station_name', 'pn_dcp.suboption_device_nameofstation'),
+                           ('device_type', 'pn_dcp.suboption_device_devicevendorvalue'),
+                           ('alias', 'pn_dcp.suboption_device_aliasname'),
+                           ('vendor_id', 'pn_dcp.suboption_vendor_id'), ('device_id', 'pn_dcp.suboption_device_id'),
+                           ('ip', 'pn_dcp.suboption_ip_ip'), ('subnet_mask', 'pn_dcp.suboption_ip_subnetmask'),
+                           ('gateway', 'pn_dcp.suboption_ip_standard_gateway')):
+            if first(field):
+                body[key] = first(field)
+        role = _pn_role(first('pn_dcp.suboption_device_role'))
+        if role:
+            body['role'] = role
+
+    def finish(self):
+        records = [(flow, when, 'pn_dcp', body) for flow, when, body in self.queries.values()]
+        records += [(flow, when, 'pn_dcp', body) for flow, when, body in self.actions]
+        for flow, when, body in self.devices.values():
+            body['last_seen'] = _iso_utc(body['last_seen'])
+            records.append((flow, when, 'pn_device', body))
+        return records
+
+
 # ---------------------------------------------------------------- GOOSE
 #
 # IEC 61850 GOOSE: a protection relay publishes its dataset's values by
@@ -3268,6 +6394,18 @@ def _dict(value):
     return value if isinstance(value, dict) else {}
 
 
+def _text(value):
+    """A JSON tree's text field - '' for anything else (a field tshark
+    wrote twice comes out a list)."""
+    return value if isinstance(value, str) else ''
+
+
+def _id(value):
+    """A request or invoke ID from a JSON tree - None for anything that
+    can't key a dict (a field tshark wrote twice comes out a list)."""
+    return value if isinstance(value, (str, int)) and not isinstance(value, bool) else None
+
+
 def _child(tree, name):
     """A JSON subtree's child by its label's name - tshark keys a
     structure 'Name: Type'."""
@@ -3378,7 +6516,7 @@ class OPCUA:
             body.setdefault('endpoint', pdu['opcua.transport.endpoint'])
         elif kind == 'ERR':
             body['transport_error'] = _opcua_status(pdu.get('opcua.transport.error', ''))
-        elif kind == 'OPN' and pdu.get('opcua.security.spu'):
+        elif kind == 'OPN' and _text(pdu.get('opcua.security.spu')):
             body.setdefault('security_policy', pdu['opcua.security.spu'].rsplit('#', 1)[-1])
         message = _child(pdu, 'Message')
         if not isinstance(message, dict):
@@ -3392,7 +6530,7 @@ class OPCUA:
         tree = message.get(name) if name in message else _child(message, name) if name else None
         if not name or not isinstance(tree, dict):
             return
-        request_id = pdu.get('opcua.sequence.rqid')
+        request_id = _id(pdu.get('opcua.sequence.rqid'))
         if name.endswith('Request'):
             self._request(pkt, session, name, tree, request_id)
         elif name.endswith('Response') or name == 'ServiceFault':
@@ -3513,6 +6651,562 @@ class OPCUA:
         return records + self.actions
 
 
+# ---------------------------------------------------------------- MMS
+#
+# MMS (ISO 9506), the client/server protocol IEC 61850 substations use
+# between SCADA and protective relays and bay controllers, over the OSI
+# session and presentation layers on TCP port 102. Its messages are
+# nested ASN.1, so it's read from the structured pass's JSON trees.
+
+# ConfirmedServiceRequest/Response's choice numbers
+_MMS_SERVICES = (
+    'status', 'getNameList', 'identify', 'rename', 'read', 'write', 'getVariableAccessAttributes',
+    'defineNamedVariable', 'defineScatteredAccess', 'getScatteredAccessAttributes', 'deleteVariableAccess',
+    'defineNamedVariableList', 'getNamedVariableListAttributes', 'deleteNamedVariableList', 'defineNamedType',
+    'getNamedTypeAttributes', 'deleteNamedType', 'input', 'output', 'takeControl', 'relinquishControl',
+    'defineSemaphore', 'deleteSemaphore', 'reportSemaphoreStatus', 'reportPoolSemaphoreStatus',
+    'reportSemaphoreEntryStatus', 'initiateDownloadSequence', 'downloadSegment', 'terminateDownloadSequence',
+    'initiateUploadSequence', 'uploadSegment', 'terminateUploadSequence', 'requestDomainDownload',
+    'requestDomainUpload', 'loadDomainContent', 'storeDomainContent', 'deleteDomain', 'getDomainAttributes',
+    'createProgramInvocation', 'deleteProgramInvocation', 'start', 'stop', 'resume', 'reset', 'kill',
+    'getProgramInvocationAttributes', 'obtainFile', 'defineEventCondition', 'deleteEventCondition',
+    'getEventConditionAttributes', 'reportEventConditionStatus', 'alterEventConditionMonitoring', 'triggerEvent',
+    'defineEventAction', 'deleteEventAction', 'getEventActionAttributes', 'reportEventActionStatus',
+    'defineEventEnrollment', 'deleteEventEnrollment', 'alterEventEnrollment', 'reportEventEnrollmentStatus',
+    'getEventEnrollmentAttributes', 'acknowledgeEventNotification', 'getAlarmSummary',
+    'getAlarmEnrollmentSummary', 'readJournal', 'writeJournal', 'initializeJournal', 'reportJournalStatus',
+    'createJournal', 'deleteJournal', 'getCapabilityList', 'fileOpen', 'fileRead', 'fileClose', 'fileRename',
+    'fileDelete', 'fileDirectory')
+_MMS_UNCONFIRMED = ('informationReport', 'unsolicitedStatus', 'eventNotification')
+# Services that change the server - everything else reads or browses
+_MMS_CHANGES = frozenset((
+    'rename', 'write', 'defineNamedVariable', 'defineScatteredAccess', 'deleteVariableAccess',
+    'defineNamedVariableList', 'deleteNamedVariableList', 'defineNamedType', 'deleteNamedType', 'output',
+    'takeControl', 'relinquishControl', 'defineSemaphore', 'deleteSemaphore', 'initiateDownloadSequence',
+    'terminateDownloadSequence', 'requestDomainDownload', 'loadDomainContent', 'deleteDomain',
+    'createProgramInvocation', 'deleteProgramInvocation', 'start', 'stop', 'resume', 'reset', 'kill',
+    'obtainFile', 'defineEventCondition', 'deleteEventCondition', 'alterEventConditionMonitoring',
+    'triggerEvent', 'defineEventAction', 'deleteEventAction', 'defineEventEnrollment', 'deleteEventEnrollment',
+    'alterEventEnrollment', 'acknowledgeEventNotification', 'writeJournal', 'initializeJournal',
+    'createJournal', 'deleteJournal', 'fileRename', 'fileDelete'))
+# ServiceError's errorClass choice numbers
+_MMS_ERROR_CLASSES = ('vmd-state', 'application-reference', 'definition', 'resource', 'service', 'service-preempt',
+                      'time-resolution', 'access', 'initiate', 'conclude', 'cancel', 'file', 'others')
+# DataAccessError values, a read's or write's per-item failure
+_MMS_ACCESS_ERRORS = ('object-invalidated', 'hardware-fault', 'temporarily-unavailable', 'object-access-denied',
+                      'object-undefined', 'invalid-address', 'type-unsupported', 'type-inconsistent',
+                      'object-attribute-inconsistent', 'object-access-unsupported', 'object-non-existent',
+                      'object-value-invalid')
+
+
+def _mms_name(table, value):
+    """A choice number's name from one of the tables above, or the number."""
+    number = _int(value)
+    return table[number] if number is not None and 0 <= number < len(table) else str(value)
+
+
+def _mms_find(tree, key):
+    """Every value of a key anywhere under a subtree, in order."""
+    found = []
+    if isinstance(tree, dict):
+        for name, value in tree.items():
+            if name == key:
+                found.extend(value if isinstance(value, list) else [value])
+            else:
+                found.extend(_mms_find(value, key))
+    elif isinstance(tree, list):
+        for item in tree:
+            found.extend(_mms_find(item, key))
+    return found
+
+
+def _mms_object_names(tree):
+    """The object names under a subtree, as MMS writes them: 'domain/item'
+    for a domain-specific name (an IEC 61850 logical device's
+    'IED1LD0/XCBR1$CO$Pos'), the bare name for a VMD-specific one."""
+    names = []
+    if isinstance(tree, dict):
+        for name, value in tree.items():
+            if name == 'mms.domain_specific_element':
+                for element in value if isinstance(value, list) else [value]:
+                    if isinstance(element, dict) and element.get('mms.itemId') is not None:
+                        domain = element.get('mms.domainId')
+                        names.append(f'{domain}/{element["mms.itemId"]}' if domain else element['mms.itemId'])
+            elif name in ('mms.vmd_specific', 'mms.aa_specific'):
+                names.extend(v for v in (value if isinstance(value, list) else [value]) if isinstance(v, str))
+            else:
+                names.extend(_mms_object_names(value))
+    elif isinstance(tree, list):
+        for item in tree:
+            names.extend(_mms_object_names(item))
+    return names
+
+
+_MMS_MAX_VALUES = 10
+# tshark names a value by its IEC 61850 meaning where it can guess one
+# ('mms.iec61850.ctlval') - but these are a timestamp's quality flags,
+# not values of their own
+_MMS_TIME_QUALITY = frozenset(('mms.iec61850.timeaccuracy', 'mms.iec61850.leapsecondknown',
+                               'mms.iec61850.clocknotsynchronized', 'mms.iec61850.clockfailure'))
+
+
+def _mms_data(tree):
+    """A Data subtree's values, flattened in order ('1, 0, 2024-...'),
+    the first few of a structure or array - or None for none."""
+    values = [str(v) for k, v in _flatten(tree).items() for v in v
+              if k.startswith(('mms.data', 'mms.integer', 'mms.unsigned', 'mms.boolean', 'mms.floating',
+                               'mms.utc_time', 'mms.binary-time', 'mms.visible', 'mms.octet', 'mms.mMSString',
+                               'mms.bcd', 'mms.generalized', 'mms.iec61850.'))
+              and k not in _MMS_TIME_QUALITY]
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    return ', '.join(values[:_MMS_MAX_VALUES]) + (' ...' if len(values) > _MMS_MAX_VALUES else '')
+
+
+def _mms_error(tree):
+    """A ServiceError subtree's class and code ('access: 2'), or None."""
+    error = _child(tree, 'mms.serviceError_element') if isinstance(tree, dict) else None
+    if not isinstance(error, dict):
+        return None
+    kind = _mms_name(_MMS_ERROR_CLASSES, error.get('mms.errorClass'))
+    codes = [v for v in _dict(error.get('mms.errorClass_tree')).values() if isinstance(v, str)]
+    return f'{kind}: {codes[0]}' if codes else kind
+
+
+_MMS_MAX_DOMAINS = 20
+_MMS_MAX_ACTIONS_PER_REQUEST = 100
+# IEC 61850 control model: a write to a controllable object's Oper, SBO/SBOw
+# or Cancel attribute ('LD0/XCBR1$CO$Pos$Oper') is a control command
+_MMS_CONTROLS = {'Oper': 'operate', 'SBO': 'select', 'SBOw': 'select', 'Cancel': 'cancel'}
+_MMS_IDENTIFIERS = ('mms.programInvocationName', 'mms.deleteProgramInvocation', 'mms.domainName', 'mms.deleteDomain',
+                    'mms.FileName_item', 'mms.fileName_item')
+
+
+class _MMSAssociation:
+    __slots__ = ('flow', 'first', 'body', 'domains', 'waiting')
+
+    def __init__(self, flow, first):
+        self.flow, self.first = flow, first
+        self.body = {'services': {}, 'errors': 0}
+        self.domains = {}      # logical device -> None, in first-seen order
+        self.waiting = {}      # invoke id -> (service, [action bodies])
+
+
+class MMS:
+    """MMS - see the comment above. One 'mms' record per connection: whether
+    it was initiated, how many of each service the client called, the
+    logical devices (domains) it touched, the server's vendor, model and
+    revision if Identify asked, the reports the server sent, and errors."""
+    event_type = 'mms'
+    app_protos = ('mms',)
+    tshark_protocols = ('tpkt', 'cotp', 'ses', 'pres', 'acse', 'mms')
+    layers = ('mms',)
+    display_filter = 'mms'
+
+    def __init__(self):
+        self.associations = {}     # flow key -> _MMSAssociation
+        self.actions = []
+
+    def feed_json(self, pkt, layers):
+        association = self.associations.get(pkt.flow.key)
+        if association is None:
+            association = self.associations[pkt.flow.key] = _MMSAssociation(pkt.flow, pkt.when)
+        for pdu in _pdus(layers.get('mms')):
+            if isinstance(pdu, dict):
+                for kind, tree in pdu.items():
+                    self._pdu(pkt, association, kind, tree)
+
+    def _pdu(self, pkt, association, kind, tree):
+        body = association.body
+        if kind == 'mms.initiate_RequestPDU_element':
+            body.setdefault('initiate', 'no response')
+        elif kind == 'mms.initiate_ResponsePDU_element':
+            body['initiate'] = 'accepted'
+        elif kind == 'mms.initiate_ErrorPDU_element':
+            body['initiate'] = _mms_error({'mms.serviceError_element': tree}) or 'rejected'
+            body['errors'] += 1
+        elif kind == 'mms.conclude_RequestPDU_element':
+            body['concluded'] = True
+        elif kind == 'mms.confirmed_RequestPDU_element' and isinstance(tree, dict):
+            self._request(pkt, association, tree)
+        elif kind == 'mms.confirmed_ResponsePDU_element' and isinstance(tree, dict):
+            self._response(association, tree)
+        elif kind == 'mms.confirmed_ErrorPDU_element' and isinstance(tree, dict):
+            self._failed(association, _id(tree.get('mms.invokeID')), _mms_error(tree) or 'error')
+        elif kind == 'mms.unconfirmed_PDU_element' and isinstance(tree, dict):
+            service = _mms_name(_MMS_UNCONFIRMED, tree.get('mms.unconfirmedService'))
+            reports = body.setdefault('reports', {})
+            reports[service] = reports.get(service, 0) + 1
+        elif kind in ('mms.rejectPDU_element', 'mms.reject_PDU_element'):
+            body['errors'] += 1
+            body['last_error'] = 'reject'
+
+    def _domains(self, association, tree):
+        for name in _mms_object_names(tree):
+            if '/' in name and len(association.domains) < _MMS_MAX_DOMAINS:
+                association.domains.setdefault(name.split('/', 1)[0], None)
+
+    def _request(self, pkt, association, tree):
+        body = association.body
+        service = _mms_name(_MMS_SERVICES, tree.get('mms.confirmedServiceRequest'))
+        body['services'][service] = body['services'].get(service, 0) + 1
+        request = tree.get('mms.confirmedServiceRequest_tree')
+        self._domains(association, request)
+        actions = self._changes(pkt, service, request) if service in _MMS_CHANGES else []
+        invoke = _id(tree.get('mms.invokeID'))
+        if invoke is not None:
+            association.waiting[invoke] = (service, actions)
+            if len(association.waiting) > 256:
+                association.waiting.pop(next(iter(association.waiting)))
+
+    def _changes(self, pkt, service, request):
+        """'mms_action' records for a request that changes the server: one
+        per object it names (a write's variables, with the value written),
+        or one for the request when it names none."""
+        names = _mms_object_names(request)[:_MMS_MAX_ACTIONS_PER_REQUEST]
+        if not names:
+            # a program, domain or file is named by a plain identifier
+            names = [v for key in _MMS_IDENTIFIERS for v in _mms_find(request, key) if isinstance(v, str)][:1]
+        values = []
+        if service == 'write':
+            data = _mms_find(request, 'mms.listOfData_tree')
+            items = _mms_find(data[0], 'mms.Data_tree') if data else []
+            values = [_mms_data(item) for item in items]
+        actions = []
+        for i, name in enumerate(names or [None]):
+            action = {'service': service, 'result': 'no response'}
+            if name:
+                action['object'] = name
+                control = _MMS_CONTROLS.get(name.rsplit('$', 1)[-1]) if service == 'write' else None
+                if control:
+                    action['control'] = control
+            if i < len(values) and values[i] is not None:
+                action['value'] = values[i]
+            elif len(names) == 1 and len(values) > 1:
+                action['value'] = ', '.join(v for v in values if v is not None)
+            self.actions.append((pkt.flow, pkt.when, 'mms_action', action))
+            actions.append(action)
+        return actions
+
+    def _response(self, association, tree):
+        waiting = association.waiting.pop(_id(tree.get('mms.invokeID')), None)
+        service = waiting[0] if waiting else _mms_name(_MMS_SERVICES, tree.get('mms.confirmedServiceResponse'))
+        response = tree.get('mms.confirmedServiceResponse_tree')
+        if waiting and waiting[1]:
+            # a write's response lists each item's success or failure
+            failures = []
+            if service == 'write' and isinstance(response, dict):
+                for item in _mms_find(response, 'mms.Write_Response_item_tree') or [response]:
+                    failure = _dict(item).get('mms.failure')
+                    failures.append(_mms_name(_MMS_ACCESS_ERRORS, failure) if failure is not None else None)
+            for i, action in enumerate(waiting[1]):
+                action['result'] = (failures[i] if i < len(failures) else None) or 'success'
+        if service == 'identify':
+            for key, field in (('vendor', 'mms.vendorName'), ('model', 'mms.modelName'), ('revision', 'mms.revision')):
+                found = _mms_find(response, field)
+                if found:
+                    association.body[key] = found[0]
+        if service == 'getNameList':
+            self._domains(association, response)
+
+    def _failed(self, association, invoke, error):
+        body = association.body
+        waiting = association.waiting.pop(invoke, None)
+        for action in waiting[1] if waiting else ():
+            action['result'] = error
+        body['errors'] += 1
+        body['last_error'] = f'{waiting[0]}: {error}' if waiting else error
+
+    def finish(self):
+        records = []
+        for association in self.associations.values():
+            body = association.body
+            if association.domains:
+                body['domains'] = list(association.domains)
+            # a lone response, its request before the capture, says nothing
+            if body['services'] or len(body) > 2:
+                records.append((association.flow, association.first, 'mms', body))
+        return records + self.actions
+
+
+# ---------------------------------------------------------------- MongoDB
+#
+# MongoDB's wire protocol (TCP 27017), which Suricata doesn't parse: legacy
+# OP_QUERY commands (what most scanners still send - isMaster, buildinfo,
+# listDatabases) and their OP_REPLY, and OP_MSG, today's request and reply.
+# Its messages are BSON documents nested in documents, so it's read from
+# the structured pass's JSON trees.
+
+# Opcodes tshark names
+_MONGO_REPLY, _MONGO_UPDATE, _MONGO_INSERT, _MONGO_QUERY, _MONGO_DELETE = 1, 2001, 2002, 2004, 2006
+_MONGO_COMPRESSED, _MONGO_MSG = 2012, 2013
+# Commands that only say hello, log in or look at the connection itself
+_MONGO_HANDSHAKE = frozenset((
+    'hello', 'ismaster', 'isMaster', 'buildinfo', 'buildInfo', 'ping', 'getnonce', 'authenticate', 'saslStart',
+    'saslContinue', 'logout', 'whatsmyuri', 'endSessions', 'getLastError', 'getlasterror', 'saslSupportedMechs'))
+# Commands that change the server's data, users or state
+_MONGO_CHANGES = frozenset((
+    'insert', 'update', 'delete', 'findAndModify', 'findandmodify', 'drop', 'dropDatabase', 'create',
+    'createIndexes', 'dropIndexes', 'renameCollection', 'collMod', 'convertToCapped', 'createUser', 'updateUser',
+    'dropUser', 'dropAllUsersFromDatabase', 'grantRolesToUser', 'revokeRolesFromUser', 'createRole', 'updateRole',
+    'dropRole', 'grantPrivilegesToRole', 'shutdown', 'eval', '$eval', 'setParameter', 'applyOps', 'fsync',
+    'killOp', 'compact', 'repairDatabase', 'cloneCollection', 'copydb'))
+# Element names whose values are never kept - a login's or user's secrets
+_MONGO_SECRETS = frozenset(('pwd', 'password', 'passwd', 'key', 'nonce', 'payload', 'digestPassword'))
+_MONGO_MAX_DATABASES = 50
+_MONGO_PREVIEW = 200
+
+
+def _mongo_elements(doc):
+    """A BSON document's JSON tree as (name, value) pairs, in order: a
+    value is a string or number, or a subdocument's tree (an array is a
+    document too, its names '0', '1'...)."""
+    els = _dict(_dict(doc).get('mongo.elements'))
+    names, trees = els.get('mongo.element.name'), els.get('mongo.element.name_tree')
+    if names is None:
+        return []
+    if not isinstance(names, list):
+        names, trees = [names], [trees]
+    pairs = []
+    for name, tree in zip(names, trees if isinstance(trees, list) else [trees]):
+        tree = _dict(tree)
+        value = next((v for k, v in tree.items() if k.startswith('mongo.element.value.')
+                      and k != 'mongo.element.value.length'), None)
+        pairs.append((name, value if value is not None else tree.get('mongo.document')))
+    return pairs
+
+
+def _mongo_get(doc, name):
+    return next((v for n, v in _mongo_elements(doc) if n == name), None)
+
+
+def _mongo_documents(message):
+    """A message's documents: an OP_QUERY's query, an OP_MSG's body and
+    document sequences, an OP_REPLY's documents, a legacy write's."""
+    docs = []
+    for key in ('mongo.query', 'mongo.document', 'mongo.selector', 'mongo.update'):
+        value = message.get(key)
+        docs.extend(value if isinstance(value, list) else [value] if value is not None else [])
+    for section in _pdus(message.get('mongo.msg.sections.section')):
+        section = _dict(section)
+        if section.get('mongo.msg.sections.section.body') is not None:
+            docs.append(section['mongo.msg.sections.section.body'])
+        sequence = _dict(section.get('mongo.msg.sections.section.doc_sequence'))
+        docs.extend(_pdus(sequence.get('mongo.document')))
+    return [d for d in docs if isinstance(d, dict)]
+
+
+def _mongo_preview(doc, depth=0):
+    """A document as short text ('{note: READ ME, btc: 1Ab...}'), secrets
+    left out, cut at _MONGO_PREVIEW characters."""
+    parts = []
+    for name, value in _mongo_elements(doc):
+        if name in _MONGO_SECRETS:
+            continue
+        shown = ('{' + _mongo_preview(value, depth + 1) + '}' if depth < 2 else '{...}') if isinstance(value, dict) else value
+        parts.append(f'{name}: {shown}')
+    text = ', '.join(parts)
+    return text if depth or len(text) <= _MONGO_PREVIEW else text[:_MONGO_PREVIEW] + '...'
+
+
+def _mongo_sasl_user(mechanism, payload):
+    """The user a SASL login names - SCRAM's client-first message
+    ('n,,n=alice,r=...'), or PLAIN's authentication identity (never its
+    password)."""
+    try:
+        data = bytes.fromhex(str(payload).replace(':', ''))
+    except ValueError:
+        return None
+    if mechanism == 'PLAIN':
+        fields = data.split(b'\x00')
+        return fields[1].decode('utf-8', 'replace') if len(fields) == 3 else None
+    match = re.search(rb'(?:^|,)n=([^,]*)', data.split(b',,', 1)[-1])
+    return match.group(1).decode('utf-8', 'replace').replace('=2C', ',').replace('=3D', '=') if match else None
+
+
+class _MongoConnection:
+    __slots__ = ('flow', 'first', 'body', 'databases', 'waiting', 'mechanism', 'authenticated')
+
+    def __init__(self, flow, first):
+        self.flow, self.first = flow, first
+        self.body = {'commands': {}, 'errors': 0, 'answered': False}
+        self.databases = {}    # database -> None, in first-seen order
+        self.waiting = {}      # request id -> (command, [action bodies])
+        self.mechanism = None
+        self.authenticated = False
+
+
+class MongoDB:
+    """MongoDB - see the comment above. One 'mongodb' record per connection:
+    the client's driver, application and OS (from its hello), the login
+    (user and mechanism, never a password or key) and whether it worked,
+    how many of each command it sent, the databases it touched, what the
+    server answered (its version, the databases it listed), and errors."""
+    event_type = 'mongodb'
+    app_protos = ('mongo',)
+    tshark_protocols = ('mongo',)
+    layers = ('mongo',)
+    display_filter = 'mongo'
+
+    def __init__(self):
+        self.connections = {}      # flow key -> _MongoConnection
+        self.actions = []
+
+    def feed_json(self, pkt, layers):
+        connection = self.connections.get(pkt.flow.key)
+        if connection is None:
+            connection = self.connections[pkt.flow.key] = _MongoConnection(pkt.flow, pkt.when)
+        for message in _pdus(layers.get('mongo')):
+            if isinstance(message, dict):
+                self._message(pkt, connection, message)
+
+    def _message(self, pkt, connection, message):
+        body = connection.body
+        opcode = _int(message.get('mongo.opcode'))
+        if opcode == _MONGO_COMPRESSED:
+            body['compressed'] = body.get('compressed', 0) + 1
+            opcode = _int(message.get('mongo.compression.original_opcode'))
+        docs = _mongo_documents(message)
+        reply_to = _int(message.get('mongo.response_to')) or 0
+        if opcode == _MONGO_REPLY or (opcode == _MONGO_MSG and reply_to not in (0, 0xffffffff)):
+            body['answered'] = True
+            self._reply(connection, _id(message.get('mongo.response_to')), docs[0] if docs else {})
+            return
+        namespace = _text(message.get('mongo.full_collection_name'))
+        database, _, collection = namespace.partition('.')
+        if opcode in (_MONGO_QUERY, _MONGO_MSG) and docs and (opcode == _MONGO_MSG or collection == '$cmd'):
+            command, target = (_mongo_elements(docs[0]) or [(None, None)])[0]
+            database = _mongo_get(docs[0], '$db') or database
+            collection = target if isinstance(target, str) else ''
+        elif opcode == _MONGO_QUERY:
+            command = 'find'
+        else:
+            command = {_MONGO_INSERT: 'insert', _MONGO_UPDATE: 'update', _MONGO_DELETE: 'delete'}.get(opcode)
+        if not command:
+            return
+        body['commands'][command] = body['commands'].get(command, 0) + 1
+        if database and len(connection.databases) < _MONGO_MAX_DATABASES:
+            connection.databases.setdefault(database, None)
+        if docs:
+            self._login(connection, command, docs[0], database)
+            if command.lower() in ('hello', 'ismaster'):
+                self._client(body, _mongo_get(docs[0], 'client'))
+        actions = self._change(pkt, opcode, command, database, collection, docs) if command in _MONGO_CHANGES else []
+        request_id = _id(message.get('mongo.request_id'))
+        if request_id is not None:
+            connection.waiting[request_id] = (command, actions)
+            if len(connection.waiting) > 256:
+                connection.waiting.pop(next(iter(connection.waiting)))
+
+    def _change(self, pkt, opcode, command, database, collection, docs):
+        """A 'mongodb_action' record for a command that changes the server:
+        its database and collection (or the user or role it's about), how
+        many documents it carries, and a preview of the first - an
+        attacker's ransom note is usually the one document inserted."""
+        action = {'command': command, 'database': database, 'result': 'no response'}
+        if command in ('createUser', 'updateUser', 'dropUser', 'grantRolesToUser', 'revokeRolesFromUser',
+                       'createRole', 'updateRole', 'dropRole', 'grantPrivilegesToRole'):
+            action['user' if 'User' in command else 'role'] = collection
+            roles = _mongo_get(docs[0], 'roles') if docs else None
+            if isinstance(roles, dict):
+                action['roles'] = [r if not isinstance(r, dict) else _mongo_preview(r) for _, r in _mongo_elements(roles)][:10]
+        elif collection and command not in ('dropDatabase', 'shutdown', 'fsync', 'setParameter', 'killOp'):
+            action['collection'] = collection
+        if opcode == _MONGO_MSG or opcode == _MONGO_QUERY:
+            items = {'insert': 'documents', 'update': 'updates', 'delete': 'deletes'}.get(command)
+            listed = [v for _, v in _mongo_elements(_mongo_get(docs[0], items))] if items and docs else []
+            if items and not listed:
+                listed = docs[1:]      # OP_MSG's document sequence
+            if items:
+                action['count'] = len(listed)
+            if command == 'insert' and listed and isinstance(listed[0], dict):
+                action['document'] = _mongo_preview(listed[0])
+            elif command in ('update', 'delete') and listed and isinstance(listed[0], dict):
+                action['filter'] = _mongo_preview(_mongo_get(listed[0], 'q'))
+        elif opcode == _MONGO_INSERT:
+            action['count'] = len(docs)
+            if docs:
+                action['document'] = _mongo_preview(docs[0])
+        elif docs:
+            action['count'] = 1
+            action['filter'] = _mongo_preview(docs[0])
+        self.actions.append((pkt.flow, pkt.when, 'mongodb_action', action))
+        return [action]
+
+    @staticmethod
+    def _client(body, client):
+        if not isinstance(client, dict):
+            return
+        driver, app, os_ = (_mongo_get(client, k) for k in ('driver', 'application', 'os'))
+        if isinstance(driver, dict):
+            body['driver'] = ' '.join(str(v) for v in (_mongo_get(driver, 'name'), _mongo_get(driver, 'version')) if v)
+        if isinstance(app, dict) and _mongo_get(app, 'name'):
+            body['application'] = _mongo_get(app, 'name')
+        if isinstance(os_, dict):
+            body['os'] = ' '.join(str(v) for v in (_mongo_get(os_, 'name') or _mongo_get(os_, 'type'),
+                                                   _mongo_get(os_, 'version')) if v)
+        if _mongo_get(client, 'platform'):
+            body['platform'] = _mongo_get(client, 'platform')
+
+    def _login(self, connection, command, doc, database):
+        body = connection.body
+        if command == 'saslStart':
+            connection.mechanism = _mongo_get(doc, 'mechanism')
+            user = _mongo_sasl_user(connection.mechanism, _mongo_get(doc, 'payload'))
+        elif command == 'authenticate':
+            connection.mechanism = _mongo_get(doc, 'mechanism') or 'MONGODB-CR'
+            user = _mongo_get(doc, 'user')
+        else:
+            return
+        if connection.mechanism:
+            body['auth_mechanism'] = connection.mechanism
+        if user:
+            body['user'] = user
+        body['auth_database'] = database
+        body.setdefault('login', 'no response')
+
+    def _reply(self, connection, request_id, doc):
+        body = connection.body
+        waiting = connection.waiting.pop(request_id, None)
+        command, actions = waiting if waiting else ('', [])
+        ok = _mongo_get(doc, 'ok')
+        failed = ok is not None and str(ok) in ('0', '0.0', 'False', 'false')
+        error = _mongo_get(doc, 'errmsg') or _mongo_get(doc, '$err') or _mongo_get(doc, 'codeName')
+        if failed or (error and ok is None):
+            body['errors'] += 1
+            body['last_error'] = f'{command}: {error}' if command else str(error)
+        if command in ('saslStart', 'saslContinue', 'authenticate'):
+            if failed:
+                body['login'] = 'failed'
+            elif command == 'authenticate' or str(_mongo_get(doc, 'done')) in ('1', 'True', 'true'):
+                body['login'] = 'succeeded'
+                connection.authenticated = True
+        elif command.lower() == 'buildinfo' and _mongo_get(doc, 'version'):
+            body['server_version'] = _mongo_get(doc, 'version')
+        elif command == 'listDatabases' and not failed:
+            listed = _mongo_get(doc, 'databases')
+            names = [_mongo_get(d, 'name') for _, d in _mongo_elements(listed) if isinstance(d, dict)]
+            body['databases_listed'] = [n for n in names if n][:_MONGO_MAX_DATABASES]
+        if not failed and command and command not in _MONGO_HANDSHAKE and not connection.authenticated:
+            body['unauthenticated'] = True
+        for action in actions:
+            action['result'] = f'error: {error}' if failed else 'ok'
+            if not failed and _mongo_get(doc, 'n') is not None:
+                action['n'] = _int(_mongo_get(doc, 'n'), _mongo_get(doc, 'n'))
+
+    def finish(self):
+        records = []
+        for connection in self.connections.values():
+            body = connection.body
+            if connection.databases:
+                body['databases'] = list(connection.databases)
+            if body['commands'] or body['answered']:
+                records.append((connection.flow, connection.first, 'mongodb', body))
+        return records + self.actions
+
+
 # ---------------------------------------------------------------- structured protocols
 #
 # Protocols whose messages nest - an OPC UA write's node ids beside its
@@ -3554,11 +7248,11 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS, Redis, Zabbix, IRC)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).
-STRUCTURED_PROTOCOLS = (OPCUA,)
+STRUCTURED_PROTOCOLS = (OPCUA, MMS, MongoDB)
 # Flow application protocols with transaction records here - every other
 # one gets a connection tab (db.CONNECTION_TYPE_PREFIX) instead.
 RECORDED_APP_PROTOS = frozenset(p for proto in PROTOCOLS + STRUCTURED_PROTOCOLS for p in proto.app_protos)

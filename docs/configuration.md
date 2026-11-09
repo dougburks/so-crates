@@ -2,7 +2,7 @@
 
 ## Data Storage
 
-All analyzed files are stored in `~/socrates-data/`. It holds a set of shared rule/config directories plus one `<md5>/` subdirectory per analysis:
+All analyzed files are stored in `DATA_DIR` - `~/socrates-data/` by default (`/data` in the container image). It holds a set of shared rule/config directories plus one `<md5>/` subdirectory per analysis:
 
 ```
 ~/socrates-data/

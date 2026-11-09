@@ -1,6 +1,6 @@
 # Themes
 
-SO-CRATES includes thirty-five UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them: hovering a theme shows a live preview without changing the rest of the app, and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
+SO-CRATES includes forty-two UI themes in three groups - Dark Themes, Light Themes, and Fun Themes. Press `<`/`>` to cycle through themes, or open Themes from the gear icon menu in the upper-right corner to browse them - six to a row, so the whole picker fits a 1080p window without scrolling. Hovering a theme shows a live preview without changing the rest of the app - a miniature of the analysis page, with stat cards in their Triage, Protocol records and Connections sections, each number in its event type's color, and a fun theme's corner brackets on the active card - and clicking applies it for real without closing the picker, so you can click through several in a row. The currently applied theme is highlighted with an accent-colored border in the grid. Your choice is persisted in the browser's `localStorage` and restored on the next visit.
 
 Click any screenshot below to zoom in.
 
@@ -26,8 +26,12 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/gruvbox.png" width="360" height="225" alt="Gruvbox theme">
 - **Hackerman** - dark cyberpunk theme with neon mint-green accents and icy cyan text
   <br><img loading="lazy" src="../images/themes/hackerman.png" width="360" height="225" alt="Hackerman theme">
+- **Jade Horse** - dark jade theme with soft mint accents and pale green text, from Omarchy
+  <br><img loading="lazy" src="../images/themes/jade-horse.png" width="360" height="225" alt="Jade Horse theme">
 - **Kanagawa** - dark theme inspired by the Great Wave, with crystal-blue accents and muted ink tones
   <br><img loading="lazy" src="../images/themes/kanagawa.png" width="360" height="225" alt="Kanagawa theme">
+- **Last Horizon** - near-black theme with dusty rose accents and cool gray text, from Omarchy
+  <br><img loading="lazy" src="../images/themes/last-horizon.png" width="360" height="225" alt="Last Horizon theme">
 - **Lumon** - dark monochrome blue theme inspired by the Lumon Industries aesthetic
   <br><img loading="lazy" src="../images/themes/lumon.png" width="360" height="225" alt="Lumon theme">
 - **Matte Black** - dark theme with orange/yellow accents
@@ -42,6 +46,8 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/nord.png" width="360" height="225" alt="Nord theme">
 - **OhMyDebn** - dark theme matching OhMyDebn's own default desktop look, with periwinkle-blue accents
   <br><img loading="lazy" src="../images/themes/ohmydebn.png" width="360" height="225" alt="OhMyDebn theme">
+- **One Dark** - dark blue-gray theme with soft blue accents, from the Atom editor
+  <br><img loading="lazy" src="../images/themes/one-dark.png" width="360" height="225" alt="One Dark theme">
 - **Osaka Jade** - dark forest theme with jade-green accents and sage/cream text
   <br><img loading="lazy" src="../images/themes/osaka-jade.png" width="360" height="225" alt="Osaka Jade theme">
 - **Retro 82** - dark navy theme with warm orange accents and teal highlights
@@ -50,6 +56,8 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/ristretto.png" width="360" height="225" alt="Ristretto theme">
 - **Solarized Dark** - classic low-contrast dark theme with muted blue-green base tones
   <br><img loading="lazy" src="../images/themes/solarized-dark.png" width="360" height="225" alt="Solarized Dark theme">
+- **Solitude** - near-black slate-gray theme with quiet gray accents, from Omarchy
+  <br><img loading="lazy" src="../images/themes/solitude.png" width="360" height="225" alt="Solitude theme">
 - **Tokyo Night** - dark theme with blue/purple accents inspired by the Tokyo Night palette
   <br><img loading="lazy" src="../images/themes/tokyo-night.png" width="360" height="225" alt="Tokyo Night theme">
 - **Vantablack** - pure monochrome theme with white text on true black
@@ -61,6 +69,8 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/catppuccin-latte.png" width="360" height="225" alt="Catppuccin Latte theme">
 - **Flexoki Light** - light theme based on the warm, paper-like Flexoki palette, with blue accents
   <br><img loading="lazy" src="../images/themes/flexoki-light.png" width="360" height="225" alt="Flexoki Light theme">
+- **Lupine** - clean light gray theme with cobalt-blue accents, from Omarchy
+  <br><img loading="lazy" src="../images/themes/lupine.png" width="360" height="225" alt="Lupine theme">
 - **Rose Pine** - light theme based on the warm Rosé Pine Dawn palette
   <br><img loading="lazy" src="../images/themes/rose-pine.png" width="360" height="225" alt="Rose Pine theme">
 - **Sguil** - light theme inspired by the classic Sguil NSM interface, with gray chrome and navy headers
@@ -69,6 +79,8 @@ The built-in CyberChef switches to its own Dark theme while SO-CRATES shows a da
   <br><img loading="lazy" src="../images/themes/white.png" width="360" height="225" alt="White theme">
 
 ## Fun Themes
+
+Each Fun theme also swaps the plain loading messages shown while a file is analyzed for its own - Thermal's and War Room's included. The Dark and Light themes keep the plain ones.
 
 Every theme on this page (Fun or otherwise) can also be switched to by typing its name anywhere outside a text field and pressing Enter (if what you've typed also matches another theme, arrow to the right one first) - see [Command Palette](usage/keyboard-and-menus.md#command-palette).
 
@@ -90,5 +102,9 @@ Every theme on this page (Fun or otherwise) can also be switched to by typing it
   <br><img loading="lazy" src="../images/themes/mp3-player.png" width="360" height="225" alt="MP3 Player theme">
 - **Retro Handheld** - pale yellow-green background with dark-green text, recreating the four-shade monochrome LCD screen of a classic late-'80s handheld game console
   <br><img loading="lazy" src="../images/themes/retro-handheld.png" width="360" height="225" alt="Retro Handheld theme">
+- **Thermal** - a thermal camera view: near-black purple with white-hot, yellow and orange highlights, plus drifting heat signatures in the background shaded through the "ironbow" palette thermal cameras use
+  <br><img loading="lazy" src="../images/themes/thermal.png" width="360" height="225" alt="Thermal theme">
 - **Vaporwave** - dark purple/navy theme with hot-pink accents and cyan/mint/pastel-yellow highlights, evoking the modern (2010s+) vaporwave internet aesthetic
   <br><img loading="lazy" src="../images/themes/vaporwave.png" width="360" height="225" alt="Vaporwave theme">
+- **War Room** - a 1980s command center's wall display: cyan vector linework and labels on near-black navy, with tracks plotted across a faint grid behind the page, a stroke at a time, from a launch point to a ring at the target. Its Traffic Map draws the country borders and latitude/longitude grid in bright cyan
+  <br><img loading="lazy" src="../images/themes/war-room.png" width="360" height="225" alt="War Room theme">

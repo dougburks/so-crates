@@ -1,0 +1,448 @@
+<!doctype html>
+<!-- The release's social video (scripts/social_video/render.py). Each
+     release: the version (title, intro, CTA, brand), the scenes' text, the
+     protocol wall's GROUPS and the "Also in" stats change; the lab scenes'
+     highlight boxes follow capture.py's screens (positions.py measures
+     them). Its shots/ are capture.py's, in the release's video folder. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>SO-CRATES 5.3</title>
+<style>
+:root {
+  --bg: #0d1117; --panel: #161b22; --panel2: #21262d; --border: #30363d;
+  --text: #c9d1d9; --bright: #f0f6fc; --muted: #8b949e; --accent: #58a6ff;
+  --red: #ff6b6b; --orange: #ffa726; --green: #66bb6a; --purple: #ba68c8; --teal: #26a69a;
+  --pink: #ff4fd8; --cyan: #3de8ff;
+  --W: 1920px; --H: 1080px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: var(--W); height: var(--H); overflow: hidden; background: var(--bg); }
+body { font-family: 'Noto Sans', 'DejaVu Sans', sans-serif; color: var(--text); }
+body.sq { --W: 1080px; --H: 1080px; }
+#stage { position: relative; width: var(--W); height: var(--H); overflow: hidden;
+  background: radial-gradient(ellipse at 20% 0%, #15233a 0%, var(--bg) 55%); }
+.grid-bg { position: absolute; inset: -200px; opacity: .22;
+  background-image: linear-gradient(rgba(88,166,255,.18) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(88,166,255,.18) 1px, transparent 1px);
+  background-size: 64px 64px; }
+.scene { position: absolute; inset: 0; opacity: 0; }
+.a { will-change: transform, opacity; }
+.mono { font-family: 'DejaVu Sans Mono', monospace; }
+.dot { display: inline-block; width: .5em; height: .5em; border-radius: 50%; background: var(--accent);
+  vertical-align: middle; box-shadow: 0 0 .5em var(--accent); }
+
+/* progress bar */
+#bar { position: absolute; left: 0; bottom: 0; height: 6px; background: linear-gradient(90deg, var(--accent), var(--cyan)); }
+#brand { position: absolute; right: 40px; bottom: 28px; font-size: 22px; font-weight: 700; color: var(--muted); letter-spacing: .04em; }
+#brand b { color: var(--accent); }
+
+/* ---------- scene 1: intro ---------- */
+#s1 .mascot { position: absolute; right: 0; top: 0; height: 100%; width: 860px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 35%); }
+#s1 .mascot img { height: 100%; width: 100%; object-fit: cover; object-position: center 20%; }
+#s1 .copy { position: absolute; left: 120px; top: 300px; width: 1250px; }
+#s1 .title { font-size: 150px; white-space: nowrap; }
+#s1 .sub { font-size: 32px; white-space: nowrap; }
+.title { font-size: 168px; line-height: 1; font-weight: 900; color: var(--bright); letter-spacing: -.02em; }
+.title .ver { color: var(--accent); }
+.sub { font-size: 36px; line-height: 1.35; color: var(--text); margin-top: 26px; }
+.sub b { color: var(--bright); }
+.sq #s1 .mascot { width: 100%; height: 620px; top: 0; -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent 100%); }
+.sq #s1 .copy { left: 70px; top: 560px; width: 940px; }
+.sq .title, .sq #s1 .title { font-size: 128px; }
+.sq #s1 .sub { font-size: 28px; }
+.sq .sub { font-size: 32px; }
+
+/* ---------- headings used by most scenes ---------- */
+.head { position: absolute; left: 120px; top: 78px; right: 120px; }
+.head h2 { font-size: 66px; font-weight: 800; color: var(--bright); line-height: 1.12; letter-spacing: -.01em; }
+.head h2 em { font-style: normal; color: var(--accent); }
+.head p { font-size: 32px; color: var(--muted); margin-top: 14px; line-height: 1.35; }
+.head p b { color: var(--text); }
+.sq .head { left: 64px; right: 64px; top: 64px; }
+.sq .head h2 { font-size: 58px; }
+.sq .head p { font-size: 29px; }
+
+/* ---------- scene 2: what it is ---------- */
+.tiles { position: absolute; left: 120px; right: 120px; top: 330px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 32px; }
+.tile { background: var(--panel); border: 2px solid var(--border); border-radius: 22px; padding: 38px 34px; height: 420px; }
+.tile .ic { width: 84px; height: 84px; border-radius: 20px; display: grid; place-items: center; margin-bottom: 28px; }
+.tile h3 { font-size: 44px; color: var(--bright); font-weight: 800; }
+.tile .eng { font-size: 26px; font-weight: 700; margin: 10px 0 18px; }
+.tile p { font-size: 25px; line-height: 1.45; color: var(--muted); }
+.pills { position: absolute; left: 120px; right: 120px; top: 800px; display: flex; gap: 22px; justify-content: center; }
+.pill { font-size: 27px; padding: 14px 30px; border-radius: 999px; border: 2px solid var(--border); background: var(--panel); color: var(--bright); font-weight: 600; }
+.pill i { font-style: normal; color: var(--green); margin-right: 10px; }
+.sq .tiles { left: 64px; right: 64px; top: 300px; grid-template-columns: 1fr 1fr; gap: 24px; }
+.sq .tile { height: 270px; padding: 26px 28px; }
+.sq .tile .ic { width: 60px; height: 60px; border-radius: 14px; margin-bottom: 14px; float: left; margin-right: 18px; }
+.sq .tile .ic svg { width: 34px; height: 34px; }
+.sq .tile h3 { font-size: 38px; line-height: 60px; }
+.sq .tile .eng { font-size: 23px; margin: 8px 0 8px; clear: both; }
+.sq .tile p { font-size: 22px; }
+.sq .pills { left: 40px; right: 40px; top: 900px; flex-wrap: wrap; gap: 14px; }
+.sq .pill { font-size: 23px; padding: 10px 22px; }
+
+/* ---------- screenshot windows ---------- */
+.win { position: absolute; left: 120px; top: 300px; width: 1680px; height: 700px; border-radius: 18px; overflow: hidden;
+  border: 2px solid var(--border); background: var(--bg); box-shadow: 0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(88,166,255,.08); }
+.win .chrome { position: absolute; left: 0; right: 0; top: 0; height: 40px; background: var(--panel2); border-bottom: 1px solid var(--border); z-index: 3; }
+.win .chrome span { position: absolute; top: 13px; width: 14px; height: 14px; border-radius: 50%; background: #484f58; }
+.win .chrome span:nth-child(1) { left: 18px; } .win .chrome span:nth-child(2) { left: 42px; } .win .chrome span:nth-child(3) { left: 66px; }
+.win .chrome .url { position: absolute; left: 110px; top: 7px; height: 26px; width: 560px; border-radius: 8px; background: var(--bg);
+  font-size: 16px; line-height: 26px; padding-left: 14px; color: var(--muted); }
+.view { position: absolute; left: 0; right: 0; top: 40px; bottom: 0; overflow: hidden; }
+.shot { position: absolute; left: 0; top: 0; width: 1600px; transform-origin: 0 0; }
+.shot > img { width: 1600px; display: block; }
+.hl { position: absolute; border: 4px solid var(--cyan); border-radius: 12px; box-shadow: 0 0 0 4000px rgba(1,4,9,.0), 0 0 24px var(--cyan); }
+.hl.pink { border-color: var(--pink); box-shadow: 0 0 24px var(--pink); }
+.hl.red { border-color: var(--red); box-shadow: 0 0 24px var(--red); }
+.tag { position: absolute; font-size: 22px; font-weight: 800; padding: 6px 14px; border-radius: 8px; background: var(--cyan); color: #001018; white-space: nowrap; }
+.tag.pink { background: var(--pink); color: #200018; }
+.tag.red { background: var(--red); color: #200000; }
+.sq .win { left: 40px; top: 330px; width: 1000px; height: 690px; }
+.sq .win .chrome .url { width: 420px; }
+
+/* ---------- scene 4: new in 5 ---------- */
+#s4 .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 0 120px; }
+.badge { font-size: 34px; font-weight: 900; letter-spacing: .3em; color: #001018; background: var(--accent); padding: 12px 30px 12px 40px; border-radius: 12px; }
+#s4 .l1 { font-size: 64px; color: var(--muted); font-weight: 700; margin-top: 60px; line-height: 1.2; }
+#s4 .l2 { font-size: 96px; color: var(--bright); font-weight: 900; margin-top: 30px; line-height: 1.1; }
+#s4 .l2 em { font-style: normal; color: var(--accent); }
+#s4 .l3 { font-size: 34px; color: var(--muted); margin-top: 30px; }
+.sq #s4 .center { padding: 0 60px; }
+.sq #s4 .l1 { font-size: 52px; }
+.sq #s4 .l2 { font-size: 80px; }
+.sq #s4 .l3 { font-size: 30px; }
+
+/* ---------- scene 5: protocol wall ---------- */
+.groups { position: absolute; left: 120px; right: 120px; top: 300px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; }
+.group h4 { font-size: 24px; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 18px; font-weight: 800; }
+.chips { display: flex; flex-wrap: wrap; gap: 12px; }
+.chip { font-size: 25px; font-weight: 700; color: var(--bright); background: var(--panel); border: 2px solid var(--border); border-radius: 12px; padding: 10px 16px; position: relative; }
+.chip::after { content: ''; position: absolute; right: -5px; top: -5px; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.more { position: absolute; left: 120px; right: 120px; top: 900px; text-align: center; font-size: 32px; color: var(--text); }
+.more b { color: var(--bright); }
+.sq .groups { left: 50px; right: 50px; top: 290px; grid-template-columns: 1fr 1fr; gap: 26px 30px; }
+.sq .group h4 { font-size: 22px; margin-bottom: 14px; }
+.sq .chips { gap: 9px; }
+.sq .chip { font-size: 25px; padding: 9px 14px; border-radius: 10px; }
+.sq #s5 .head h2 { font-size: 50px; }
+.sq #s5 .head p { font-size: 26px; }
+.sq .more { top: 880px; left: 50px; right: 50px; font-size: 26px; }
+
+/* ---------- scene 8: also new ---------- */
+.stats { position: absolute; left: 120px; right: 120px; top: 330px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 32px; }
+.stat { background: var(--panel); border: 2px solid var(--border); border-radius: 22px; padding: 44px 34px; height: 380px; }
+.stat .n { font-size: 92px; font-weight: 900; line-height: 1; }
+.stat .t { font-size: 32px; font-weight: 800; color: var(--bright); margin-top: 22px; }
+.stat p { font-size: 24px; color: var(--muted); margin-top: 14px; line-height: 1.45; }
+.sq .stats { left: 64px; right: 64px; top: 290px; grid-template-columns: 1fr 1fr; gap: 24px; }
+.sq .stat { height: 330px; padding: 32px 28px; }
+.sq .stat .n { font-size: 74px; }
+.sq .stat .t { font-size: 28px; margin-top: 16px; }
+.sq .stat p { font-size: 21px; }
+
+/* ---------- scene 9: CTA ---------- */
+#s9 .mascot { position: absolute; left: 0; top: 0; height: 100%; width: 760px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(270deg, transparent 0%, #000 40%); }
+#s9 .mascot img { width: 100%; height: 100%; object-fit: cover; object-position: center 20%; }
+#s9 .copy { position: absolute; left: 760px; top: 220px; right: 100px; }
+#s9 .title { font-size: 120px; }
+.url-big { font-size: 84px; font-weight: 900; color: var(--accent); margin-top: 30px; }
+.cta-list { font-size: 34px; color: var(--text); margin-top: 34px; line-height: 1.6; }
+.cta-list b { color: var(--bright); }
+.sq #s9 .mascot { width: 100%; height: 520px; -webkit-mask-image: linear-gradient(180deg, #000 50%, transparent 100%); }
+.sq #s9 .copy { left: 70px; right: 60px; top: 450px; }
+.sq #s9 .title { font-size: 104px; }
+.sq .url-big { font-size: 74px; margin-top: 18px; }
+.sq .cta-list { font-size: 29px; margin-top: 22px; }
+
+/* ---------- 5.3: tags over a moving screenshot read from the left ---------- */
+#s7 .tag, #s3 .tag { font-size: 24px; }
+.sq #s7 .tag, .sq #s3 .tag { font-size: 26px; }
+.sq #s5 .groups { top: 280px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="grid-bg a" id="gridbg"></div>
+
+  <!-- 1. Intro -->
+  <section class="scene" id="s1" data-start="0" data-end="4.5">
+    <div class="mascot a" data-zoom="1.08,1.0"><img src="shots/socrates.jpg"></div>
+    <div class="copy">
+      <div class="title a">SO-CRATES <span class="ver">5.3</span></div>
+      <div class="sub a" data-in="0.9" data-fx="up"><b>S</b>ecurity <b>O</b>nion <b>C</b>ontainerized <b>R</b>apid <b>A</b>nalysis of <b>T</b>hreats, <b>E</b>vil, and <b>S</b>us</div>
+    </div>
+  </section>
+
+  <!-- 2. What it is -->
+  <section class="scene" id="s2" data-start="4.5" data-end="10.5">
+    <div class="head">
+      <h2 class="a" data-in="0.1" data-fx="up">Drop in a file. <em>Get answers.</em></h2>
+      <p class="a" data-in="0.4" data-fx="up">A standalone web app for analyzing the evidence you already have.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile a" data-in="0.8" data-fx="pop">
+        <div class="ic" style="background:rgba(88,166,255,.15)"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-8 4 16 3-8h6"/></svg></div>
+        <h3>PCAPs</h3><div class="eng" style="color:var(--accent)">Suricata + tshark</div>
+        <p>Alerts, protocol records, findings, transcripts and hexdumps</p>
+      </div>
+      <div class="tile a" data-in="1.1" data-fx="pop">
+        <div class="ic" style="background:rgba(102,187,106,.15)"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#66bb6a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg></div>
+        <h3>Logs</h3><div class="eng" style="color:var(--green)">Sigma rules</div>
+        <p>EVTX, Sysmon, JSON and CSV checked against Sigma detections</p>
+      </div>
+      <div class="tile a" data-in="1.4" data-fx="pop">
+        <div class="ic" style="background:rgba(255,167,38,.15)"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#ffa726" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 6-10 7L2 6"/></svg></div>
+        <h3>Email</h3><div class="eng" style="color:var(--orange)">Phishing signs</div>
+        <p>SPF/DKIM/DMARC, links that lie, decoded attachments</p>
+      </div>
+      <div class="tile a" data-in="1.7" data-fx="pop">
+        <div class="ic" style="background:rgba(255,107,107,.15)"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#ff6b6b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+        <h3>Binaries</h3><div class="eng" style="color:var(--red)">YARA scanning</div>
+        <p>Files scanned, plus CyberChef built in for decoding</p>
+      </div>
+    </div>
+    <div class="pills">
+      <div class="pill a" data-in="2.5" data-fx="up"><i>✓</i>Free &amp; open source (MIT)</div>
+      <div class="pill a" data-in="2.75" data-fx="up"><i>✓</i>One container: Docker or Podman</div>
+      <div class="pill a" data-in="3.0" data-fx="up"><i>✓</i>Works offline</div>
+    </div>
+  </section>
+
+  <!-- 3. New in 5.3 -->
+  <section class="scene" id="s4" data-start="10.5" data-end="15.5">
+    <div class="center">
+      <div class="badge a" data-in="0.1" data-fx="pop">NEW IN 5.3</div>
+      <div class="l1 a" data-in="0.6" data-fx="up">Databases. Botnets. PLCs. VPNs.</div>
+      <div class="l2 a" data-in="1.6" data-fx="pop"><em>19</em> more protocols from tshark</div>
+      <div class="l3 a" data-in="2.3" data-fx="up">The ones Suricata doesn't parse, in the same tabs, search and pivots</div>
+    </div>
+  </section>
+
+  <!-- 4. Protocol wall -->
+  <section class="scene" id="s5" data-start="15.5" data-end="25.5">
+    <div class="head">
+      <h2 class="a" data-in="0.1" data-fx="up"><em>19</em> new protocol records</h2>
+      <p class="a" data-in="0.4" data-fx="up">Each with its own columns, aggregations and detail panel</p>
+    </div>
+    <div class="groups" id="groups"></div>
+    <div class="more a" data-in="6.2" data-fx="up">Logins, SQL statements, admin commands and orders - <b>passwords masked</b> wherever they're listed</div>
+  </section>
+
+  <!-- 5. The lab -->
+  <section class="scene" id="s6" data-start="25.5" data-end="31.5">
+    <div class="head">
+      <h2 class="a" data-in="0.1" data-fx="up">An attack lab, <em>one capture</em></h2>
+      <p class="a" data-in="0.4" data-fx="up"><b>Redis, MySQL, SQL Server, Zabbix and IRC</b>, attacked in containers: 8 protocols parsed in a second</p>
+    </div>
+    <div class="win a" data-in="0.3" data-fx="rise">
+      <div class="chrome"><span></span><span></span><span></span><div class="url">so-crates-5.3-lab.pcap</div></div>
+      <div class="view">
+        <div class="shot a" data-cam='[[0,0,150,1.05],[1.4,0,150,1.05],[2.6,10,160,1.3],[6,12,162,1.31]]'
+             data-cam-sq='[[0,0,150,0.625],[1.4,0,150,0.625],[2.6,10,160,0.79],[6,12,162,0.8]]'>
+          <img src="shots/lab-findings.png">
+          <div class="hl a" data-in="2.7" data-fx="pop" style="left:149px;top:315px;width:116px;height:80px"></div>
+          <div class="hl a" data-in="2.9" data-fx="pop" style="left:269px;top:315px;width:236px;height:80px"></div>
+          <div class="hl a" data-in="3.1" data-fx="pop" style="left:509px;top:315px;width:236px;height:80px"></div>
+          <div class="hl a" data-in="3.3" data-fx="pop" style="left:749px;top:315px;width:236px;height:80px"></div>
+          <div class="hl a" data-in="3.5" data-fx="pop" style="left:989px;top:315px;width:116px;height:80px"></div>
+          <div class="hl red a" data-in="4.2" data-fx="pop" style="left:269px;top:182px;width:116px;height:80px"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. Findings -->
+  <section class="scene" id="s7" data-start="31.5" data-end="42.5">
+    <div class="head">
+      <h2 class="a" data-in="0.1" data-fx="up"><em>Findings</em> call out the attacker's moves</h2>
+      <p class="a" data-in="0.4" data-fx="up">72 new rules, ranked by severity - a lead to check on every row</p>
+    </div>
+    <div class="win a" data-in="0.3" data-fx="rise">
+      <div class="chrome"><span></span><span></span><span></span><div class="url">so-crates-5.3-lab.pcap · Findings</div></div>
+      <div class="view">
+        <div class="shot a" data-cam='[[0,30,650,1.25],[1.6,30,650,1.25],[2.8,30,1250,1.25],[4.4,30,1250,1.25],[5.6,30,1645,1.25],[7.6,30,1645,1.25],[8.8,30,2010,1.25],[11,30,2010,1.25]]'
+             data-cam-sq='[[0,30,650,0.9],[1.6,30,650,0.9],[2.8,30,1250,0.9],[4.4,30,1250,0.9],[5.6,30,1645,0.9],[7.6,30,1645,0.9],[8.8,30,2010,0.9],[11,30,2010,0.9]]'>
+          <img src="shots/lab-findings.png">
+          <div class="hl red a" data-in="0.8" data-fx="pop" style="left:41px;top:786px;width:1518px;height:177px"></div>
+          <div class="tag red a" data-in="1.0" data-fx="pop" style="left:560px;top:930px">SQL Server: xp_cmdshell</div>
+          <div class="hl red a" data-in="2.9" data-fx="pop" style="left:41px;top:1316px;width:1518px;height:71px"></div>
+          <div class="tag red a" data-in="3.1" data-fx="pop" style="left:560px;top:1290px">MySQL: a PHP web shell</div>
+          <div class="hl pink a" data-in="5.7" data-fx="pop" style="left:41px;top:1718px;width:1518px;height:161px"></div>
+          <div class="tag pink a" data-in="5.9" data-fx="pop" style="left:560px;top:1692px">IRC: botnet orders</div>
+          <div class="hl a" data-in="6.6" data-fx="pop" style="left:41px;top:1879px;width:1518px;height:161px"></div>
+          <div class="tag a" data-in="6.8" data-fx="pop" style="left:560px;top:2004px">Zabbix: system.run</div>
+          <div class="hl red a" data-in="8.9" data-fx="pop" style="left:41px;top:2041px;width:1518px;height:94px"></div>
+          <div class="tag red a" data-in="9.1" data-fx="pop" style="left:560px;top:2101px">Redis: a rogue replica</div>
+          <div class="hl red a" data-in="9.5" data-fx="pop" style="left:41px;top:2268px;width:1518px;height:181px"></div>
+          <div class="tag red a" data-in="9.7" data-fx="pop" style="left:560px;top:2415px">Redis: SSH key write</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. A record up close -->
+  <section class="scene" id="s3" data-start="42.5" data-end="50">
+    <div class="head">
+      <h2 class="a" data-in="0.1" data-fx="up">Every record, <em>up close</em></h2>
+      <p class="a" data-in="0.4" data-fx="up">An IRC bot: its nickname, its herder's orders, the key to the channel, the file it sent</p>
+    </div>
+    <div class="win a" data-in="0.3" data-fx="rise">
+      <div class="chrome"><span></span><span></span><span></span><div class="url">so-crates-5.3-lab.pcap · IRC</div></div>
+      <div class="view">
+        <div class="shot a" data-cam='[[0,0,720,1.05],[1.0,0,720,1.05],[2.2,0,760,1.5],[4.0,0,1060,1.5],[7.5,0,1120,1.5]]'
+             data-cam-sq='[[0,0,720,0.64],[1.0,0,720,0.64],[2.2,0,780,1.05],[4.0,0,1100,1.05],[7.5,0,1130,1.05]]'>
+          <img src="shots/lab-irc.png" style="width:1558px">
+          <div class="hl a" data-in="2.3" data-fx="pop" style="left:30px;top:819px;width:720px;height:34px"></div>
+          <div class="tag a" data-in="2.5" data-fx="pop" style="left:420px;top:868px">a bot-shaped nickname</div>
+          <div class="hl pink a" data-in="4.2" data-fx="pop" style="left:30px;top:1109px;width:720px;height:62px"></div>
+          <div class="hl red a" data-in="4.6" data-fx="pop" style="left:30px;top:1170px;width:720px;height:73px"></div>
+          <div class="tag red a" data-in="4.8" data-fx="pop" style="left:440px;top:1250px">the herder's orders</div>
+          <div class="hl a" data-in="5.8" data-fx="pop" style="left:30px;top:1396px;width:720px;height:34px"></div>
+          <div class="tag a" data-in="6.0" data-fx="pop" style="left:440px;top:1360px">loot.zip, by DCC</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. Also in 5.3 -->
+  <section class="scene" id="s8" data-start="50" data-end="55">
+    <div class="head">
+      <h2 class="a" data-in="0.1" data-fx="up">Also in <em>5.3</em></h2>
+      <p class="a" data-in="0.4" data-fx="up">Hardened against the packets it reads</p>
+    </div>
+    <div class="stats">
+      <div class="stat a" data-in="0.7" data-fx="pop"><div class="n" style="color:var(--accent)">72</div><div class="t">new Findings rules</div><p>32 to 104, from SQL account changes to botnet orders</p></div>
+      <div class="stat a" data-in="1.0" data-fx="pop"><div class="n" style="color:var(--green)">790K</div><div class="t">fuzzed parser runs</div><p>Every protocol parser: ten crashes found and fixed</p></div>
+      <div class="stat a" data-in="1.3" data-fx="pop"><div class="n" style="color:var(--orange)">1</div><div class="t">packet lost, not one analysis</div><p>A packet a parser can't read now costs only itself</p></div>
+      <div class="stat a" data-in="1.6" data-fx="pop"><div class="n" style="color:var(--purple)">7</div><div class="t">new themes</div><p>One Dark, Thermal, War&nbsp;Room and four from Omarchy</p></div>
+    </div>
+  </section>
+
+  <!-- 9. CTA -->
+  <section class="scene" id="s9" data-start="55" data-end="60">
+    <div class="mascot a" data-in="0" data-fx="fade" data-dur="1" data-zoom="1.0,1.08"><img src="shots/socrates.jpg"></div>
+    <div class="copy">
+      <div class="title a" data-in="0.2" data-fx="up">SO-CRATES <span class="ver">5.3</span></div>
+      <div class="url-big a" data-in="0.6" data-fx="pop">so-crates.org</div>
+      <div class="cta-list a" data-in="1.1" data-fx="up">▸ <b>Try the interactive demo</b><br>▸ Run it with Docker, Podman or OhMyDebn<br>▸ Free and open source</div>
+    </div>
+  </section>
+
+  <div id="bar"></div>
+  <div id="brand"><b>SO-CRATES</b> 5.3</div>
+</div>
+
+<script>
+const SQ = new URLSearchParams(location.search).get('fmt') === 'square';
+if (SQ) document.body.classList.add('sq');
+const DURATION = 60;
+
+// Protocol wall content, from docs/release-notes.md 5.3.0
+const GROUPS = [
+  ['Databases & caches', '#ffa726', ['MySQL', 'SQL Server', 'Oracle TNS', 'MongoDB', 'Redis', 'memcached']],
+  ['Industrial', '#26a69a', ['MMS / IEC 61850', 'PROFINET DCP', 'Omron FINS', 'HART-IP', 'C37.118', 'EtherCAT']],
+  ['Remote access & VPN', '#58a6ff', ['rsh / rlogin / rexec', 'OpenVPN', 'WireGuard', 'TACACS+']],
+  ['Monitoring & more', '#ba68c8', ['Zabbix', 'IRC', 'RakNet']],
+];
+const gEl = document.getElementById('groups');
+GROUPS.forEach(([name, color, chips], gi) => {
+  const g = document.createElement('div');
+  g.className = 'group';
+  const h = document.createElement('h4');
+  h.textContent = name; h.style.color = color;
+  h.className = 'a'; h.dataset.in = (0.8 + gi * 1.2).toFixed(2); h.dataset.fx = 'up';
+  g.appendChild(h);
+  const c = document.createElement('div'); c.className = 'chips';
+  chips.forEach((name, ci) => {
+    const chip = document.createElement('div');
+    chip.className = 'chip a'; chip.textContent = name;
+    chip.style.borderColor = color + '88';
+    chip.dataset.in = (1.0 + gi * 1.2 + ci * 0.14).toFixed(2); chip.dataset.fx = 'pop';
+    c.appendChild(chip);
+  });
+  g.appendChild(c);
+  gEl.appendChild(g);
+});
+
+// ---- deterministic timeline: render(t) sets every element's state ----
+const ease = x => 1 - Math.pow(1 - x, 3);
+const easeIO = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const clamp = x => Math.max(0, Math.min(1, x));
+const scenes = [...document.querySelectorAll('.scene')].map(el => ({
+  el, start: +el.dataset.start, end: +el.dataset.end,
+  items: [...el.querySelectorAll('.a')].map(a => ({
+    el: a, tin: a.dataset.in !== undefined ? +a.dataset.in : null, fx: a.dataset.fx || 'fade',
+    dur: +(a.dataset.dur || (a.dataset.fx === 'pop' ? 0.45 : 0.7)),
+    zoom: a.dataset.zoom ? a.dataset.zoom.split(',').map(Number) : null,
+    cam: JSON.parse((SQ && a.dataset.camSq) || a.dataset.cam || 'null'),
+  })),
+}));
+
+function camAt(cam, t) {
+  if (t <= cam[0][0]) return cam[0].slice(1);
+  for (let i = 1; i < cam.length; i++) {
+    if (t <= cam[i][0]) {
+      const [t0, ...a] = cam[i - 1], [t1, ...b] = cam[i];
+      const p = easeIO((t - t0) / (t1 - t0));
+      return a.map((v, k) => v + (b[k] - v) * p);
+    }
+  }
+  return cam[cam.length - 1].slice(1);
+}
+
+function render(t) {
+  for (const s of scenes) {
+    const lt = t - s.start, len = s.end - s.start;
+    const visible = lt >= -0.01 && lt <= len;
+    // scene crossfade out over its last 0.45s (except the final scene)
+    let so = visible ? 1 : 0;
+    if (visible && s.end < DURATION) so = clamp((len - lt) / 0.45);
+    s.el.style.opacity = so;
+    s.el.style.display = visible ? 'block' : 'none';
+    if (!visible) continue;
+    for (const it of s.items) {
+      let o = 1, x = 0, y = 0, sc = 1;
+      if (it.tin !== null) {
+        const p = clamp((lt - it.tin) / it.dur), e = ease(p);
+        o = e;
+        if (it.fx === 'up') y = (1 - e) * 40;
+        if (it.fx === 'rise') { y = (1 - e) * 80; sc = 0.96 + 0.04 * e; }
+        if (it.fx === 'pop') { sc = p === 0 ? 0.7 : 0.7 + 0.3 * (1 - Math.pow(1 - p, 3)) + Math.sin(p * Math.PI) * 0.06; }
+      }
+      let tf = '';
+      if (it.cam) {
+        const [cx, cy, cs] = camAt(it.cam, lt);
+        tf = `scale(${cs}) translate(${-cx}px, ${-cy}px)`;
+      } else {
+        tf = `translate(${x}px, ${y}px) scale(${sc})`;
+        if (it.zoom) {
+          const z = it.zoom[0] + (it.zoom[1] - it.zoom[0]) * clamp(lt / len);
+          it.el.firstElementChild.style.transform = `scale(${z})`;
+        }
+      }
+      it.el.style.opacity = o;
+      it.el.style.transform = tf;
+    }
+  }
+  document.getElementById('gridbg').style.transform = `translate(${-(t * 8) % 64}px, ${-(t * 5) % 64}px)`;
+  document.getElementById('bar').style.width = (t / DURATION * 100) + '%';
+  document.getElementById('brand').style.opacity = (t > 4.5 && t < 55) ? 1 : 0;
+}
+window.render = render;
+window.DURATION = DURATION;
+
+// live preview: ?t=12 freezes at a time, otherwise play in real time
+const qt = new URLSearchParams(location.search).get('t');
+if (qt !== null) render(+qt);
+else if (!navigator.webdriver) {
+  const t0 = performance.now();
+  (function loop() { render(((performance.now() - t0) / 1000) % DURATION); requestAnimationFrame(loop); })();
+}
+</script>
+</body>
+</html>

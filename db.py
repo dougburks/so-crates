@@ -791,11 +791,11 @@ _NOT_PROTOCOL_RECORDS = ('flow', 'alert', 'protocol_decode', 'anomaly', 'fileinf
 
 
 def suricata_identified_flows(db_path):
-    """Community ID -> [(start, end)] (epoch seconds) of the flows Suricata
-    identified: gave a protocol (not none or 'failed') and backed it with
-    at least one record of its protocol parsing during the flow. A bare
-    label isn't enough - Suricata 8.0.6 called an SSDP NOTIFY 'sip' and
-    logged no SIP for it (8.0.7 calls it 'failed')."""
+    """Community ID -> [(start, end, app_proto)] (epoch seconds) of the
+    flows Suricata identified: gave a protocol (not none or 'failed') and
+    backed it with at least one record of its protocol parsing during the
+    flow. A bare label isn't enough - Suricata 8.0.6 called an SSDP NOTIFY
+    'sip' and logged no SIP for it (8.0.7 calls it 'failed')."""
     out = {}
     with _db_connection(db_path) as conn:
         records = {}
@@ -818,7 +818,7 @@ def suricata_identified_flows(db_path):
                 continue
             last = last if last is not None else first
             if any(first - 1 <= at <= last + 1 for at in records[cid]):
-                out.setdefault(cid, []).append((first, last))
+                out.setdefault(cid, []).append((first, last, app))
     return out
 
 
@@ -1698,6 +1698,232 @@ AGGREGATION_JSON_PATHS = {
         'Repeats': ['$.goose.repeats'],
         'Anomaly': ['$.goose.anomaly'],
     },
+    'openvpn': {
+        'Stage': ['$.openvpn.stage'],
+        'Version': ['$.openvpn.version'],
+        'Protection': ['$.openvpn.control_protection'],
+        'Subject': ['$.openvpn.certificate.subject'],
+        'Resets': ['$.openvpn.client_resets'],
+        'Data Pkts →': ['$.openvpn.data_to_server'],
+        'Data Pkts ←': ['$.openvpn.data_to_client'],
+    },
+    'wireguard': {
+        'Stage': ['$.wireguard.stage'],
+        'Initiations': ['$.wireguard.initiations'],
+        'Handshakes': ['$.wireguard.handshakes'],
+        'Unanswered': ['$.wireguard.unanswered'],
+        'Keepalives': ['$.wireguard.keepalives'],
+        'Data Pkts →': ['$.wireguard.data_to_server'],
+        'Data Pkts ←': ['$.wireguard.data_to_client'],
+    },
+    'rsh': {
+        'Service': ['$.rsh.service'],
+        'User': ['$.rsh.user'],
+        'Local User': ['$.rsh.local_user'],
+        'Command': ['$.rsh.command'],
+        'Password': ['$.rsh.password'],
+        'Result': ['$.rsh.result'],
+    },
+    'mongodb': {
+        'Driver': ['$.mongodb.driver'],
+        'User': ['$.mongodb.user'],
+        'Login': ['$.mongodb.login'],
+        'Databases': ['$.mongodb.databases'],
+        'Server Version': ['$.mongodb.server_version'],
+        'Answered': ['$.mongodb.answered'],
+    },
+    'fins': {
+        'Commands': ['$.fins.commands'],
+        'Model': ['$.fins.model'],
+        'Version': ['$.fins.version'],
+        'Node': ['$.fins.node'],
+        'Answered': ['$.fins.answered'],
+        'Errors': ['$.fins.errors'],
+    },
+    'fins_action': {
+        'Command': ['$.fins_action.command'],
+        'Area': ['$.fins_action.area'],
+        'Address': ['$.fins_action.address'],
+        'Mode': ['$.fins_action.mode'],
+        'Data': ['$.fins_action.data'],
+        'Result': ['$.fins_action.result'],
+    },
+    'hart_ip': {
+        'Host Type': ['$.hart_ip.host_type'],
+        'Session': ['$.hart_ip.session'],
+        'Commands': ['$.hart_ip.commands'],
+        'Tags': ['$.hart_ip.tags'],
+        'Answered': ['$.hart_ip.answered'],
+    },
+    'hart_ip_action': {
+        'Command': ['$.hart_ip_action.command'],
+        'Device': ['$.hart_ip_action.device'],
+        'Data': ['$.hart_ip_action.data'],
+        'Result': ['$.hart_ip_action.result'],
+    },
+    'ecat': {
+        'Commands': ['$.ecat.commands'],
+        'Slaves': ['$.ecat.slaves'],
+        'State Requests': ['$.ecat.state_requests'],
+        'EEPROM Writes': ['$.ecat.eeprom_writes'],
+        'FoE': ['$.ecat.foe'],
+        'Answered': ['$.ecat.answered'],
+    },
+    'synphasor': {
+        'Stations': ['$.synphasor.stations'],
+        'Stream ID': ['$.synphasor.stream_id'],
+        'Data Rate': ['$.synphasor.data_rate'],
+        'Commands': ['$.synphasor.commands'],
+        'Data Frames': ['$.synphasor.frames.data'],
+        'Not Synced': ['$.synphasor.not_synced'],
+    },
+    'tacacs': {
+        'Type': ['$.tacacs.type'],
+        'User': ['$.tacacs.user'],
+        'Command': ['$.tacacs.command'],
+        'Line': ['$.tacacs.port'],
+        'Remote Address': ['$.tacacs.remote_address'],
+        'Result': ['$.tacacs.result'],
+        'Encrypted': ['$.tacacs.encrypted'],
+    },
+    'raknet': {
+        'Messages': ['$.raknet.messages'],
+        'Edition': ['$.raknet.edition'],
+        'MOTD': ['$.raknet.motd'],
+        'Game Version': ['$.raknet.game_version'],
+        'Players': ['$.raknet.players'],
+        'Connected': ['$.raknet.connected'],
+        'Answered': ['$.raknet.answered'],
+    },
+    'memcache': {
+        'Commands': ['$.memcache.commands'],
+        'Keys': ['$.memcache.keys'],
+        'Server Version': ['$.memcache.version'],
+        'Answered': ['$.memcache.answered'],
+        'Req Bytes': ['$.memcache.request_bytes'],
+        'Resp Bytes': ['$.memcache.response_bytes'],
+        'Amplification': ['$.memcache.amplification'],
+    },
+    'redis': {
+        'DB User': ['$.redis.user'],
+        'Auth': ['$.redis.auth'],
+        'Commands': ['$.redis.commands'],
+        'Keys': ['$.redis.keys'],
+        'Server Version': ['$.redis.server_version'],
+        'Answered': ['$.redis.answered'],
+        'Errors': ['$.redis.errors'],
+    },
+    'redis_command': {
+        'DB User': ['$.redis_command.user'],
+        'Command': ['$.redis_command.name'],
+        'Statement': ['$.redis_command.command'],
+        'Result': ['$.redis_command.result'],
+        'Count': ['$.redis_command.count'],
+    },
+    'zabbix': {
+        'Request': ['$.zabbix.request'],
+        'Host': ['$.zabbix.host'],
+        'Version': ['$.zabbix.version'],
+        'Connections': ['$.zabbix.connections'],
+        'Keys': ['$.zabbix.keys'],
+        'Commands': ['$.zabbix.commands'],
+        'Answered': ['$.zabbix.answered'],
+    },
+    'irc': {
+        'Nick': ['$.irc.nick'],
+        'Server': ['$.irc.network', '$.irc.server'],
+        'Channels': ['$.irc.channels'],
+        'Login': ['$.irc.login'],
+        'Sent': ['$.irc.messages_sent'],
+        'Received': ['$.irc.messages_received'],
+        'Bot Commands': ['$.irc.bot_commands'],
+    },
+    'mssql': {
+        'DB User': ['$.mssql.user'],
+        'Database': ['$.mssql.database'],
+        'Application': ['$.mssql.application'],
+        'Client Host': ['$.mssql.client_host'],
+        'Encryption': ['$.mssql.encryption'],
+        'Login': ['$.mssql.login'],
+        'Statements': ['$.mssql.statements'],
+    },
+    'mssql_statement': {
+        'DB User': ['$.mssql_statement.user'],
+        'Verb': ['$.mssql_statement.verb'],
+        'Statement': ['$.mssql_statement.statement'],
+        'Result': ['$.mssql_statement.result'],
+        'Count': ['$.mssql_statement.count'],
+    },
+    'mysql': {
+        'DB User': ['$.mysql.user'],
+        'Database': ['$.mysql.database'],
+        'Client': ['$.mysql.client'],
+        'Server Version': ['$.mysql.server_version'],
+        'Login': ['$.mysql.login'],
+        'Statements': ['$.mysql.statements'],
+        'SSL': ['$.mysql.ssl'],
+    },
+    'mysql_statement': {
+        'DB User': ['$.mysql_statement.user'],
+        'Verb': ['$.mysql_statement.verb'],
+        'Statement': ['$.mysql_statement.statement'],
+        'Result': ['$.mysql_statement.result'],
+        'Count': ['$.mysql_statement.count'],
+    },
+    'tns': {
+        'Service': ['$.tns.service_name', '$.tns.sid'],
+        'DB User': ['$.tns.db_user'],
+        'OS User': ['$.tns.os_user', '$.tns.client_user'],
+        'Program': ['$.tns.program', '$.tns.client_program'],
+        'Result': ['$.tns.result'],
+        'Login': ['$.tns.login'],
+        'Statements': ['$.tns.statements'],
+    },
+    'tns_statement': {
+        'DB User': ['$.tns_statement.db_user'],
+        'Verb': ['$.tns_statement.verb'],
+        'Statement': ['$.tns_statement.statement'],
+        'Result': ['$.tns_statement.result'],
+        'Count': ['$.tns_statement.count'],
+    },
+    'mongodb_action': {
+        'Command': ['$.mongodb_action.command'],
+        'Database': ['$.mongodb_action.database'],
+        'Collection': ['$.mongodb_action.collection'],
+        'Count': ['$.mongodb_action.count'],
+        'Result': ['$.mongodb_action.result'],
+    },
+    'pn_dcp': {
+        'Service': ['$.pn_dcp.service'],
+        'Query': ['$.pn_dcp.query'],
+        'Changes': ['$.pn_dcp.changes'],
+        'Station Name': ['$.pn_dcp.station_name'],
+        'IP': ['$.pn_dcp.ip'],
+        'Result': ['$.pn_dcp.result'],
+        'Count': ['$.pn_dcp.count'],
+    },
+    'pn_device': {
+        'Station Name': ['$.pn_device.station_name'],
+        'Device Type': ['$.pn_device.device_type'],
+        'Vendor ID': ['$.pn_device.vendor_id'],
+        'Device ID': ['$.pn_device.device_id'],
+        'Role': ['$.pn_device.role'],
+        'IP': ['$.pn_device.ip'],
+        'Count': ['$.pn_device.count'],
+    },
+    'mms': {
+        'Initiate': ['$.mms.initiate'],
+        'Domains': ['$.mms.domains'],
+        'Vendor': ['$.mms.vendor'],
+        'Model': ['$.mms.model'],
+    },
+    'mms_action': {
+        'Service': ['$.mms_action.service'],
+        'Object': ['$.mms_action.object'],
+        'Control': ['$.mms_action.control'],
+        'Value': ['$.mms_action.value'],
+        'Result': ['$.mms_action.result'],
+    },
     'opcua': {
         'Endpoint': ['$.opcua.endpoint'],
         'Security': ['$.opcua.security_policy'],
@@ -1793,6 +2019,12 @@ AGGREGATION_DEFAULTS = {
     ('flow', 'Pkts ←'): '0',
     ('flow', 'Bytes →'): '0',
     ('flow', 'Bytes ←'): '0',
+    # counts tshark's records leave out until there's one: extractValue
+    # shows them as 0
+    ('wireguard', 'Keepalives'): '0',
+    ('ecat', 'EEPROM Writes'): '0',
+    ('synphasor', 'Data Frames'): '0',
+    ('synphasor', 'Not Synced'): '0',
 }
 
 # SUBSTR truncation matching extractValue's .slice() calls exactly.
@@ -1805,13 +2037,30 @@ AGGREGATION_TRUNCATE = {
     ('tls', 'Subject'): 40,
     ('tls', 'Issuer'): 40,
     ('dtls', 'Subject'): 40,
+    ('openvpn', 'Subject'): 40,
     ('tls_failure', 'Subject'): 40,
     ('tls_failure', 'Issuer'): 40,
+    ('tns_statement', 'Statement'): 200,
+    ('mysql_statement', 'Statement'): 200,
+    ('mssql_statement', 'Statement'): 200,
+    ('redis_command', 'Statement'): 200,
 }
 
 # Value transforms beyond plain extraction, matching extractValue's own
 # formatting exactly (e.g. "Sev " + severity, or a boolean -> Yes/No).
 AGGREGATION_VALUE_TRANSFORMS = {
+    # true/false as extractValue() shows them
+    ('mongodb', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('memcache', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('fins', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('hart_ip', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('mysql', 'SSL'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
+    ('ecat', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('redis', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('zabbix', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('tacacs', 'Encrypted'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('raknet', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('raknet', 'Connected'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
     ('alert', 'Severity'): lambda expr: f"'Sev ' || COALESCE({expr}, 0)",
     # Classifies signature_id into the curated ruleset it most likely came
     # from - see suricata_sid_ranges.py for how SURICATA_SID_RANGES was
@@ -1857,8 +2106,16 @@ AGGREGATION_CAST_TEXT = {
 # json_extract (filealerts.tags is a JSON array, not a scalar).
 AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('filealerts', 'Tags'), ('smtp', 'Rcpt To'),
-    ('ftp', 'Completion Code'), ('ftp', 'Reply'),
+    ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
+    ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'), ('synphasor', 'Stations'), ('ecat', 'FoE'),
+    ('redis', 'Keys'), ('zabbix', 'Keys'), ('irc', 'Channels'), ('irc', 'Bot Commands'),
 }
+# Object-valued columns shown as their keys, joined the same way (a count
+# per name: memcached's commands)
+AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages'), ('synphasor', 'Commands'), ('ecat', 'Commands'), ('ecat', 'State Requests'), ('redis', 'Commands'), ('redis', 'Errors')}
+# Columns of a list of objects shown as one field of each, joined with the
+# separator given (Zabbix's commands, each with its result)
+AGGREGATION_OBJECT_FIELD_JOIN_COLUMNS = {('zabbix', 'Commands'): ('command', '; ')}
 
 
 def _aggregation_expr(event_type, label, paths, prefix=''):
@@ -1871,6 +2128,12 @@ def _aggregation_expr(event_type, label, paths, prefix=''):
     """
     if (event_type, label) in AGGREGATION_ARRAY_JOIN_COLUMNS:
         expr = f"(SELECT group_concat(value, ', ') FROM json_each({prefix}json_data, '{paths[0]}'))"
+    elif (event_type, label) in AGGREGATION_KEY_JOIN_COLUMNS:
+        expr = f"(SELECT group_concat(key, ', ') FROM json_each({prefix}json_data, '{paths[0]}'))"
+    elif (event_type, label) in AGGREGATION_OBJECT_FIELD_JOIN_COLUMNS:
+        field, separator = AGGREGATION_OBJECT_FIELD_JOIN_COLUMNS[(event_type, label)]
+        expr = (f"(SELECT group_concat(json_extract(value, '$.{field}'), '{separator}') "
+                f"FROM json_each({prefix}json_data, '{paths[0]}'))")
     else:
         parts = [f"json_extract({prefix}json_data, '{p}')" for p in paths]
         expr = parts[0] if len(parts) == 1 else f"COALESCE({', '.join(parts)})"
