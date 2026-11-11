@@ -179,6 +179,8 @@ Preview changes locally before pushing: `pip install -r requirements-docs.txt &&
 
 ## Release Checklist
 
+Agents commit only when asked, and never push, merge to `main` or tag - the maintainer does those.
+
 Before cutting a release:
 
 1. Update `docs/release-notes.md` (the single source of truth - `README.md`
