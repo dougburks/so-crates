@@ -377,8 +377,9 @@ Before cutting a release:
    **Then fuzz tshark's protocol parsers:** `systemd-run --user --scope -p
    MemoryMax=8G python3 scripts/fuzz_shark_parsers.py <corpus>/wstest
    <corpus>/ics <corpus>/ics_emre` (the corpus the docs' testing page
-   describes - the memory cap keeps a runaway parser from drawing the
-   kernel's out-of-memory killer onto something else; with no
+   describes, which `scripts/fetch_corpus.py` downloads - the memory cap
+   keeps a runaway parser from drawing the kernel's out-of-memory killer
+   onto something else; with no
    directories it uses the protocol fixtures alone, which every parser
    has). It records what each parser is handed for the fixtures' and those
    captures' packets, replays it thousands of times mutated - bytes cut
