@@ -713,6 +713,24 @@ class TestMMS(unittest.TestCase):
             {'service': 'stop', 'object': 'Fixture_App', 'result': 'vmd-state: 2'},
         ], "the select's one item was refused; the stop was answered with an error PDU")
 
+    def test_a_capture_that_starts_after_the_association(self):
+        """tshark learns which presentation context carries MMS from the
+        association's opening; without one, it's told context 3, where
+        IEC 61850 puts it (shark_analyzer._DECODE_OPTIONS) - found in five
+        real substation captures that decoded no MMS at all."""
+        from tests.pcap_fixtures import write_pcap
+        from tests.protocol_fixtures import mms_packets_mid_association
+        pcap = os.path.join(self.tmpdir, 'mms-mid.pcap')
+        write_pcap(pcap, mms_packets_mid_association())
+        records = shark_analyzer.run_tshark(pcap)
+        flows = [r for r in records if r['event_type'] == 'flow']
+        self.assertEqual([f['app_proto'] for f in flows], ['mms'])
+        m = next(r['mms'] for r in records if r['event_type'] == 'mms')
+        self.assertEqual(m['services'], {'read': 1, 'identify': 1, 'write': 2, 'stop': 1})
+        self.assertNotIn('initiate', m, 'the association was never seen')
+        self.assertEqual([a['service'] for a in (r['mms_action'] for r in records if r['event_type'] == 'mms_action')],
+                         ['write', 'write', 'stop'])
+
     def test_names_and_values(self):
         from shark_protocols import _mms_data, _mms_name, _MMS_SERVICES, _MMS_CHANGES
         self.assertEqual([_mms_name(_MMS_SERVICES, n) for n in ('4', '5', '44', '99')], ['read', 'write', 'kill', '99'])

@@ -699,8 +699,9 @@ def write_opcua_pcap(path):
 # A SCADA client (CLIENT:49152) and a relay (MMS_SERVER:102). The OSI
 # connection (COTP connect, session connect carrying the presentation and
 # ACSE association with MMS initiate, and its accept) is a real ICCP
-# client's and server's, from ITI's IEC 61850 samples - tshark decodes MMS
-# only after seeing which presentation context carries it. Then: a read of
+# client's and server's, from ITI's IEC 61850 samples - it names the
+# presentation context that carries MMS (mms_packets_mid_association
+# leaves it out, as a capture that starts later would). Then: a read of
 # IED1LD0/LLN0$ST$Mod$stVal (1), Identify (Fixture Vendor, Fixture Relay,
 # 1.2), a write to XCBR1$CO$Pos$Oper (an operate, success), a write to
 # XCBR1$CO$Pos$SBOw (a select, refused object-access-denied), a stop of
@@ -777,6 +778,13 @@ def mms_packets():
 
 def write_mms_pcap(path):
     write_pcap(path, mms_packets())
+
+
+def mms_packets_mid_association():
+    """The same MMS connection captured from after its association
+    opened: no TCP handshake, COTP connect or association - just the MMS
+    exchanges and the close."""
+    return mms_packets()[7:]
 
 
 # ---------------------------------------------------------------- GOOSE

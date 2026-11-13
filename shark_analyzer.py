@@ -67,7 +67,7 @@ SHARK_ARTIFACTS = (SHARK_DB, SHARK_DB + '-wal', SHARK_DB + '-shm', SHARK_DB + '.
 # change here or in shark_protocols changes what a run produces: a
 # shark.db stamped with an older version is rebuilt the next time its
 # status is asked for, so existing analyses pick up the change.
-SHARK_FORMAT_VERSION = 56
+SHARK_FORMAT_VERSION = 57
 
 # The fields every packet is read for, one per column of tshark's
 # tab-separated output, in this order - then each of shark_protocols'
@@ -160,16 +160,21 @@ def shark_db_path(dir_path):
     return os.path.join(dir_path, SHARK_DB)
 
 
-# Ports tshark decodes as a protocol beyond its own defaults: IRC's whole
-# range (tshark takes only 6667), where IRC bots' servers listen as often
-# as on 6667 itself
-_DECODE_AS = ('-d', 'tcp.port==6660-6669,irc')
+# What tshark decodes beyond its own defaults, in every run: IRC's whole
+# port range (tshark takes only 6667), where IRC bots' servers listen as
+# often as on 6667 itself; and MMS in OSI presentation context 3, where
+# IEC 61850 clients and servers put it. tshark otherwise learns which
+# context carries MMS only from the association's opening - a capture
+# that starts after it, as most of a long-lived substation connection's
+# do, decodes none of its MMS. A context the opening did name still
+# decodes as it says.
+_DECODE_OPTIONS = ('-d', 'tcp.port==6660-6669,irc', '-o', 'uat:pres_context_list:"3","1.0.9506.2.1"')
 
 
 def tshark_command(pcap_path, fields=_FIRST_PASS_FIELDS):
     """The tshark command that dumps these fields (the first pass's by
     default) for every packet."""
-    cmd = ['tshark', '-n', '-r', pcap_path, *_DECODE_AS, '--enable-protocol', 'communityid',
+    cmd = ['tshark', '-n', '-r', pcap_path, *_DECODE_OPTIONS, '--enable-protocol', 'communityid',
            '-T', 'fields', '-E', 'separator=\t', '-E', 'occurrence=a', '-E', 'aggregator=' + _AGGREGATOR]
     for field in fields:
         cmd += ['-e', field]
@@ -993,7 +998,7 @@ def _merge_ranges(ranges, max_ranges=None):
 def _structured_command(source, handlers):
     protocols = ','.join(dict.fromkeys(_STRUCTURED_BASE + tuple(p for h in handlers for p in h.tshark_protocols)))
     layers = ' '.join(dict.fromkeys(('frame',) + _STRUCTURED_TRANSPORT + tuple(l for h in handlers for l in h.layers)))
-    return ['tshark', '-n', '-r', source, '--disable-all-protocols', '--enable-protocol', protocols,
+    return ['tshark', '-n', '-r', source, *_DECODE_OPTIONS, '--disable-all-protocols', '--enable-protocol', protocols,
             '-Y', ' || '.join(f'({h.display_filter})' for h in handlers),
             '-T', 'json', '--no-duplicate-keys', '-J', layers]
 
@@ -1205,7 +1210,7 @@ def _mostly_recorded(pcap_path):
         try:
             if not pcap_subset.copy_frames(pcap_path, sample, windows):
                 return frozenset()
-            out = subprocess.run(['tshark', '-n', '-r', sample, *_DECODE_AS, '-T', 'fields', '-e', 'frame.protocols',
+            out = subprocess.run(['tshark', '-n', '-r', sample, *_DECODE_OPTIONS, '-T', 'fields', '-e', 'frame.protocols',
                                   '-e', 'tcp.stream', '-e', 'udp.stream'], capture_output=True, text=True,
                                  errors='replace', timeout=120, preexec_fn=_low_priority).stdout
         except (OSError, subprocess.SubprocessError):

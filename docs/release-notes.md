@@ -15,6 +15,14 @@
   to it (a reflector) is medium; a message that isn't WS-Discovery sent
   to its port is low
 
+### Fixes
+
+- MMS in a capture that starts after its connection's association
+  opened - as most captures of a long-lived substation connection do -
+  is read now. tshark learns which OSI presentation context carries MMS
+  from the association, so it decoded none of it, and the connection was
+  a PRES connection card; it's told the context IEC 61850 uses now
+
 ## 5.3.0
 
 ### Protocols from tshark
