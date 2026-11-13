@@ -41,7 +41,7 @@ Redirects to `/socrates.html`.
 
 Returns the running SO-CRATES version.
 
-**Response:** `{"version": "5.3.0"}`
+**Response:** `{"version": "5.4.0"}`
 
 ---
 
