@@ -1617,6 +1617,85 @@ class TestWSDiscovery(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestKNXnetIP(unittest.TestCase):
+    """tests/protocol_fixtures.write_knxip_pcap: one record per KNXnet/IP
+    flow - with what Suricata 8.0.8 logged for the capture
+    (tests/data/knxip_fixture.eve.json): flows it gives no protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_knxip_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'knxip.pcap')
+        write_knxip_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.flows = {(r['src_ip'], r['src_port']): r['knxip'] for r in cls.records if r['event_type'] == 'knxip'}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_gateway_describes_itself(self):
+        from tests.protocol_fixtures import KNX_SCANNER
+        described = self.flows[(KNX_SCANNER, 3672)]
+        self.assertTrue(described['answered'])
+        self.assertEqual(described['device'], {
+            'medium': 'TP1', 'individual_address': '1.1.250', 'project_installation': 0, 'serial': '00:c5:01:02:03:ff',
+            'multicast': '224.0.23.12', 'mac': '00:c5:01:aa:0b:0c', 'name': 'Office IP Interface',
+            'families': ['core v2', 'device management v2', 'tunnelling v2', 'routing v2']})
+
+    def test_a_multicast_search_answered_from_another_flow(self):
+        from tests.protocol_fixtures import CLIENT, KNX_GATEWAY
+        self.assertEqual(self.flows[(CLIENT, 3671)], {'services': {'Search Request': 1}, 'answered': True,
+                                                      'responders': [KNX_GATEWAY]})
+        self.assertEqual(self.flows[(KNX_GATEWAY, 3671)]['device']['name'], 'Office IP Interface')
+
+    def test_a_tunnel_its_group_writes_and_programming(self):
+        from tests.protocol_fixtures import KNX_SCANNER
+        tunnel = self.flows[(KNX_SCANNER, 40000)]
+        self.assertEqual({k: tunnel[k] for k in ('connection_type', 'layer', 'status', 'channel', 'tunnel_address')},
+                         {'connection_type': 'tunnel', 'layer': 'link layer', 'status': 'accepted', 'channel': 7,
+                          'tunnel_address': '1.1.250'})
+        self.assertEqual((tunnel['group_writes'], tunnel['values'], tunnel['group_reads']),
+                         ({'1/2/3': 1, '2/1/10': 1}, {'1/2/3': '1', '2/1/10': '0c1a'}, {'1/2/4': 1}))
+        self.assertEqual(tunnel['management'], ['IndividualAddress_Write 0/0/0', 'Master_Reset 1.1.5', 'Memory_Write 1.1.5'])
+        self.assertEqual(tunnel['programming'], ['IndividualAddress_Write', 'Master_Reset', 'Memory_Write'])
+        self.assertEqual(tunnel['services']['Tunnelling Request'], 6)
+
+    def test_a_refused_tunnel_and_device_management(self):
+        from tests.protocol_fixtures import CLIENT, KNX_SCANNER
+        refused = self.flows[(KNX_SCANNER, 40001)]
+        self.assertEqual((refused['status'], 'channel' in refused), ('no more connections', False))
+        management = self.flows[(CLIENT, 50001)]
+        self.assertEqual({k: management[k] for k in ('connection_type', 'status', 'management', 'programming')},
+                         {'connection_type': 'device management', 'status': 'accepted',
+                          'management': ['M_PropWrite.req'], 'programming': ['M_PropWrite.req']})
+
+    def test_routing_and_knx_ip_secure(self):
+        from tests.protocol_fixtures import KNX_ROUTER, KNX_SECURE_ROUTER
+        self.assertEqual(self.flows[(KNX_ROUTER, 3671)], {
+            'services': {'Routing Indication': 2}, 'sources': ['1.1.20'], 'group_writes': {'0/0/1': 1},
+            'values': {'0/0/1': '0'}, 'group_reads': {'0/0/2': 1}})
+        self.assertEqual(self.flows[(KNX_SECURE_ROUTER, 3671)], {'services': {'Secure Wrapper': 1}, 'secure': True})
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('knxip_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (8, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'knxip_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'knxip.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('knxip'), 8)
+        self.assertNotIn('conn_kip', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestTNS(unittest.TestCase):
     """tests/protocol_fixtures.write_tns_pcap: one record per Oracle TNS
     connection and per distinct statement - with what Suricata 8.0.8
@@ -4018,6 +4097,18 @@ class TestHostileProtocolInput(unittest.TestCase):
         from shark_protocols import _resp_value
         with self.assertRaises(ValueError):
             _resp_value(b'|0\r\n' * 2000 + b'+OK\r\n', 0)
+
+    def test_knx_frames_cut_short_or_lying_about_their_lengths(self):
+        from shark_protocols import KNXnetIP, Packet, _cemi
+        flow = shark_analyzer._Flow(('k',), 'UDP', 4, '10.0.0.5', '10.0.0.9', 3671, 3671, 1.0, '0')
+        packet = Packet(1, 1.0, flow, 3671, 3671, 'kip', '10.0.0.5', '10.0.0.9')
+        knx = KNXnetIP()
+        for frame in ('0610', '061002040006', '06100204000a3601', '061004200008ff07', '0610042000ff04070000110f',
+                      '0610020600080000', '06100205001408010000000000000801', '0610053000062900'):
+            knx.feed(packet, {'@kip': [frame]})
+        self.assertEqual(len(knx.finish()), 1)
+        self.assertIsNone(_cemi(b'\x11\xff'))
+        self.assertEqual(_cemi(b'\x29\x00\xbc\xe0\x11\x14\x00\x01\x05')[3], '', 'a TPDU length past the frame')
 
     def test_a_truncated_tds_rpc(self):
         from shark_protocols import _tds_rpc

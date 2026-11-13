@@ -2460,6 +2460,7 @@
                 s7comm: '#00897b',
                 ssdp: '#7e57c2',
                 wsd: '#5c6bc0',
+                knxip: '#43a047',
                 telnet: '#ffa726',
                 rsh: '#ff8a65',
                 openvpn: '#5c6bc0',
@@ -5397,6 +5398,40 @@
             return html;
         }
 
+        // tshark's KNXnet/IP records (shark_protocols.KNXnetIP): one per
+        // flow - a gateway's description of itself, a tunnel or
+        // device-management connection and the telegrams through it, or a
+        // router's telegrams to the multicast group.
+        function renderKnxipDetails(e) {
+            const k = e.knxip || {};
+            const d = k.device || {};
+            const counts = o => Object.entries(o || {}).map(([name, n]) => `${name} ${n.toLocaleString()}`).join(', ');
+            let html = htmlSection('KNXnet/IP Details', COLORS.EVENT.knxip);
+            html += htmlRowText('Services', counts(k.services));
+            if (k.answered !== undefined) html += htmlRowText('Answered', k.answered ? 'yes' : 'no');
+            html += htmlRowText('Responders', (k.responders || []).join(', '), 'mono');
+            html += htmlRowText('Device Name', d.name);
+            html += htmlRowText('KNX Address', d.individual_address, 'mono');
+            html += htmlRowText('Medium', d.medium);
+            html += htmlRowText('Serial Number', d.serial, 'mono');
+            html += htmlRowText('MAC', d.mac, 'mono');
+            html += htmlRowText('Multicast Address', d.multicast, 'mono');
+            html += htmlRowText('Service Families', (d.families || []).join(', '));
+            html += htmlRowText('Programming Mode', d.programming_mode ? 'on' : '');
+            html += htmlRowText('Connection Type', k.connection_type);
+            html += htmlRowText('Tunnel Layer', k.layer);
+            html += htmlRowText('Status', k.status);
+            html += htmlRowText('Channel', k.channel !== undefined ? String(k.channel) : '');
+            html += htmlRowText('Tunnel Address', k.tunnel_address, 'mono');
+            html += htmlRowText('KNX IP Secure', k.secure ? 'yes (encrypted - not read)' : '');
+            html += htmlRowText('Group Writes', Object.entries(k.group_writes || {}).map(([ga, n]) =>
+                `${ga}${k.values?.[ga] !== undefined ? ` = ${k.values[ga]}` : ''}${n > 1 ? ` (${n.toLocaleString()}×)` : ''}`).join(', '), 'mono');
+            html += htmlRowText('Group Reads', counts(k.group_reads), 'mono');
+            html += htmlRow('Management', (k.management || []).map(escapeHtml).join('<br>'), 'mono');
+            html += htmlRowText('KNX Senders', (k.sources || []).join(', '), 'mono');
+            return html;
+        }
+
         // tshark's WS-Discovery records (shark_protocols.WSDiscovery): one
         // per Probe or Resolve and its replies - every device's, for a
         // multicast one - per Hello or Bye, and per message to the port
@@ -5808,6 +5843,7 @@
             coap: renderCoapDetails,
             slp: renderSlpDetails,
             wsd: renderWsdDetails,
+            knxip: renderKnxipDetails,
             ipmi: renderIpmiDetails,
             l2tp: renderL2tpDetails,
             rip: renderRipDetails,
@@ -8986,6 +9022,7 @@
             coap: 'CoAP',
             slp: 'SLP',
             wsd: 'WS-Discovery',
+            knxip: 'KNXnet/IP',
             ipmi: 'IPMI',
             l2tp: 'L2TP',
             rip: 'RIP',
@@ -10127,6 +10164,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Function', 'Service Type', 'Scopes', 'URL', 'Response', 'Status', 'Version'];
                 case 'wsd':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Message', 'Types', 'XAddrs', 'Responders', 'Answered', 'Req Bytes', 'Amplification'];
+                case 'knxip':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Services', 'Device Name', 'KNX Address', 'Status', 'Group Writes', 'Management', 'Answered'];
                 case 'stun':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Method', 'Result', 'Requests', 'Mapped Address', 'Relayed Address', 'Software', 'User'];
                 case 'radius':
@@ -10723,6 +10762,7 @@
                 case 'coap':
                 case 'slp':
                 case 'wsd':
+                case 'knxip':
                 case 'ipmi':
                 case 'l2tp':
                 case 'rip':
@@ -13510,6 +13550,13 @@
                 case 'Types': return (e.wsd?.types || []).join(', ');
                 case 'XAddrs': return (e.wsd?.xaddrs || []).join(', ');
                 case 'Responders': return (e.wsd?.responders || []).join(', ');
+                // KNXnet/IP: a flow's services, the gateway's description of
+                // itself, the group addresses written and the programming sent
+                case 'Services': return Object.keys(e.knxip?.services || {}).join(', ');
+                case 'Device Name': return e.knxip?.device?.name || '';
+                case 'KNX Address': return e.knxip?.device?.individual_address || e.knxip?.tunnel_address || '';
+                case 'Group Writes': return Object.keys(e.knxip?.group_writes || {}).join(', ');
+                case 'Management': return (e.knxip?.management || []).join(', ');
                 case 'Verb': return (e.tns_statement || e.mysql_statement || e.mssql_statement)?.verb || '';
                 case 'Statement': return ((e.tns_statement || e.mysql_statement || e.mssql_statement)?.statement || e.redis_command?.command || '').slice(0, 200);
                 case 'Encryption': return e.mssql?.encryption || '';
@@ -13529,6 +13576,7 @@
                     if (e.event_type === 'pop3') return e.pop3?.response?.status || '';
                     if (e.socks) return e.socks.status || '';
                     if (e.slp) return e.slp.status || '';
+                    if (e.knxip) return e.knxip.status || '';
                     return String(e.http?.status || '');
                 }
                 case 'User-Agent': return (e.http?.http_user_agent || '').slice(0, CONFIG.USER_AGENT_MAX_LENGTH);
@@ -13806,7 +13854,8 @@
                 case 'Event': return e.anomaly?.event || '';
                 case 'Layer': return e.anomaly?.layer || '';
                 case 'Answered': {
-                    if (e.wsd) return e.wsd.answered === undefined ? '' : (e.wsd.answered ? 'yes' : 'no');
+                    const asked = e.wsd || e.knxip;
+                    if (asked) return asked.answered === undefined ? '' : (asked.answered ? 'yes' : 'no');
                     const r = e.mongodb || e.memcache || e.fins || e.hart_ip || e.raknet || e.ecat || e.redis || e.zabbix;
                     return r ? (r.answered ? 'yes' : 'no') : e.shark?.answered || '';
                 }

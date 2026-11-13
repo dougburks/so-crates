@@ -10,6 +10,7 @@ password, even where the record keeps one.
 import json
 import sqlite3
 
+import shark_protocols
 from db import (
     _build_search_terms,
     _build_where_conditions,
@@ -287,6 +288,12 @@ RULES = (
          _in('bacnet', 'service', ['reinitializeDevice', 'deviceCommunicationControl']),
          lambda b: _join(b.get('service'), b.get('state'), b.get('result')),
          'A building controller told to restart, or to stop talking, over the network.'),
+    Rule('knxip_programming', 'high', 'knxip', 'KNX device programmed or reset',
+         _has('knxip', 'programming', sorted(shark_protocols.KNX_PROGRAMMING)),
+         lambda b: _list([m for m in b.get('management', ()) if m.split(' ', 1)[0] in shark_protocols.KNX_PROGRAMMING]),
+         "A KNX device's individual address, memory or properties written, or the device restarted or reset "
+         "to factory settings, through a KNXnet/IP gateway - what ETS does when commissioning, and what "
+         "anyone who reaches a gateway without KNX IP Secure can do."),
     Rule('goose_anomaly', 'high', 'goose', 'GOOSE state number jumped or reset',
          f"{_j('goose', 'anomaly')} IS NOT NULL",
          lambda b: b.get('anomaly', ''),
@@ -641,6 +648,14 @@ RULES = (
          'source address forged, its larger reply goes to the victim, as in the 2019 attacks. Keep UDP 3702 '
          'off the internet.'),
 
+    Rule('knxip_open_connection', 'medium', 'knxip', 'KNXnet/IP connection accepted without KNX IP Secure',
+         f"{_j('knxip', 'status')} = 'accepted' AND {_j('knxip', 'secure')} IS NULL",
+         lambda b: _join(b.get('connection_type'), ('as', b.get('tunnel_address')),
+                         ('-', f"{len(b['group_writes'])} group addresses written" if b.get('group_writes') else '')),
+         'A gateway that opens a tunnel to whoever asks gives them the KNX bus - lights, blinds, heating, '
+         'and programming its devices. Routine from ETS or a visualization server on the building network; '
+         'from anywhere else, the building is open.'),
+
     Rule('tls_self_signed', 'medium', 'tls', 'TLS self-signed certificate',
          f"{_j('tls', 'issuerdn')} = {_j('tls', 'subject')} AND {_j('tls', 'subject')} != ''",
          _tls_certificate,
@@ -784,6 +799,12 @@ RULES = (
          f"{_j('slp', 'response')} IS NOT NULL AND {_j('slp', 'function')} != 'Service Registration'",
          lambda b: _join(b.get('function'), ('-', b.get('status'))),
          'Exposed to the internet, SLP is how scanners find ESXi hosts and amplifiers.'),
+    Rule('knxip_described', 'low', 'knxip', 'KNXnet/IP gateway described itself',
+         f"{_j('knxip', 'device.individual_address')} IS NOT NULL",
+         lambda b: _join((b.get('device') or {}).get('name'), (b.get('device') or {}).get('individual_address'),
+                         ('serial', (b.get('device') or {}).get('serial'))),
+         'A gateway answering a search or description request with its name, KNX address, serial number '
+         'and the services it offers - on the internet, how scanners find building controllers.'),
     Rule('wsd_probe', 'low', 'wsd', "WS-Discovery port sent something that isn't WS-Discovery",
          f"{_j('wsd', 'message')} = 'invalid' AND {_j('wsd', 'request_bytes')} IS NOT NULL",
          lambda b: _join(b.get('payload'), ('-', 'answered' if b.get('answered') else 'no answer')),

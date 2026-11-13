@@ -1994,6 +1994,15 @@ AGGREGATION_JSON_PATHS = {
         'Req Bytes': ['$.wsd.request_bytes'],
         'Amplification': ['$.wsd.amplification'],
     },
+    'knxip': {
+        'Services': ['$.knxip.services'],
+        'Device Name': ['$.knxip.device.name'],
+        'KNX Address': ['$.knxip.device.individual_address', '$.knxip.tunnel_address'],
+        'Status': ['$.knxip.status'],
+        'Group Writes': ['$.knxip.group_writes'],
+        'Management': ['$.knxip.management'],
+        'Answered': ['$.knxip.answered'],
+    },
     'nbns': {
         'Opcode': ['$.nbns.opcode'],
         'NetBIOS Name': ['$.nbns.name'],
@@ -2068,6 +2077,7 @@ AGGREGATION_VALUE_TRANSFORMS = {
     ('redis', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('zabbix', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('wsd', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('knxip', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('tacacs', 'Encrypted'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Connected'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
@@ -2119,11 +2129,11 @@ AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
     ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'), ('synphasor', 'Stations'), ('ecat', 'FoE'),
     ('redis', 'Keys'), ('zabbix', 'Keys'), ('irc', 'Channels'), ('irc', 'Bot Commands'),
-    ('wsd', 'Types'), ('wsd', 'XAddrs'), ('wsd', 'Responders'),
+    ('wsd', 'Types'), ('wsd', 'XAddrs'), ('wsd', 'Responders'), ('knxip', 'Management'),
 }
 # Object-valued columns shown as their keys, joined the same way (a count
 # per name: memcached's commands)
-AGGREGATION_KEY_JOIN_COLUMNS = {('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages'), ('synphasor', 'Commands'), ('ecat', 'Commands'), ('ecat', 'State Requests'), ('redis', 'Commands'), ('redis', 'Errors')}
+AGGREGATION_KEY_JOIN_COLUMNS = {('knxip', 'Services'), ('knxip', 'Group Writes'), ('memcache', 'Commands'), ('fins', 'Commands'), ('fins', 'Errors'), ('hart_ip', 'Commands'), ('raknet', 'Messages'), ('synphasor', 'Commands'), ('ecat', 'Commands'), ('ecat', 'State Requests'), ('redis', 'Commands'), ('redis', 'Errors')}
 # Columns of a list of objects shown as one field of each, joined with the
 # separator given (Zabbix's commands, each with its result)
 AGGREGATION_OBJECT_FIELD_JOIN_COLUMNS = {('zabbix', 'Commands'): ('command', '; ')}

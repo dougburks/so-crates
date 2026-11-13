@@ -2233,6 +2233,289 @@ class WSDiscovery:
         return self.records
 
 
+# ---------------------------------------------------------------- KNXnet/IP
+#
+# KNXnet/IP (UDP and TCP 3671): KNX building automation - lights, blinds,
+# heating, access - reached over IP through a gateway. A client searches
+# for gateways (multicast 224.0.23.12) or asks one to describe itself, then
+# opens a tunnel to the KNX bus, or a device-management connection to the
+# gateway itself; a router copies bus telegrams to and from the multicast
+# group (routing). Through a tunnel, telegrams write and read group
+# addresses (a light switched, a setpoint changed) or program a device -
+# its memory, properties or individual address written, restarted or
+# reset to factory settings - what ETS does, and anyone who reaches an
+# unsecured gateway can. KNX IP Secure (encrypted sessions and routing)
+# and KNX Data Secure (encrypted telegrams) are noted, never read.
+#
+# One record per flow: the services seen, the gateway's description of
+# itself from a search or description response (name, KNX individual
+# address, serial number, MAC, the service families it offers), a
+# connection's type, result and tunnel address, the group addresses
+# written (with the last value) and read, the device-management commands
+# sent, and the KNX devices that sent telegrams. A search or description
+# answered on another flow - a multicast search's answers come straight
+# back from each gateway - marks the asking flow answered, with who
+# answered. Read from the frame's bytes, which tshark's KNXnet/IP
+# dissector covers whole (@kip).
+
+KNXIP_PORT = 3671
+_KNXIP_SERVICES = {
+    0x0201: 'Search Request', 0x0202: 'Search Response', 0x0203: 'Description Request',
+    0x0204: 'Description Response', 0x0205: 'Connect Request', 0x0206: 'Connect Response',
+    0x0207: 'Connection State Request', 0x0208: 'Connection State Response', 0x0209: 'Disconnect Request',
+    0x020a: 'Disconnect Response', 0x020b: 'Extended Search Request', 0x020c: 'Extended Search Response',
+    0x0310: 'Device Configuration Request', 0x0311: 'Device Configuration Ack', 0x0420: 'Tunnelling Request',
+    0x0421: 'Tunnelling Ack', 0x0422: 'Tunnelling Feature Get', 0x0423: 'Tunnelling Feature Response',
+    0x0424: 'Tunnelling Feature Set', 0x0425: 'Tunnelling Feature Info', 0x0530: 'Routing Indication',
+    0x0531: 'Routing Lost Message', 0x0532: 'Routing Busy', 0x0533: 'Routing System Broadcast',
+    0x0740: 'Remote Diagnostic Request', 0x0741: 'Remote Diagnostic Response',
+    0x0742: 'Remote Basic Configuration Request', 0x0743: 'Remote Reset Request', 0x0950: 'Secure Wrapper',
+    0x0951: 'Session Request', 0x0952: 'Session Response', 0x0953: 'Session Authenticate',
+    0x0954: 'Session Status', 0x0955: 'Timer Notify'}
+_KNXIP_ASKS = {0x0201, 0x0203, 0x0205, 0x020b}       # requests a gateway answers, perhaps on another flow
+_KNXIP_ANSWERS = {0x0202: 0x0201, 0x0204: 0x0203, 0x0206: 0x0205, 0x020c: 0x020b}
+_KNXIP_SECURE = {0x0950, 0x0951, 0x0952, 0x0953, 0x0954, 0x0955}
+_KNXIP_FAMILIES = {2: 'core', 3: 'device management', 4: 'tunnelling', 5: 'routing', 6: 'remote logging',
+                   7: 'remote configuration', 8: 'object server', 9: 'security'}
+_KNXIP_CONNECTION_TYPES = {3: 'device management', 4: 'tunnel', 6: 'remote logging', 7: 'remote configuration',
+                           8: 'object server'}
+_KNXIP_LAYERS = {0x02: 'link layer', 0x04: 'raw', 0x80: 'bus monitor'}
+_KNXIP_STATUS = {0x00: 'accepted', 0x01: 'host protocol type not supported', 0x02: 'version not supported',
+                 0x04: 'sequence number out of order', 0x21: 'connection ID not found',
+                 0x22: 'connection type not supported', 0x23: 'connection option not supported',
+                 0x24: 'no more connections', 0x25: 'no more unique connections', 0x26: 'data connection error',
+                 0x27: 'KNX connection error', 0x28: 'not authorized', 0x29: 'tunnelling layer not supported'}
+_KNX_MEDIA = {0x02: 'TP1', 0x04: 'PL110', 0x10: 'RF', 0x20: 'IP'}
+# cEMI message codes: the link layer's data, and the device-management services
+_CEMI_DATA = {0x11: 'L_Data.req', 0x29: 'L_Data.ind', 0x2e: 'L_Data.con'}
+# ... and the transport layer's, laid out the same with no addresses (ETS
+# talking to the interface itself - how KNX Data Secure's sample comes)
+_CEMI_TRANSPORT = {0x41: 'T_Data_Connected.req', 0x89: 'T_Data_Connected.ind', 0x4a: 'T_Data_Individual.req',
+                   0x94: 'T_Data_Individual.ind'}
+_CEMI_MANAGEMENT = {0xfc: 'M_PropRead.req', 0xfb: 'M_PropRead.con', 0xf6: 'M_PropWrite.req',
+                    0xf5: 'M_PropWrite.con', 0xf7: 'M_PropInfo.ind', 0xf1: 'M_Reset.req', 0xf0: 'M_Reset.ind',
+                    0xf8: 'M_FuncPropCommand.req', 0xf9: 'M_FuncPropStateRead.req', 0xfa: 'M_FuncPropCommand.con'}
+# The application layer's services (APCI): the 4-bit ones, then the 10-bit
+# extended ones it escapes to
+_KNX_APCI = {0: 'GroupValue_Read', 1: 'GroupValue_Response', 2: 'GroupValue_Write', 3: 'IndividualAddress_Write',
+             4: 'IndividualAddress_Read', 5: 'IndividualAddress_Response', 6: 'ADC_Read', 7: 'ADC_Response',
+             8: 'Memory_Read', 9: 'Memory_Response', 10: 'Memory_Write', 12: 'DeviceDescriptor_Read',
+             13: 'DeviceDescriptor_Response', 14: 'Restart'}
+_KNX_APCI_EXTENDED = {0x1fb: 'Memory_Extended_Write', 0x1fc: 'Memory_Extended_Write_Response',
+                      0x1fd: 'Memory_Extended_Read', 0x1fe: 'Memory_Extended_Read_Response',
+                      0x2c0: 'UserMemory_Read', 0x2c2: 'UserMemory_Write', 0x2c5: 'UserManufacturerInfo_Read',
+                      0x2c7: 'FunctionPropertyCommand', 0x3d1: 'Authorize_Request', 0x3d2: 'Authorize_Response',
+                      0x3d3: 'Key_Write', 0x3d4: 'Key_Response', 0x3d5: 'PropertyValue_Read',
+                      0x3d6: 'PropertyValue_Response', 0x3d7: 'PropertyValue_Write',
+                      0x3d8: 'PropertyDescription_Read', 0x3dc: 'IndividualAddressSerialNumber_Read',
+                      0x3dd: 'IndividualAddressSerialNumber_Response', 0x3de: 'IndividualAddressSerialNumber_Write',
+                      0x3e0: 'DomainAddress_Write', 0x3e1: 'DomainAddress_Read', 0x3f1: 'SecureService'}
+# What changes a device - programming, ETS's work - rather than reading it
+KNX_PROGRAMMING = frozenset(('IndividualAddress_Write', 'Memory_Write', 'Memory_Extended_Write', 'UserMemory_Write',
+                             'Restart', 'Master_Reset', 'Key_Write', 'PropertyValue_Write',
+                             'IndividualAddressSerialNumber_Write', 'DomainAddress_Write', 'FunctionPropertyCommand',
+                             'M_PropWrite.req', 'M_Reset.req', 'M_FuncPropCommand.req'))
+_KNXIP_MAX_LIST = 50
+_KNXIP_MAX_GROUPS = 200
+
+
+def knx_individual(value):
+    return f'{value >> 12}.{(value >> 8) & 0x0f}.{value & 0xff}'
+
+
+def knx_group(value):
+    return f'{value >> 11}/{(value >> 8) & 0x07}/{value & 0xff}'
+
+
+def _knxip_frames(raw):
+    """The KNXnet/IP frames in a payload: (service type, body) - several
+    over TCP, where one segment can carry more than one."""
+    while len(raw) >= 6 and raw[0] == 0x06 and raw[1] in (0x10, 0x20):
+        service, total = struct.unpack('!HH', raw[2:6])
+        if total < 6:
+            return
+        yield service, raw[6:total]
+        raw = raw[total:]
+
+
+def _knxip_hpai(data):
+    """A host protocol address (8 bytes): 'ip:port', or '' for the NAT
+    form (0.0.0.0:0 - answer whoever sent it)."""
+    if len(data) < 8 or data[0] != 8:
+        return ''
+    ip, port = socket.inet_ntoa(data[2:6]), struct.unpack('!H', data[6:8])[0]
+    return '' if ip == '0.0.0.0' and not port else f'{ip}:{port}'
+
+
+def _knxip_dibs(data):
+    """A search or description response's description blocks: the device
+    information and supported service families, as record fields."""
+    out = {}
+    while len(data) >= 2 and data[0] >= 2:
+        length, kind, block = data[0], data[1], data[2:data[0]]
+        if kind == 0x01 and len(block) >= 52:
+            name = block[22:52].split(b'\0', 1)[0].decode('latin-1').strip()
+            out.update({'medium': _KNX_MEDIA.get(block[0], f'0x{block[0]:02x}'),
+                        'individual_address': knx_individual(struct.unpack('!H', block[2:4])[0]),
+                        'project_installation': struct.unpack('!H', block[4:6])[0],
+                        'serial': block[6:12].hex(':'), 'multicast': socket.inet_ntoa(block[12:16]),
+                        'mac': block[16:22].hex(':')})
+            if block[1] & 0x01:
+                out['programming_mode'] = True
+            if name:
+                out['name'] = ''.join(c if c.isprintable() else '.' for c in name)
+        elif kind == 0x02:
+            out['families'] = [f'{_KNXIP_FAMILIES.get(block[i], block[i])} v{block[i + 1]}'
+                               for i in range(0, len(block) - 1, 2)][:_KNXIP_MAX_LIST]
+        data = data[length:]
+    return out
+
+
+def _cemi(data):
+    """A cEMI frame: (message, source, destination, service, value) - the
+    link layer's data with its application-layer service, or a
+    device-management message with no addresses. None for anything shorter
+    than its own header."""
+    if not data:
+        return None
+    code = data[0]
+    if code in _CEMI_MANAGEMENT:
+        return _CEMI_MANAGEMENT[code], '', '', _CEMI_MANAGEMENT[code], ''
+    message = _CEMI_DATA.get(code) or _CEMI_TRANSPORT.get(code)
+    if message is None or len(data) < 2:
+        return None
+    at = 2 + data[1]                     # past the additional information
+    if len(data) < at + 7:
+        return None
+    ctrl2, source, destination, length = data[at + 1], *struct.unpack('!HH', data[at + 2:at + 6]), data[at + 6]
+    if code in _CEMI_DATA:
+        target = knx_group(destination) if ctrl2 & 0x80 else knx_individual(destination)
+        source = knx_individual(source)
+    else:
+        source = target = ''
+    tpdu = data[at + 7:at + 8 + length]
+    if not tpdu:
+        return message, source, target, '', ''
+    tpci = tpdu[0]
+    if tpci & 0x80:                      # a transport-layer control frame: connect, disconnect, ack
+        control = {0x80: 'T_Connect', 0x81: 'T_Disconnect'}.get(tpci & 0xc3, 'T_Nak' if tpci & 0x01 else 'T_Ack')
+        return message, source, target, control, ''
+    if len(tpdu) < 2:
+        return message, source, target, '', ''
+    apci4, apci10 = ((tpci & 0x03) << 2) | (tpdu[1] >> 6), ((tpci & 0x03) << 8) | tpdu[1]
+    if apci10 in _KNX_APCI_EXTENDED:
+        service = _KNX_APCI_EXTENDED[apci10]
+    elif apci4 in (11, 15):              # escaped to a 10-bit service this doesn't name
+        service = f'APCI 0x{apci10:03x}'
+    else:
+        service = _KNX_APCI.get(apci4, f'APCI {apci4}')
+    if service == 'Restart' and tpdu[1] & 0x01:
+        service = 'Master_Reset'         # a restart of the master reset type: erases what it's told to
+    value = ''
+    if service in ('GroupValue_Write', 'GroupValue_Response'):
+        value = f'{tpdu[1] & 0x3f}' if len(tpdu) == 2 else tpdu[2:2 + 14].hex()
+    return message, source, target, service, value
+
+
+class KNXnetIP:
+    """KNXnet/IP - see the comment above."""
+    event_type = 'knxip'
+    app_protos = ('kip',)
+    fields = ('@kip',)
+
+    def __init__(self):
+        self.records = []
+        self.by_flow = {}        # flow key -> its body
+        self.asked = {}          # (address, port) a request asked to be answered at -> the asking flow's body
+
+    def _body(self, pkt):
+        body = self.by_flow.get(pkt.flow.key)
+        if body is None:
+            body = self.by_flow[pkt.flow.key] = {'services': {}}
+            self.records.append((pkt.flow, pkt.when, self.event_type, body))
+        return body
+
+    def feed(self, pkt, v):
+        for value in v['@kip']:
+            for service, data in _knxip_frames(_hex(value)):
+                self._frame(pkt, service, data)
+
+    def _frame(self, pkt, service, data):
+        name = _KNXIP_SERVICES.get(service, f'service 0x{service:04x}')
+        body = self._body(pkt)
+        services = body['services']
+        if name not in services and len(services) >= _KNXIP_MAX_LIST:
+            return
+        services[name] = services.get(name, 0) + 1
+        if service in _KNXIP_SECURE:
+            body['secure'] = True
+        if service in _KNXIP_ASKS:
+            body.setdefault('answered', False)
+            self.asked[(pkt.src, str(pkt.sport))] = body
+            endpoint = _knxip_hpai(data)
+            if endpoint:
+                self.asked[tuple(endpoint.rsplit(':', 1))] = body
+        if service in _KNXIP_ANSWERS:
+            asker = self.asked.get((pkt.dst, str(pkt.dport)))
+            for answered in {id(b): b for b in (body, asker) if b is not None and 'answered' in b}.values():
+                answered['answered'] = True
+                if answered is not body:
+                    responders = answered.setdefault('responders', [])
+                    if pkt.src not in responders and len(responders) < _KNXIP_MAX_LIST:
+                        responders.append(pkt.src)
+        if service in (0x0202, 0x020c):
+            body.setdefault('device', {}).update(_knxip_dibs(data[8:]))
+        elif service == 0x0204:
+            body.setdefault('device', {}).update(_knxip_dibs(data))
+        elif service == 0x0205 and len(data) >= 18:
+            cri = data[16:16 + data[16]]
+            if len(cri) >= 2:
+                body['connection_type'] = _KNXIP_CONNECTION_TYPES.get(cri[1], f'type {cri[1]}')
+                if cri[1] == 4 and len(cri) >= 3:
+                    body['layer'] = _KNXIP_LAYERS.get(cri[2], f'0x{cri[2]:02x}')
+        elif service == 0x0206 and len(data) >= 2:
+            body['status'] = _KNXIP_STATUS.get(data[1], f'0x{data[1]:02x}')
+            if data[1] == 0:
+                body['channel'] = data[0]
+            crd = data[10:10 + data[10]] if len(data) > 10 else b''
+            if data[1] == 0 and len(crd) >= 4 and crd[1] == 4:
+                body['tunnel_address'] = knx_individual(struct.unpack('!H', crd[2:4])[0])
+        elif service in (0x0420, 0x0310) and len(data) >= 4:
+            self._telegram(body, data[data[0]:])
+        elif service == 0x0530:
+            self._telegram(body, data)
+
+    def _telegram(self, body, data):
+        cemi = _cemi(data)
+        if cemi is None:
+            return
+        _message, source, target, service, value = cemi
+        if source:
+            sources = body.setdefault('sources', [])
+            if source not in sources and len(sources) < _KNXIP_MAX_LIST:
+                sources.append(source)
+        if service == 'SecureService':
+            body['secure'] = True
+        if service in ('GroupValue_Write', 'GroupValue_Read'):
+            groups = body.setdefault('group_writes' if service == 'GroupValue_Write' else 'group_reads', {})
+            if target in groups or len(groups) < _KNXIP_MAX_GROUPS:
+                groups[target] = groups.get(target, 0) + 1
+                if value:
+                    body.setdefault('values', {})[target] = value
+        elif service and service != 'SecureService' and not service.startswith(('T_', 'GroupValue')):
+            if service in KNX_PROGRAMMING:
+                programming = body.setdefault('programming', [])
+                if service not in programming:
+                    programming.append(service)
+            entry = f'{service} {target}'.strip()
+            management = body.setdefault('management', [])
+            if entry not in management and len(management) < _KNXIP_MAX_LIST:
+                management.append(entry)
+
+    def finish(self):
+        return self.records
+
+
 # ---------------------------------------------------------------- S7comm
 
 _S7_ROSCTR = {1: 'job', 2: 'ack', 3: 'ack_data', 7: 'userdata'}
@@ -7493,7 +7776,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, WSDiscovery, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS, Redis, Zabbix, IRC)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, WSDiscovery, KNXnetIP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS, Redis, Zabbix, IRC)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

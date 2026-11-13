@@ -11,9 +11,18 @@
   it came back amplified. And a record for each Hello or Bye a device
   sent. A scanner's broken XML sent to the port is recorded too. These
   were connection cards before
-- **Findings** - a device answering a WS-Discovery request sent straight
-  to it (a reflector) is medium; a message that isn't WS-Discovery sent
-  to its port is low
+- **KNXnet/IP** (KNX building automation - lights, blinds, heating) - a
+  record for each flow: a gateway's name, KNX address, serial number and
+  services from its answer to a search or description, a tunnel or
+  device-management connection's result and tunnel address, the group
+  addresses written (with their last values) and read, and the commands
+  that program a device. KNX IP Secure and Data Secure are noted. These
+  were connection cards before
+- **Findings** - a KNX device programmed or reset through a KNXnet/IP
+  gateway is high; a device answering a WS-Discovery request sent
+  straight to it (a reflector), and a KNXnet/IP connection accepted
+  without KNX IP Secure, are medium; a message that isn't WS-Discovery
+  sent to its port, and a KNXnet/IP gateway describing itself, are low
 
 ### Fixes
 

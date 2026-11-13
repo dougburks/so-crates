@@ -1393,6 +1393,95 @@ def write_wsd_pcap(path):
     write_pcap(path, wsd_packets())
 
 
+# ---------------------------------------------------------------- KNXnet/IP
+#
+# KNX_GATEWAY is an IP interface, 1.1.250 on the bus. KNX_SCANNER asks it
+# to describe itself (it does), then opens a tunnel without NAT details
+# (accepted on channel 7, tunnel address 1.1.250) and through it writes
+# group addresses 1/2/3 (on) and 2/1/10 (a 2-byte setpoint), reads 1/2/4,
+# writes a new individual address, master-resets device 1.1.5 and writes
+# its memory, and disconnects; a second tunnel is refused (no more
+# connections). CLIENT:3671 multicasts a search, which KNX_GATEWAY answers
+# straight back; CLIENT:50001 opens a device-management connection and
+# writes a property. KNX_ROUTER routes a telegram from 1.1.20 writing 0/0/1
+# and one reading 0/0/2 to the multicast group, and KNX_SECURE_ROUTER sends
+# KNX IP Secure (a real Secure Wrapper, from Wireshark's samples).
+
+KNX_GATEWAY, KNX_ROUTER, KNX_SECURE_ROUTER, KNX_SCANNER = '10.1.0.130', '10.1.0.131', '10.1.0.132', '198.51.100.70'
+KNX_GROUP = '224.0.23.12'
+
+
+def _knxip(service, body):
+    return struct.pack('!BBHH', 6, 0x10, service, 6 + len(body)) + body
+
+
+def _knx_hpai(ip='0.0.0.0', port=0):
+    return struct.pack('!BB4sH', 8, 1, socket.inet_aton(ip), port)
+
+
+def _knx_address(text):
+    if '/' in text:
+        main, middle, sub = (int(x) for x in text.split('/'))
+        return (main << 11) | (middle << 8) | sub
+    area, line, device = (int(x) for x in text.split('.'))
+    return (area << 12) | (line << 8) | device
+
+
+def _cemi_data(source, destination, tpdu, code=0x11):
+    group = '/' in destination
+    return struct.pack('!BBBBHHB', code, 0, 0xbc, 0xe0 if group else 0x60, _knx_address(source),
+                       _knx_address(destination), len(tpdu) - 1) + tpdu
+
+
+def _knx_device_dib(name):
+    return (struct.pack('!BBBBHH', 0x36, 0x01, 0x02, 0x00, _knx_address('1.1.250'), 0)
+            + bytes.fromhex('00c5010203ff') + socket.inet_aton(KNX_GROUP) + bytes.fromhex('00c501aa0b0c')
+            + name.encode().ljust(30, b'\0') + bytes.fromhex('0a020202030204020502'))
+
+
+def knxip_packets():
+    dibs = _knx_device_dib('Office IP Interface')
+    tunnel = lambda seq, cemi: _knxip(0x0420, bytes([4, 7, seq, 0]) + cemi)    # noqa: E731
+    telegrams = [
+        _cemi_data('1.1.250', '1/2/3', b'\x00\x81'),
+        _cemi_data('1.1.250', '2/1/10', b'\x00\x80\x0c\x1a'),
+        _cemi_data('1.1.250', '1/2/4', b'\x00\x00'),
+        _cemi_data('1.1.250', '0/0/0', b'\x00\xc0\x11\x05'),
+        _cemi_data('1.1.250', '1.1.5', b'\x03\x81\x01\x00'),
+        _cemi_data('1.1.250', '1.1.5', b'\x42\x82\x01\x04\xaa\xbb'),
+    ]
+    scanner = [(True, _knxip(0x0203, _knx_hpai(KNX_SCANNER, 3672))), (False, _knxip(0x0204, dibs))]
+    tunnel_flow = [(True, _knxip(0x0205, _knx_hpai() + _knx_hpai() + b'\x04\x04\x02\x00')),
+                   (False, _knxip(0x0206, b'\x07\x00' + _knx_hpai(KNX_GATEWAY, 3671) + b'\x04\x04\x11\xfa'))]
+    for seq, telegram in enumerate(telegrams):
+        tunnel_flow += [(True, tunnel(seq, telegram)), (False, _knxip(0x0421, bytes([4, 7, seq, 0])))]
+    tunnel_flow += [(True, _knxip(0x0209, b'\x07\x00' + _knx_hpai())), (False, _knxip(0x020a, b'\x07\x00'))]
+    refused = [(True, _knxip(0x0205, _knx_hpai() + _knx_hpai() + b'\x04\x04\x02\x00')),
+               (False, _knxip(0x0206, b'\x00\x24'))]
+    management = [(True, _knxip(0x0205, _knx_hpai(CLIENT, 50001) + _knx_hpai(CLIENT, 50001) + b'\x02\x03')),
+                  (False, _knxip(0x0206, b'\x08\x00' + _knx_hpai(KNX_GATEWAY, 3671) + b'\x02\x03')),
+                  (True, _knxip(0x0310, bytes([4, 8, 0, 0]) + bytes.fromhex('f6000b0134100100'))),
+                  (False, _knxip(0x0311, bytes([4, 8, 0, 0])))]
+    secure = bytes.fromhex('0610095000370000000107966f52ffffffffffff00036489b353e7a31fb72d51d5051e5c1c9fa12b510f'
+                           '2ece96b3a7c8badfb5df79483b')
+    udp = [(src, dst, sport, dport, payload) for flow in (
+        [(KNX_SCANNER, KNX_GATEWAY, 3672, 3671, p) if c else (KNX_GATEWAY, KNX_SCANNER, 3671, 3672, p) for c, p in scanner],
+        [(KNX_SCANNER, KNX_GATEWAY, 40000, 3671, p) if c else (KNX_GATEWAY, KNX_SCANNER, 3671, 40000, p)
+         for c, p in tunnel_flow],
+        [(KNX_SCANNER, KNX_GATEWAY, 40001, 3671, p) if c else (KNX_GATEWAY, KNX_SCANNER, 3671, 40001, p) for c, p in refused],
+        [(CLIENT, KNX_GROUP, 3671, 3671, _knxip(0x0201, _knx_hpai(CLIENT, 3671))),
+         (KNX_GATEWAY, CLIENT, 3671, 3671, _knxip(0x0202, _knx_hpai(KNX_GATEWAY, 3671) + dibs))],
+        [(CLIENT, KNX_GATEWAY, 50001, 3671, p) if c else (KNX_GATEWAY, CLIENT, 3671, 50001, p) for c, p in management],
+        [(KNX_ROUTER, KNX_GROUP, 3671, 3671, _knxip(0x0530, _cemi_data('1.1.20', '0/0/1', b'\x00\x80', 0x29))),
+         (KNX_ROUTER, KNX_GROUP, 3671, 3671, _knxip(0x0530, _cemi_data('1.1.20', '0/0/2', b'\x00\x00', 0x29)))],
+        [(KNX_SECURE_ROUTER, KNX_GROUP, 3671, 3671, secure)]) for (src, dst, sport, dport, payload) in flow]
+    return [_udp_packet(*p) for p in udp]
+
+
+def write_knxip_pcap(path):
+    write_pcap(path, knxip_packets())
+
+
 # ---------------------------------------------------------------- Microsoft SQL Server (TDS)
 #
 # Shaped on a capture of SQL Server 2022 (16.0.4305) and python-tds.
