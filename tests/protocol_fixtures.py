@@ -1284,6 +1284,107 @@ def write_memcache_pcap(path):
     write_pcap(path, memcache_packets())
 
 
+# ---------------------------------------------------------------- WS-Discovery
+#
+# Shaped on Windows', printers' and ONVIF cameras' WS-Discovery and an
+# internet scanner's probes. CLIENT:53273 multicasts a Probe for devices,
+# twice (SOAP over UDP repeats it); WSD_PRINTER answers twice, WSD_CAMERA
+# once - each straight back to CLIENT. CLIENT:53274 asks to Resolve an
+# endpoint nobody answers for. WSD_PRINTER says Hello (twice), WSD_CAMERA
+# Bye, and WSD_CAMERA sends CLIENT:53000 ProbeMatches for a probe from
+# before the capture. WSD_SCANNER sends WSD_PRINTER broken XML, which it
+# answers with a SOAP fault; a Probe straight to WSD_CAMERA, which answers
+# it; and WSD_QUIET an ONVIF command and a Probe with a DTD, neither
+# answered.
+
+WSD_PRINTER, WSD_CAMERA, WSD_QUIET, WSD_SCANNER = '10.1.0.120', '10.1.0.121', '10.1.0.122', '198.51.100.66'
+WSD_GROUP = '239.255.255.250'
+_WSD_NS = ('xmlns:soap="http://www.w3.org/2003/05/soap-envelope" '
+           'xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" '
+           'xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery" '
+           'xmlns:wsdp="http://schemas.xmlsoap.org/ws/2006/02/devprof"')
+_WSD_ACTION = 'http://schemas.xmlsoap.org/ws/2005/04/discovery/'
+
+
+def _wsd(action, message_id, body, relates_to=None, extra_ns=''):
+    relates = f'<wsa:RelatesTo>{relates_to}</wsa:RelatesTo>' if relates_to else ''
+    action = action if action.startswith('http') else _WSD_ACTION + action
+    return (f'<?xml version="1.0" encoding="utf-8"?><soap:Envelope {_WSD_NS}{extra_ns}><soap:Header>'
+            f'<wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To><wsa:Action>{action}</wsa:Action>'
+            f'<wsa:MessageID>{message_id}</wsa:MessageID>{relates}</soap:Header><soap:Body>{body}</soap:Body>'
+            '</soap:Envelope>').encode()
+
+
+def _wsd_device(endpoint, types, xaddrs, scopes=''):
+    scopes = f'<wsd:Scopes>{scopes}</wsd:Scopes>' if scopes else ''
+    return (f'<wsa:EndpointReference><wsa:Address>{endpoint}</wsa:Address></wsa:EndpointReference>'
+            f'<wsd:Types>{types}</wsd:Types>{scopes}<wsd:XAddrs>{xaddrs}</wsd:XAddrs>'
+            '<wsd:MetadataVersion>3</wsd:MetadataVersion>')
+
+
+WSD_PROBE_ID = 'urn:uuid:09e170df-0e84-4b40-b806-adffcc61d3a8'
+WSD_PRINTER_ID = 'urn:uuid:e762ae39-f18a-00e7-ba68-e9ffd915458c'
+WSD_CAMERA_ID = 'urn:uuid:5a0bd2c4-8f11-4c1a-9e57-2bb1c0ffee01'
+
+
+def wsd_packets():
+    printer = _wsd_device(WSD_PRINTER_ID, 'wsdp:Device wprt:PrintDeviceType',
+                          f'http://{WSD_PRINTER}:5357/{WSD_PRINTER_ID[9:]}/')
+    printer_ns = ' xmlns:wprt="http://schemas.microsoft.com/windows/2006/08/wdp/print"'
+    camera = _wsd_device(WSD_CAMERA_ID, 'dn:NetworkVideoTransmitter',
+                         f'http://{WSD_CAMERA}/onvif/device_service',
+                         'onvif://www.onvif.org/type/video_encoder onvif://www.onvif.org/name/Lobby')
+    camera_ns = ' xmlns:dn="http://www.onvif.org/ver10/network/wsdl"'
+    probe = _wsd('Probe', WSD_PROBE_ID, '<wsd:Probe><wsd:Types>wsdp:Device</wsd:Types></wsd:Probe>')
+    printer_match = _wsd('ProbeMatches', 'urn:uuid:3e6b1e35-297a-4af0-8f57-45e8d1ca5e84',
+                         f'<wsd:ProbeMatches><wsd:ProbeMatch>{printer}</wsd:ProbeMatch></wsd:ProbeMatches>',
+                         WSD_PROBE_ID, printer_ns)
+    camera_match = _wsd('ProbeMatches', 'urn:uuid:7c1f0a2e-0000-4000-8000-000000000001',
+                        f'<wsd:ProbeMatches><wsd:ProbeMatch>{camera}</wsd:ProbeMatch></wsd:ProbeMatches>',
+                        WSD_PROBE_ID, camera_ns)
+    resolve = _wsd('Resolve', 'urn:uuid:3d75d555-3015-4048-9973-130e6d70835f',
+                   '<wsd:Resolve><wsa:EndpointReference><wsa:Address>uuid:4509a320-0048-00f7-00f3-0025074f4777'
+                   '</wsa:Address></wsa:EndpointReference></wsd:Resolve>')
+    hello = _wsd('Hello', 'urn:uuid:260695e4-8be1-40b0-925d-23245e80baca', f'<wsd:Hello>{printer}</wsd:Hello>',
+                 extra_ns=printer_ns)
+    bye = _wsd('Bye', 'urn:uuid:44a1c5b0-0000-4000-8000-000000000002',
+               f'<wsd:Bye><wsa:EndpointReference><wsa:Address>{WSD_CAMERA_ID}</wsa:Address>'
+               '</wsa:EndpointReference></wsd:Bye>')
+    stale_match = _wsd('ProbeMatches', 'urn:uuid:7c1f0a2e-0000-4000-8000-000000000003',
+                       f'<wsd:ProbeMatches><wsd:ProbeMatch>{camera}</wsd:ProbeMatch></wsd:ProbeMatches>',
+                       'urn:uuid:00000000-0000-4000-8000-0000000000ff', camera_ns)
+    fault = (b'<?xml version="1.0" encoding="UTF-8"?><SOAP-ENV:Envelope '
+             b'xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope"><SOAP-ENV:Body><SOAP-ENV:Fault>'
+             b'<SOAP-ENV:Code><SOAP-ENV:Value>SOAP-ENV:Sender</SOAP-ENV:Value></SOAP-ENV:Code><SOAP-ENV:Reason>'
+             b'<SOAP-ENV:Text xml:lang="en">Validation constraint violation: tag name or namespace mismatch in '
+             b'element &lt;:&gt;</SOAP-ENV:Text></SOAP-ENV:Reason></SOAP-ENV:Fault></SOAP-ENV:Body>'
+             b'</SOAP-ENV:Envelope>')
+    direct_probe = _wsd('Probe', 'urn:uuid:21cfb295-30f2-4150-8953-1c823f392109',
+                        '<wsd:Probe><wsd:Types>wsdp:Device</wsd:Types></wsd:Probe>')
+    direct_match = _wsd('ProbeMatches', 'urn:uuid:7c1f0a2e-0000-4000-8000-000000000004',
+                        f'<wsd:ProbeMatches><wsd:ProbeMatch>{camera}</wsd:ProbeMatch></wsd:ProbeMatches>',
+                        'urn:uuid:21cfb295-30f2-4150-8953-1c823f392109', camera_ns)
+    dtd = (b'<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;">]>'
+           b'<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"><soap:Body>&lol2;</soap:Body>'
+           b'</soap:Envelope>')
+    udp = [(CLIENT, WSD_GROUP, 53273, 3702, probe), (CLIENT, WSD_GROUP, 53273, 3702, probe),
+           (WSD_PRINTER, CLIENT, 3702, 53273, printer_match), (WSD_PRINTER, CLIENT, 3702, 53273, printer_match),
+           (WSD_CAMERA, CLIENT, 3702, 53273, camera_match),
+           (CLIENT, WSD_GROUP, 53274, 3702, resolve),
+           (WSD_PRINTER, WSD_GROUP, 3702, 3702, hello), (WSD_PRINTER, WSD_GROUP, 3702, 3702, hello),
+           (WSD_CAMERA, WSD_GROUP, 3702, 3702, bye),
+           (WSD_CAMERA, CLIENT, 3702, 53000, stale_match),
+           (WSD_SCANNER, WSD_PRINTER, 40961, 3702, b'<:>'), (WSD_PRINTER, WSD_SCANNER, 3702, 40961, fault),
+           (WSD_SCANNER, WSD_CAMERA, 40962, 3702, direct_probe), (WSD_CAMERA, WSD_SCANNER, 3702, 40962, direct_match),
+           (WSD_SCANNER, WSD_QUIET, 40963, 3702, b'<tds:GetDeviceInformation />'),
+           (WSD_SCANNER, WSD_QUIET, 40964, 3702, dtd)]
+    return [_udp_packet(*p) for p in udp]
+
+
+def write_wsd_pcap(path):
+    write_pcap(path, wsd_packets())
+
+
 # ---------------------------------------------------------------- Microsoft SQL Server (TDS)
 #
 # Shaped on a capture of SQL Server 2022 (16.0.4305) and python-tds.

@@ -1985,6 +1985,15 @@ AGGREGATION_JSON_PATHS = {
         'Location': ['$.ssdp.location'],
         'Server': ['$.ssdp.server'],
     },
+    'wsd': {
+        'Message': ['$.wsd.message'],
+        'Types': ['$.wsd.types'],
+        'XAddrs': ['$.wsd.xaddrs'],
+        'Responders': ['$.wsd.responders'],
+        'Answered': ['$.wsd.answered'],
+        'Req Bytes': ['$.wsd.request_bytes'],
+        'Amplification': ['$.wsd.amplification'],
+    },
     'nbns': {
         'Opcode': ['$.nbns.opcode'],
         'NetBIOS Name': ['$.nbns.name'],
@@ -2058,6 +2067,7 @@ AGGREGATION_VALUE_TRANSFORMS = {
     ('ecat', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('redis', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('zabbix', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
+    ('wsd', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('tacacs', 'Encrypted'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Answered'): lambda expr: f"CASE {expr} WHEN 1 THEN 'yes' WHEN 0 THEN 'no' END",
     ('raknet', 'Connected'): lambda expr: f"CASE WHEN {expr} = 1 THEN 'yes' ELSE 'no' END",
@@ -2109,6 +2119,7 @@ AGGREGATION_ARRAY_JOIN_COLUMNS = {
     ('ftp', 'Completion Code'), ('ftp', 'Reply'), ('mms', 'Domains'),
     ('pn_dcp', 'Changes'), ('mongodb', 'Databases'), ('memcache', 'Keys'), ('hart_ip', 'Tags'), ('synphasor', 'Stations'), ('ecat', 'FoE'),
     ('redis', 'Keys'), ('zabbix', 'Keys'), ('irc', 'Channels'), ('irc', 'Bot Commands'),
+    ('wsd', 'Types'), ('wsd', 'XAddrs'), ('wsd', 'Responders'),
 }
 # Object-valued columns shown as their keys, joined the same way (a count
 # per name: memcached's commands)

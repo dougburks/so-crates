@@ -1988,6 +1988,251 @@ class SSDP:
         return self.records
 
 
+# ---------------------------------------------------------------- WS-Discovery
+#
+# WS-Discovery (UDP 3702): SOAP over UDP that Windows, printers, scanners,
+# ONVIF cameras and Siemens and other ICS engineering tools use to find
+# devices on the LAN - a Probe or Resolve multicast to 239.255.255.250 or
+# ff02::c, answered by each matching device straight to the asker, and a
+# Hello or Bye from a device joining or leaving. tshark has no dissector
+# for it, only its XML one (by port), so the message is read here from
+# its bytes. One record per request and its replies: what it asked for
+# (device types, scopes, or the endpoint to resolve), who answered, with
+# each device's endpoint, types and service addresses (XAddrs), and the
+# bytes each way. A Hello or Bye, or a reply to a request before the
+# capture began, is a record of its own.
+#
+# Internet scanners send WS-Discovery to find reflectors: a device that
+# answers a request sent straight to it - even one that isn't
+# WS-Discovery at all, which many answer with a SOAP fault - sends far
+# more back than it got, the amplifier of the 2019 attacks. A request
+# that isn't a SOAP envelope is still a record ('invalid', with the start
+# of what was sent), and a request sent to one address rather than the
+# group gets its amplification once answered. XML with a DTD is never
+# parsed (no entity expansion): it's recorded as invalid too.
+
+WSD_PORT = 3702
+_WSD_REQUESTS = ('Probe', 'Resolve')
+_WSD_ANNOUNCEMENTS = ('Hello', 'Bye')
+_WSD_REPLIES = ('ProbeMatches', 'ResolveMatches', 'Fault')
+_WSD_MAX_LIST = 50          # matches, responders, and the items of each list
+_WSD_MAX_TEXT = 300
+_WSD_MAX_ELEMENTS = 5000    # elements read from one message
+_WSD_SNIPPET = 100          # bytes of an invalid message kept
+
+
+def _wsd_local(tag):
+    """An element's name without its namespace ('{...}Probe' -> 'Probe')."""
+    return tag.rsplit('}', 1)[-1] if isinstance(tag, str) else ''
+
+
+def _wsd_text(element):
+    text = ' '.join((element.text or '').split()) if element is not None else ''
+    return text[:_WSD_MAX_TEXT]
+
+
+def _wsd_words(element):
+    """A space-separated list element (Types, Scopes, XAddrs) as its items."""
+    return list(dict.fromkeys(w[:_WSD_MAX_TEXT] for w in (element.text or '').split()))[:_WSD_MAX_LIST] \
+        if element is not None else []
+
+
+def _wsd_snippet(raw):
+    return ''.join(c if c.isprintable() else '.' for c in raw[:_WSD_SNIPPET].decode('utf-8', 'replace'))
+
+
+def _wsd_describe(element):
+    """What a Hello, Bye, ProbeMatch or ResolveMatch says about its device."""
+    first = {}
+    for i, child in enumerate(element.iter()):
+        if i > _WSD_MAX_ELEMENTS:
+            break
+        first.setdefault(_wsd_local(child.tag), child)
+    out = {}
+    if _wsd_text(first.get('Address')):
+        out['endpoint'] = _wsd_text(first.get('Address'))
+    for name, key in (('Types', 'types'), ('Scopes', 'scopes'), ('XAddrs', 'xaddrs')):
+        if _wsd_words(first.get(name)):
+            out[key] = _wsd_words(first.get(name))
+    version = _int(_wsd_text(first.get('MetadataVersion')))
+    if version is not None:
+        out['metadata_version'] = version
+    return out
+
+
+def _wsd_parse(raw):
+    """A WS-Discovery message's bytes as {'message', 'message_id',
+    'relates_to', ...} - or None for anything that isn't a SOAP envelope
+    (or has a DTD, never parsed)."""
+    import xml.etree.ElementTree as ElementTree
+    if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+        return None
+    try:
+        root = ElementTree.fromstring(raw)
+    except (ElementTree.ParseError, ValueError, LookupError, RecursionError):
+        return None
+    if _wsd_local(root.tag) != 'Envelope':
+        return None
+    header = body = None
+    for child in root:
+        name = _wsd_local(child.tag)
+        if name == 'Header' and header is None:
+            header = child
+        elif name == 'Body' and body is None:
+            body = child
+    fields = {}
+    for child in (header if header is not None else ()):
+        fields.setdefault(_wsd_local(child.tag), _wsd_text(child))
+    content = next(iter(body), None) if body is not None else None
+    # The message is the Action's last part (.../discovery/Probe) - or,
+    # without one, the body's first element
+    action = fields.get('Action', '')
+    message = action.rstrip('/').rsplit('/', 1)[-1] if action else ''
+    if not message and content is not None:
+        message = _wsd_local(content.tag)
+    parsed = {'message': message[:_WSD_MAX_TEXT] or 'unknown'}
+    for name, key in (('MessageID', 'message_id'), ('RelatesTo', 'relates_to')):
+        if fields.get(name):
+            parsed[key] = fields[name]
+    if content is None:
+        return parsed
+    if _wsd_local(content.tag) == 'Fault':
+        parsed['message'] = 'Fault'
+        reason = ''
+        for i, child in enumerate(content.iter()):
+            if i > _WSD_MAX_ELEMENTS:
+                break
+            if _wsd_local(child.tag) in ('Text', 'faultstring') and _wsd_text(child):
+                reason = _wsd_text(child)
+                break
+        if reason:
+            parsed['fault'] = reason
+        return parsed
+    if parsed['message'] in _WSD_REPLIES:
+        matches = []
+        for i, child in enumerate(content.iter()):
+            if i > _WSD_MAX_ELEMENTS or len(matches) >= _WSD_MAX_LIST:
+                break
+            if _wsd_local(child.tag) in ('ProbeMatch', 'ResolveMatch'):
+                matches.append(_wsd_describe(child))
+        parsed['matches'] = matches
+    else:
+        parsed.update(_wsd_describe(content))
+    return parsed
+
+
+class WSDiscovery:
+    """WS-Discovery - see the comment above."""
+    event_type = 'wsd'
+    app_protos = ('xml',)       # tshark's XML dissector, which it runs on port 3702
+    fields = ('@xml',)
+
+    def __init__(self):
+        self.records = []
+        self.requests = {}       # (asker's address, message ID) -> request body
+        self.by_id = {}          # message ID -> its request bodies (an IPv4 and an IPv6 copy...)
+        self.on_flow = {}        # flow key -> its latest request with no message ID (an invalid one)
+        self.announced = {}      # (sender, message ID) -> Hello/Bye body
+        self.started = {}        # id(body) -> its request's time and flow
+
+    def feed(self, pkt, v):
+        if WSD_PORT not in (_int(pkt.sport), _int(pkt.dport)):
+            return               # XML on some other port
+        raw = _hex(_first(v['@xml']))
+        if not raw:
+            return
+        parsed = _wsd_parse(raw)
+        message = parsed['message'] if parsed else 'invalid'
+        message_id = parsed.get('message_id') if parsed else None
+        open_request = self.on_flow.get(pkt.flow.key)
+        reply = message in _WSD_REPLIES or bool(parsed and parsed.get('relates_to')) or (
+            # anything else coming back to whoever sent a request on this
+            # flow - a device's answer to a probe that wasn't WS-Discovery
+            message not in _WSD_REQUESTS + _WSD_ANNOUNCEMENTS and open_request is not None
+            and self.started[id(open_request)][2] == pkt.dst)
+        if reply:
+            self._reply(pkt, raw, parsed)
+            return
+        if message in _WSD_ANNOUNCEMENTS:
+            key = (pkt.src, message_id)
+            if message_id and key in self.announced:
+                body = self.announced[key]
+                body['transmissions'] = body.get('transmissions', 1) + 1
+                return
+            body = {'message': message, **{k: x for k, x in parsed.items() if k != 'message'}}
+            if message_id:
+                self.announced[key] = body
+            self.records.append((pkt.flow, pkt.when, self.event_type, body))
+            return
+        # A request - a Probe, a Resolve, or anything else sent to the port
+        key = (pkt.src, message_id) if message_id else None
+        body = self.requests.get(key) if key else self.on_flow.get(pkt.flow.key)
+        # A message ID names one message, however many times it's sent
+        # (SOAP over UDP repeats each, answered or not); a request without
+        # one is the same request again only while unanswered
+        if body is not None and (message_id or 'responses' not in body and body.get('payload') == _wsd_snippet(raw)):
+            body['transmissions'] = body.get('transmissions', 1) + 1
+            return
+        body = {'message': message}
+        if parsed:
+            body.update((k, x) for k, x in parsed.items() if k != 'message')
+        else:
+            body['payload'] = _wsd_snippet(raw)
+        if _to_group(pkt):
+            body['multicast'] = True
+        body['request_bytes'] = len(raw)
+        self.records.append((pkt.flow, pkt.when, self.event_type, body))
+        self.started[id(body)] = (pkt.when, pkt.flow, pkt.src)
+        if key:
+            self.requests[key] = body
+            self.by_id.setdefault(message_id, []).append(body)
+        else:
+            self.on_flow[pkt.flow.key] = body
+
+    def _reply(self, pkt, raw, parsed):
+        relates = parsed.get('relates_to') if parsed else None
+        candidates = self.by_id.get(relates, []) if relates else []
+        # A reply goes back to whoever asked - of an IPv4 and an IPv6 copy
+        # of the same request, the one this reply is addressed to
+        body = next((b for b in candidates if self.started[id(b)][2] == pkt.dst), None) or \
+            (candidates[0] if candidates else None)
+        if body is None:
+            request = self.on_flow.get(pkt.flow.key)
+            if request is not None and self.started[id(request)][2] == pkt.dst:
+                body = request
+        if body is None:
+            # A reply to a request before the capture began
+            body = {k: x for k, x in parsed.items()} if parsed else {'message': 'invalid', 'payload': _wsd_snippet(raw)}
+            body['response_bytes'] = len(raw)
+            self.records.append((pkt.flow, pkt.when, self.event_type, body))
+            return
+        started, flow, _asker = self.started[id(body)]
+        body['responses'] = body.get('responses', 0) + 1
+        body['response_bytes'] = body.get('response_bytes', 0) + len(raw)
+        if 'response' not in body:
+            body['response'] = parsed['message'] if parsed else 'invalid'
+            body['response_time'] = round(pkt.when - started, 6)
+        responders = body.setdefault('responders', [])
+        if pkt.src not in responders and len(responders) < _WSD_MAX_LIST:
+            responders.append(pkt.src)
+        if parsed and parsed.get('fault') and 'fault' not in body:
+            body['fault'] = parsed['fault']
+        matches = body.setdefault('matches', []) if parsed and parsed.get('matches') else body.get('matches')
+        for match in (parsed or {}).get('matches', ()):
+            entry = {'responder': pkt.src, **match}
+            if entry not in matches and len(matches) < _WSD_MAX_LIST:
+                matches.append(entry)
+
+    def finish(self):
+        for _flow, _when, _type, body in self.records:
+            if body['message'] in _WSD_ANNOUNCEMENTS or id(body) not in self.started:
+                continue
+            body['answered'] = 'responses' in body
+            if body['answered'] and not body.get('multicast') and body.get('request_bytes'):
+                body['amplification'] = round(body['response_bytes'] / body['request_bytes'], 1)
+        return self.records
+
+
 # ---------------------------------------------------------------- S7comm
 
 _S7_ROSCTR = {1: 'job', 2: 'ack', 3: 'ack_data', 7: 'userdata'}
@@ -7248,7 +7493,7 @@ def _pdus(layer):
 
 # Every protocol with records here, from tshark's fields, in the order their
 # fields follow the base fields in tshark's output.
-PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS, Redis, Zabbix, IRC)
+PROTOCOLS = (LLMNR, NBNS, DHCPv6, Syslog, DTLS, RPC, SOCKS, RADIUS, STUN, CoAP, SLP, IPMI, L2TP, RIP, XDMCP, SSDP, WSDiscovery, S7comm, Telnet, IEC104, BACnet, GOOSE, Browser, LLDP, CDP, PNDCP, RShell, OpenVPN, WireGuard, TNS, Memcache, FINS, HARTIP, RakNet, TACACS, Synphasor, ECAT, MySQL, TDS, Redis, Zabbix, IRC)
 # ... and from the structured pass (shark_analyzer._structured_pass): for
 # a protocol whose messages nest, which flat fields can't keep apart
 # (several commands per packet, a token inside a command).

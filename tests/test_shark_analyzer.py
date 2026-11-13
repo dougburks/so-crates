@@ -1512,6 +1512,93 @@ class TestMemcache(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
+class TestWSDiscovery(unittest.TestCase):
+    """tests/protocol_fixtures.write_wsd_pcap: one record per WS-Discovery
+    Probe or Resolve and its replies, per Hello or Bye, and per message to
+    the port that isn't WS-Discovery - with what Suricata 8.0.8 logged for
+    the capture (tests/data/wsd_fixture.eve.json): flows it gives no
+    protocol."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.protocol_fixtures import write_wsd_pcap
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.pcap = os.path.join(cls.tmpdir, 'wsd.pcap')
+        write_wsd_pcap(cls.pcap)
+        cls.records = shark_analyzer.run_tshark(cls.pcap)
+        cls.wsd = [r for r in cls.records if r['event_type'] == 'wsd']
+        cls.by_port = {r['src_port']: r['wsd'] for r in cls.wsd if r['src_port'] != 3702}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_multicast_probe_and_every_devices_match(self):
+        from tests.protocol_fixtures import CLIENT, WSD_CAMERA, WSD_PRINTER
+        probe = self.by_port[53273]
+        self.assertEqual({k: probe[k] for k in ('message', 'types', 'multicast', 'transmissions', 'responses',
+                                                 'response', 'responders', 'answered')},
+                         {'message': 'Probe', 'types': ['wsdp:Device'], 'multicast': True, 'transmissions': 2,
+                          'responses': 3, 'response': 'ProbeMatches', 'responders': [WSD_PRINTER, WSD_CAMERA],
+                          'answered': True})
+        self.assertNotIn('amplification', probe, 'asked of the group, not one device')
+        self.assertEqual([(m['responder'], m['types'], m['xaddrs']) for m in probe['matches']],
+                         [(WSD_PRINTER, ['wsdp:Device', 'wprt:PrintDeviceType'],
+                           [f'http://{WSD_PRINTER}:5357/e762ae39-f18a-00e7-ba68-e9ffd915458c/']),
+                          (WSD_CAMERA, ['dn:NetworkVideoTransmitter'], [f'http://{WSD_CAMERA}/onvif/device_service'])],
+                         "the printer's repeated answer is one match")
+        self.assertEqual(probe['matches'][1]['scopes'],
+                         ['onvif://www.onvif.org/type/video_encoder', 'onvif://www.onvif.org/name/Lobby'])
+        self.assertEqual(next(r for r in self.wsd if r['wsd'] is probe)['src_ip'], CLIENT)
+
+    def test_an_unanswered_resolve(self):
+        self.assertEqual({k: self.by_port[53274][k] for k in ('message', 'endpoint', 'answered')},
+                         {'message': 'Resolve', 'endpoint': 'uuid:4509a320-0048-00f7-00f3-0025074f4777',
+                          'answered': False})
+
+    def test_announcements_and_a_match_from_before_the_capture(self):
+        from tests.protocol_fixtures import WSD_CAMERA_ID, WSD_PRINTER_ID
+        own = {r['wsd']['message']: r['wsd'] for r in self.wsd if r['src_port'] == 3702}
+        self.assertEqual({k: own['Hello'][k] for k in ('endpoint', 'types', 'transmissions')},
+                         {'endpoint': WSD_PRINTER_ID, 'types': ['wsdp:Device', 'wprt:PrintDeviceType'], 'transmissions': 2})
+        self.assertNotIn('answered', own['Hello'])
+        self.assertEqual(own['Bye']['endpoint'], WSD_CAMERA_ID)
+        self.assertEqual([m['endpoint'] for m in own['ProbeMatches']['matches']], [WSD_CAMERA_ID])
+
+    def test_a_scanners_probes_and_the_reflectors(self):
+        fault, direct = self.by_port[40961], self.by_port[40962]
+        self.assertEqual({k: fault[k] for k in ('message', 'payload', 'response', 'request_bytes', 'amplification')},
+                         {'message': 'invalid', 'payload': '<:>', 'response': 'Fault', 'request_bytes': 3,
+                          'amplification': round(fault['response_bytes'] / 3, 1)})
+        self.assertTrue(fault['fault'].startswith('Validation constraint violation'))
+        self.assertEqual((direct['message'], direct['answered'], 'multicast' in direct), ('Probe', True, False))
+        self.assertGreater(direct['amplification'], 1)
+        self.assertEqual((self.by_port[40963]['payload'], self.by_port[40963]['answered']),
+                         ('<tds:GetDeviceInformation />', False))
+
+    def test_xml_with_a_dtd_is_never_parsed(self):
+        dtd = self.by_port[40964]
+        self.assertEqual(dtd['message'], 'invalid')
+        self.assertTrue(dtd['payload'].startswith('<?xml version="1.0"?><!DOCTYPE lolz'))
+
+    def test_the_merge_adds_the_records(self):
+        from scripts.compare_shark_suricata import compare
+        report = compare(_load_eve('wsd_fixture.eve.json'), self.records)['flow']
+        self.assertEqual((report['matched'], report['differences']), (11, []))
+        d = os.path.join(self.tmpdir, 'analysis')
+        os.makedirs(d)
+        shutil.copy(self.pcap, d)
+        events_db = os.path.join(d, 'events.db')
+        db.create_sqlite_db(events_db, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data',
+                                                    'wsd_fixture.eve.json'))
+        self.assertTrue(shark_analyzer.build(d, os.path.join(d, 'wsd.pcap')))
+        shark_analyzer.merge(d)
+        counts = db.get_event_types_sqlite(events_db)
+        self.assertEqual(counts.get('wsd'), 9)
+        self.assertNotIn('conn_xml', counts, 'records, not a connection card')
+
+
+@unittest.skipUnless(HAS_TSHARK, 'tshark not installed')
 class TestTNS(unittest.TestCase):
     """tests/protocol_fixtures.write_tns_pcap: one record per Oracle TNS
     connection and per distinct statement - with what Suricata 8.0.8

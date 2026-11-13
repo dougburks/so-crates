@@ -1,5 +1,20 @@
 # Release Notes
 
+## 5.4.0
+
+### Protocols from tshark
+
+- **WS-Discovery** - a record for each Probe or Resolve and its replies:
+  the device types asked for, each device that answered with its types,
+  scopes and service addresses, a SOAP fault's reason, and the bytes
+  each way - for a request sent straight to one device, how many times
+  it came back amplified. And a record for each Hello or Bye a device
+  sent. A scanner's broken XML sent to the port is recorded too. These
+  were connection cards before
+- **Findings** - a device answering a WS-Discovery request sent straight
+  to it (a reflector) is medium; a message that isn't WS-Discovery sent
+  to its port is low
+
 ## 5.3.0
 
 ### Protocols from tshark

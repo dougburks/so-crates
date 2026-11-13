@@ -2459,6 +2459,7 @@
                 nbns: '#8d6e63',
                 s7comm: '#00897b',
                 ssdp: '#7e57c2',
+                wsd: '#5c6bc0',
                 telnet: '#ffa726',
                 rsh: '#ff8a65',
                 openvpn: '#5c6bc0',
@@ -5396,6 +5397,42 @@
             return html;
         }
 
+        // tshark's WS-Discovery records (shark_protocols.WSDiscovery): one
+        // per Probe or Resolve and its replies - every device's, for a
+        // multicast one - per Hello or Bye, and per message to the port
+        // that isn't WS-Discovery at all (a scanner's probe).
+        function renderWsdDetails(e) {
+            const w = e.wsd || {};
+            const size = n => n !== undefined ? `${n.toLocaleString()} bytes` : '';
+            const lines = items => (items || []).map(escapeHtml).join('<br>');
+            const request = w.answered !== undefined;
+            let html = htmlSection('WS-Discovery Details', COLORS.EVENT.wsd);
+            html += htmlRowText('Message', w.message);
+            html += htmlRowText('Sent As', w.payload, 'mono');
+            html += htmlRowText('Types', (w.types || []).join(' '), 'mono');
+            html += htmlRowText('Scopes', (w.scopes || []).join(' '), 'mono');
+            html += htmlRowText('Endpoint', w.endpoint, 'mono');
+            html += htmlRow('XAddrs', lines(w.xaddrs), 'mono');
+            html += htmlRowText('Metadata Version', w.metadata_version !== undefined ? String(w.metadata_version) : '');
+            html += htmlRowText('Multicast', w.multicast ? 'yes' : '');
+            html += htmlRowText('Request Size', size(w.request_bytes));
+            if (request) html += htmlRowText('Response', w.response || 'no response');
+            html += htmlRowText('Fault', w.fault);
+            html += htmlRowText('Response Time', w.response_time !== undefined ? `${w.response_time} s` : '');
+            html += htmlRowText('Responders', (w.responders || []).join(', '), 'mono');
+            html += htmlRowText('Responses', w.responses > 1 ? w.responses.toLocaleString() : '');
+            html += htmlRowText('Response Size', size(w.response_bytes));
+            if (w.amplification !== undefined) html += htmlRowText('Amplification', `${w.amplification.toLocaleString()}×`);
+            html += htmlRowText('Transmissions', w.transmissions > 1 ? w.transmissions.toLocaleString() : '');
+            html += htmlRowText('Message ID', w.message_id, 'mono');
+            html += htmlRowText('Relates To', w.relates_to, 'mono');
+            for (const m of w.matches || []) {
+                html += htmlRow('Match', [m.responder, m.endpoint, (m.types || []).join(' '), ...(m.xaddrs || [])]
+                    .filter(Boolean).map(escapeHtml).join('<br>'), 'mono');
+            }
+            return html;
+        }
+
         function renderHttpDetails(e) {
             let html = htmlSection('HTTP Details', COLORS.EVENT.http);
             html += htmlRow('Method', `${valueDotSpan(DOT_COLORS.HTTP_METHOD[(e.http?.http_method || '').toUpperCase()])}${escapeHtml(e.http?.http_method || '')}`);
@@ -5770,6 +5807,7 @@
             stun: renderStunDetails,
             coap: renderCoapDetails,
             slp: renderSlpDetails,
+            wsd: renderWsdDetails,
             ipmi: renderIpmiDetails,
             l2tp: renderL2tpDetails,
             rip: renderRipDetails,
@@ -8947,6 +8985,7 @@
             stun: 'STUN',
             coap: 'CoAP',
             slp: 'SLP',
+            wsd: 'WS-Discovery',
             ipmi: 'IPMI',
             l2tp: 'L2TP',
             rip: 'RIP',
@@ -10086,6 +10125,8 @@
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Requests', 'Result', 'IPMI Versions', 'Auth Types', 'Privilege', 'Cipher', 'Weaknesses'];
                 case 'slp':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Function', 'Service Type', 'Scopes', 'URL', 'Response', 'Status', 'Version'];
+                case 'wsd':
+                    return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Message', 'Types', 'XAddrs', 'Responders', 'Answered', 'Req Bytes', 'Amplification'];
                 case 'stun':
                     return ['Time', 'Protocol', 'Source IP', 'Source Port', 'Dest IP', 'Dest Port', 'Method', 'Result', 'Requests', 'Mapped Address', 'Relayed Address', 'Software', 'User'];
                 case 'radius':
@@ -10681,6 +10722,7 @@
                 case 'stun':
                 case 'coap':
                 case 'slp':
+                case 'wsd':
                 case 'ipmi':
                 case 'l2tp':
                 case 'rip':
@@ -13360,7 +13402,7 @@
                 case 'VLAN': return e.lldp?.vlan !== undefined ? String(e.lldp.vlan) : '';
                 case 'Native VLAN': return e.cdp?.native_vlan !== undefined ? String(e.cdp.native_vlan) : '';
                 // Windows Browser: a host's announcements, elections...
-                case 'Message': return e.browser?.message || e.dhcpv6?.message || e.syslog?.message || e.radius?.message || '';
+                case 'Message': return e.browser?.message || e.dhcpv6?.message || e.syslog?.message || e.radius?.message || e.wsd?.message || '';
                 // Syslog: a message's
                 case 'Facility': return e.syslog?.facility || '';
                 case 'Program': return e.syslog?.program || e.rpc?.program || e.tns?.program || e.tns?.client_program || '';
@@ -13457,9 +13499,17 @@
                     return e.bacnet_device?.device !== undefined ? String(e.bacnet_device.device) : '';
                 }
                 case 'Keys': return ((e.memcache || e.redis || e.zabbix)?.keys || []).join(', ');
-                case 'Req Bytes': return e.memcache ? String(e.memcache.request_bytes || 0) : '';
+                case 'Req Bytes': return e.memcache ? String(e.memcache.request_bytes || 0) : (e.wsd?.request_bytes !== undefined ? String(e.wsd.request_bytes) : '');
                 case 'Resp Bytes': return e.memcache ? String(e.memcache.response_bytes || 0) : '';
-                case 'Amplification': return e.memcache?.amplification !== undefined ? String(e.memcache.amplification) : '';
+                case 'Amplification': {
+                    const r = e.memcache || e.wsd;
+                    return r?.amplification !== undefined ? String(r.amplification) : '';
+                }
+                // WS-Discovery: what a Probe asked for or a device announced,
+                // its service addresses, and who answered
+                case 'Types': return (e.wsd?.types || []).join(', ');
+                case 'XAddrs': return (e.wsd?.xaddrs || []).join(', ');
+                case 'Responders': return (e.wsd?.responders || []).join(', ');
                 case 'Verb': return (e.tns_statement || e.mysql_statement || e.mssql_statement)?.verb || '';
                 case 'Statement': return ((e.tns_statement || e.mysql_statement || e.mssql_statement)?.statement || e.redis_command?.command || '').slice(0, 200);
                 case 'Encryption': return e.mssql?.encryption || '';
@@ -13756,6 +13806,7 @@
                 case 'Event': return e.anomaly?.event || '';
                 case 'Layer': return e.anomaly?.layer || '';
                 case 'Answered': {
+                    if (e.wsd) return e.wsd.answered === undefined ? '' : (e.wsd.answered ? 'yes' : 'no');
                     const r = e.mongodb || e.memcache || e.fins || e.hart_ip || e.raknet || e.ecat || e.redis || e.zabbix;
                     return r ? (r.answered ? 'yes' : 'no') : e.shark?.answered || '';
                 }

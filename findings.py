@@ -631,6 +631,15 @@ RULES = (
          _in('syslog', 'severity', ['emerg', 'alert', 'crit']),
          lambda b: _join(b.get('hostname'), b.get('program'), ('-', (b.get('message') or '')[:120])),
          'A device logging an emergency, alert or critical condition.'),
+    Rule('wsd_reflector', 'medium', 'wsd', 'WS-Discovery answering a request sent to it',
+         f"{_j('wsd', 'amplification')} IS NOT NULL",
+         lambda b: _join(f"{b['amplification']:g}x amplification -", b.get('response'),
+                         f"({b.get('response_bytes') or 0:,} bytes back for {b.get('request_bytes') or 0:,})",
+                         ('for', 'a message that isn\'t WS-Discovery' if b.get('message') == 'invalid' else '')),
+         'WS-Discovery is meant for the local network, asked by multicast. A device that answers a request '
+         "sent straight to it - many answer even junk with a SOAP fault - is a reflector: with the request's "
+         'source address forged, its larger reply goes to the victim, as in the 2019 attacks. Keep UDP 3702 '
+         'off the internet.'),
 
     Rule('tls_self_signed', 'medium', 'tls', 'TLS self-signed certificate',
          f"{_j('tls', 'issuerdn')} = {_j('tls', 'subject')} AND {_j('tls', 'subject')} != ''",
@@ -775,6 +784,11 @@ RULES = (
          f"{_j('slp', 'response')} IS NOT NULL AND {_j('slp', 'function')} != 'Service Registration'",
          lambda b: _join(b.get('function'), ('-', b.get('status'))),
          'Exposed to the internet, SLP is how scanners find ESXi hosts and amplifiers.'),
+    Rule('wsd_probe', 'low', 'wsd', "WS-Discovery port sent something that isn't WS-Discovery",
+         f"{_j('wsd', 'message')} = 'invalid' AND {_j('wsd', 'request_bytes')} IS NOT NULL",
+         lambda b: _join(b.get('payload'), ('-', 'answered' if b.get('answered') else 'no answer')),
+         'How internet scanners look for WS-Discovery reflectors: a few bytes of broken XML that many '
+         'devices answer with a much larger SOAP fault.'),
     Rule('coap_discovery', 'low', 'coap', 'CoAP resources listed',
          f"{_j('coap', 'resources')} IS NOT NULL",
          lambda b: _list(b.get('resources')),

@@ -23215,6 +23215,11 @@ class TestTsharkUI(unittest.TestCase):
                                               'service_type': 'service:VMwareInfrastructure', 'scopes': 'DEFAULT',
                                               'response': 'Service Reply', 'status': 'OK',
                                               'urls': ['service:VMwareInfrastructure://esx01.example.org']}},
+        'wsd': {'event_type': 'wsd', 'wsd': {'message': 'invalid', 'payload': '<:>', 'request_bytes': 3,
+                                              'response': 'Fault', 'responders': ['10.1.0.120'], 'answered': True,
+                                              'response_bytes': 441, 'amplification': 147.0,
+                                              'types': ['wsdp:Device', 'wprt:PrintDeviceType'],
+                                              'xaddrs': ['http://10.1.0.120:5357/x/']}},
         'stun': {'event_type': 'stun', 'stun': {'method': 'Allocate', 'result': 'success', 'requests': 2, 'successes': 1,
                                                 'errors': 1, 'error_codes': ['401 Unauthorized'],
                                                 'mapped_addresses': ['203.0.113.50:40002'],
@@ -23383,6 +23388,7 @@ class TestTsharkUI(unittest.TestCase):
                  'anonymous login, no authentication offered'],
         'slp': ['Service Request', 'service:VMwareInfrastructure', 'DEFAULT',
                 'service:VMwareInfrastructure://esx01.example.org', 'Service Reply', 'OK', '2'],
+        'wsd': ['invalid', 'wsdp:Device, wprt:PrintDeviceType', 'http://10.1.0.120:5357/x/', '10.1.0.120', 'yes', '3', '147'],
         'stun': ['Allocate', 'success', '2', '203.0.113.50:40002', '192.0.2.30:50000', 'fixture-client 1.0', 'turnuser'],
         'radius': ['Access-Request', 'alice', 'AA-BB-CC-DD-EE-01', 'wlc-1', 'accepted', 'EAP-PEAP', 'Welcome, alice'],
         'socks': ['5', 'connect', 'files.example.net', '80', 'succeeded', 'proxyuser', 'http'],
@@ -23506,7 +23512,7 @@ class TestTsharkUI(unittest.TestCase):
         import db
         from tests.jsdom_helper import js_statements
         cols = js_statements("""window.__jsdom_result = Object.fromEntries(
-            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'raknet', 'tacacs', 'synphasor', 'ecat', 'mysql', 'mysql_statement', 'mssql', 'mssql_statement', 'redis', 'redis_command', 'zabbix', 'irc', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
+            ['llmnr', 'nbns', 's7comm', 'ssdp', 'telnet', 'iec104', 'iec104_point', 'bacnet', 'bacnet_property', 'bacnet_device', 'opcua', 'opcua_action', 'mms', 'mms_action', 'pn_dcp', 'pn_device', 'mongodb', 'mongodb_action', 'rsh', 'openvpn', 'wireguard', 'tns', 'tns_statement', 'memcache', 'fins', 'fins_action', 'hart_ip', 'hart_ip_action', 'raknet', 'tacacs', 'synphasor', 'ecat', 'mysql', 'mysql_statement', 'mssql', 'mssql_statement', 'redis', 'redis_command', 'zabbix', 'irc', 'goose', 'browser', 'lldp', 'cdp', 'dhcpv6', 'syslog', 'dtls', 'tls_failure', 'rpc', 'socks', 'radius', 'stun', 'coap', 'slp', 'wsd', 'ipmi', 'l2tp', 'rip', 'tunnel', 'xdmcp'].map(t => [t, getColumnsForType(t).slice(6)]));""")
         for t, columns in cols.items():
             self.assertEqual(list(db.AGGREGATION_JSON_PATHS[t]), columns, t)
 
