@@ -875,6 +875,26 @@ def _matches(conn, rule, terms, has_fts, group=None, limit=MAX_SCAN):
         yield event, _detail(rule, event)
 
 
+def matching_records(conn, terms, has_fts):
+    """(src_ip, dest_ip, timestamp) of every record a rule matches, each
+    record once however many rules match it (each rule's first MAX_SCAN,
+    as the Findings tab reads them) - for the Traffic Map's Findings tab."""
+    types = {row[0] for row in conn.execute('SELECT DISTINCT event_type FROM events')}
+    seen = set()
+    for rule in RULES:
+        if rule.event_type not in types:
+            continue
+        try:
+            sql, params, alias = _rule_sql(conn, rule, terms, has_fts, ['id', 'src_ip', 'dest_ip', 'timestamp'])
+            rows = conn.execute(f'{sql} ORDER BY {alias}timestamp LIMIT {MAX_SCAN}', params).fetchall()
+        except sqlite3.OperationalError:
+            continue
+        for row_id, src, dst, ts in rows:
+            if row_id not in seen:
+                seen.add(row_id)
+                yield src, dst, ts
+
+
 def query_findings(db_path, q=None, counts_only=False, group=None):
     """Every rule's matches in events.db, grouped (MAX_PER_RULE):
     {'rules': [{id, title, severity, event_type, why, count, groups}],

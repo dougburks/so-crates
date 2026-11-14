@@ -2069,11 +2069,13 @@
         .tm-panel-right { right: 12px; width: 270px; }
         .tm-panel h4 { margin: 8px 0 4px; font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: var(--text-muted); }
         .tm-panel-right h4 { margin-top: 0; }
-        .tm-stats { display: flex; gap: 12px; }
+        .tm-showing { margin-bottom: 4px; font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: var(--accent); }
+        .tm-stats { display: flex; flex-wrap: wrap; gap: 4px 12px; }   /* a long label ("connections") or count wraps rather than run out of the panel */
         .tm-stat { display: flex; flex-direction: column; }
         .tm-stat span { font-size: 1.15rem; font-weight: 600; color: var(--text-bright); font-variant-numeric: tabular-nums; line-height: 1.2; }
         .tm-stat small { font-size: 0.66rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; }
         .tm-stat-alert span { color: var(--badge-danger-text); }
+        .tm-showing[hidden] { display: none; }
         .tm-top { list-style: none; margin: 0; padding: 0; }
         .tm-top button { display: grid; grid-template-columns: 24px 1fr auto; gap: 6px; align-items: center; width: 100%; padding: 2px 4px; border: 0; border-radius: 4px;
             background: none; color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; }

@@ -106,6 +106,73 @@ class TestTrafficMapData(_GeoCase):
         self.assertEqual(data['alertCount'], 10)
         self.assertEqual([a[4] for a in data['alerts']], ['sig 0', 'sig 7', 'sig 9'])
 
+    def test_a_record_type_takes_the_flows_place(self):
+        data = traffic_map.get_traffic_map_data(self._db(EVENTS), event_type='dns')
+        self.assertEqual((data['type'], data['hasBytes'], data['flows']), ('dns', False, 1))
+        # placed at its timestamp (00:05, of 00:00 to the last alert at
+        # 00:10:01), with no bytes; the alerts stay over it
+        self.assertEqual(data['buckets'], [[599, 'LAN', 'US', 1, 0]])
+        self.assertEqual(data['alertCount'], 2)
+        self.assertEqual(data['totals'], {'LAN': [1, 0], 'US': [1, 0]})
+
+    def test_the_alert_type_is_its_alerts_alone(self):
+        data = traffic_map.get_traffic_map_data(self._db(EVENTS), event_type='alert')
+        # the alerts are its records too, so the countries and the Top list are theirs
+        self.assertEqual((data['type'], data['hasBytes'], data['flows'], data['alertCount']), ('alert', False, 2, 2))
+        self.assertEqual(data['totals'], {'US': [1, 0], 'FR': [1, 0], 'LAN': [2, 0]})
+
+    def test_the_flow_type_is_the_whole_map(self):
+        path = self._db(EVENTS)
+        whole = traffic_map.get_traffic_map_data(path)
+        self.assertEqual(traffic_map.get_traffic_map_data(path, event_type='flow'), whole)
+        self.assertEqual((whole['type'], whole['hasBytes']), (None, True))
+
+    def test_a_connection_type_keeps_its_bytes(self):
+        conn = _flow('8.8.8.8', '10.0.0.5', '2026-01-01T00:00:00.000000+0000', toserver=7, toclient=3)
+        conn['event_type'] = db.CONNECTION_TYPE_PREFIX + 'openvpn'
+        data = traffic_map.get_traffic_map_data(self._db([conn, EVENTS[0]]), event_type=conn['event_type'])
+        self.assertEqual((data['flows'], data['hasBytes']), (1, True))
+        self.assertEqual(data['buckets'], [[0, 'US', 'LAN', 1, 10]])
+
+    def test_findings_are_the_records_its_rules_match(self):
+        def ipmi(src, ts, weaknesses):
+            return {'event_type': 'ipmi', 'timestamp': ts, 'src_ip': src, 'dest_ip': '10.0.0.5',
+                    'dest_port': 623, 'proto': 'UDP', 'ipmi': {'weaknesses': weaknesses}}
+        events = EVENTS + [
+            # matches two rules (cipher zero, anonymous): placed once
+            ipmi('8.8.8.8', '2026-01-01T00:01:00.000000+0000', ['cipher zero accepted', 'anonymous login']),
+            ipmi('210.1.1.1', '2026-01-01T00:02:00.000000+0000', ['cleartext password']),
+            ipmi('50.1.1.1', '2026-01-01T00:03:00.000000+0000', []),   # matches none
+        ]
+        path = self._db(events)
+        data = traffic_map.get_traffic_map_data(path, event_type='findings')
+        self.assertEqual((data['type'], data['hasBytes'], data['flows'], data['alertCount']), ('findings', False, 2, 2))
+        self.assertEqual(data['totals'], {'US': [1, 0], 'FR': [1, 0], 'LAN': [2, 0]})
+        # and they're searched like any other records
+        data = traffic_map.get_traffic_map_data(path, ['country:FR'], 'findings')
+        self.assertEqual(data['flows'], 1)
+
+    def test_all_events_is_every_event_but_the_alerts(self):
+        decoder = _alert('8.8.8.8', '10.0.0.5', '2026-01-01T00:00:00.000000+0000', 3, 'SURICATA STREAM')
+        decoder['event_type'] = 'protocol_decode'
+        decoder['flow'] = {'bytes_toserver': 999, 'bytes_toclient': 999}
+        conn = _flow('8.8.8.8', '10.0.0.5', '2026-01-01T00:00:00.000000+0000')
+        conn['event_type'] = db.CONNECTION_TYPE_PREFIX + 'openvpn'
+        path = self._db(EVENTS + [decoder, conn])
+        data = traffic_map.get_traffic_map_data(path, event_type='all')
+        # 4 flows, the DNS query and the decoder alert; not the 2 alerts,
+        # which fly over it anyway, nor tshark's connection row, which
+        # All Events leaves out too
+        self.assertEqual((data['type'], data['hasBytes'], data['flows'], data['alertCount']), ('all', True, 6, 2))
+        # the bytes are the flows' alone - not the decoder alert's copy of its flow's
+        whole = traffic_map.get_traffic_map_data(path)
+        self.assertEqual(sum(b[4] for b in data['buckets']), sum(b[4] for b in whole['buckets']))
+
+    def test_a_record_without_addresses_is_left_off(self):
+        stats = {'event_type': 'stats', 'timestamp': '2026-01-01T00:00:00.000000+0000', 'stats': {}}
+        data = traffic_map.get_traffic_map_data(self._db([stats]), event_type='stats')
+        self.assertEqual((data['flows'], data['type']), (0, 'stats'))
+
     def test_no_flows_or_alerts(self):
         data = traffic_map.get_traffic_map_data(self._db([EVENTS[-1]]))
         self.assertEqual(data['flows'], 0)

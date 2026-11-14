@@ -24,8 +24,18 @@
   without KNX IP Secure, are medium; a message that isn't WS-Discovery
   sent to its port, and a KNXnet/IP gateway describing itself, are low
 
+### Traffic Map
+
+- **Follows the tab** - as the Sankey Diagram does: on a record type's
+  tab (DNS, HTTP, a protocol from tshark...), that type's records fly
+  instead of flows, with the alerts over them; on Findings, the records
+  its rules matched; on All Events, every event. Network Alerts and
+  Flow still show every flow
+
 ### Fixes
 
+- A pasted URL's field gives up its focus once its analysis starts, so
+  the hotkeys (`>` for the next theme) work instead of typing into it
 - MMS in a capture that starts after its connection's association
   opened - as most captures of a long-lived substation connection do -
   is read now. tshark learns which OSI presentation context carries MMS

@@ -78,7 +78,7 @@ from ohmydebn_colors import (
 from email_analyzer import analyze_message, remove_filestore
 import shark_analyzer
 from findings import query_findings
-from traffic_map import empty_traffic_map, get_traffic_map_data
+from traffic_map import ALL_EVENTS, FINDINGS, empty_traffic_map, get_traffic_map_data
 from playbook_lookup import get_playbook
 from samples import SAMPLES
 from ai_summary_lookup import get_ai_summary
@@ -981,22 +981,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_error(400, error)
             return
         q = self._parse_search_terms(params)
+        # the tab shown - none (or 'flow') maps every flow
+        event_type = params.get('type', [''])[0] or None
+        if event_type == 'flow':
+            event_type = None
         db_file = os.path.join(dir_path, 'events.db')
         if not os.path.exists(db_file):
-            self._send_json(empty_traffic_map())
+            self._send_json(empty_traffic_map(event_type))
             return
         try:
-            if q is None:
+            if q is None and (cacheable_aggregation_key(event_type) or event_type in (ALL_EVENTS, FINDINGS)):
+                cache_key = (md5, event_type)
                 with CACHE_LOCK:
-                    cached = TRAFFIC_MAP_CACHE.get((md5,))
+                    cached = TRAFFIC_MAP_CACHE.get(cache_key)
                 if cached is not None:
                     self._send_json(cached)
                     return
-                data = get_traffic_map_data(db_file)
+                data = get_traffic_map_data(db_file, event_type=event_type)
                 with CACHE_LOCK:
-                    cache_put(TRAFFIC_MAP_CACHE, (md5,), data)
+                    cache_put(TRAFFIC_MAP_CACHE, cache_key, data)
             else:
-                data = get_traffic_map_data(db_file, q)
+                data = get_traffic_map_data(db_file, q, event_type)
         except Exception:
             self._send_error(500, 'Database error')
             return

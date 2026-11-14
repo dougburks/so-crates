@@ -29,7 +29,7 @@ Analysis View (analysis loaded)
   │               a PCAP analysis's cards are in Triage, Protocol records and Connections panels
   │               that share rows, All Events last in Triage; every card one width and height)
   ├── Sankey Diagram (collapsible section - Source IP → Dest IP → Dest Port, reflects current filters)
-  ├── Traffic Map (collapsible section, collapsed until opened - flows and alerts replayed by country on a world map, reflects the current search)
+  ├── Traffic Map (collapsible section, collapsed until opened - flows and alerts replayed by country on a world map, reflects the current search and tab)
   ├── Aggregation Tables (collapsible section - frequency counts per column)
   └── Data Table (the selected tab's rows; a row expands into its detail panel)
 ```

@@ -2970,7 +2970,10 @@
             // land here when they arrive)
             bumpAggregationFetchGeneration();
 
+            // The three tabs below return before updateSankeyDiagram(),
+            // which is what has the Traffic Map follow the tab
             if (eventType === 'acknowledged') {
+                updateTrafficMap();
                 await buildAcknowledgedAlertsSection();
                 updateFilterBarVisibility();
                 return;
@@ -2979,6 +2982,7 @@
             if (eventType === 'dns_heuristics') {
                 if (sankeyPanel) sankeyPanel.style.display = 'none';
                 if (aggContainer) aggContainer.innerHTML = '';
+                updateTrafficMap();
                 if (sectionEl) await buildDnsHeuristicsSection();
                 updateFilterBarVisibility();
                 return;
@@ -2989,6 +2993,7 @@
             if (eventType === 'findings') {
                 if (sankeyPanel) sankeyPanel.style.display = 'none';
                 if (aggContainer) aggContainer.innerHTML = '';
+                updateTrafficMap();
                 if (sectionEl) await buildFindingsSection();
                 updateFilterBarVisibility();
                 return;
@@ -9381,6 +9386,21 @@
                 && !document.body.classList.contains('file-analysis');
         }
 
+        // The record type the map shows: the tab's, as the Sankey Diagram
+        // follows it (traffic_map.py) - Findings' is the records its rules
+        // match, DNS Heuristics' the DNS records it's made from, All Events'
+        // every event but the alerts - or none, every flow, for
+        // Acknowledged, for the Flow tab, which is that already, and for
+        // Network Alerts: an analysis opens on it, and the alerts fly over
+        // every type's map anyway.
+        const TRAFFIC_MAP_WHOLE_TABS = new Set(['acknowledged', 'flow', 'alert']);
+        const TRAFFIC_MAP_TAB_TYPES = { dns_heuristics: 'dns' };
+        function trafficMapType() {
+            const section = document.querySelector('.section:not(.section-hidden):not(.agg-section)');
+            const type = section ? section.id.replace('section-', '') : '';
+            return type && !TRAFFIC_MAP_WHOLE_TABS.has(type) ? (TRAFFIC_MAP_TAB_TYPES[type] || type) : null;
+        }
+
         function destroyTrafficMap() {
             if (trafficMap) trafficMap.destroy();
             trafficMap = null;
@@ -9417,8 +9437,13 @@
                 if (panel.innerHTML !== TRAFFIC_MAP_BAR_COLLAPSED) panel.innerHTML = TRAFFIC_MAP_BAR_COLLAPSED;
                 return;
             }
-            const key = currentMd5 + '\n' + buildSearchQuery();
+            const type = trafficMapType();
+            const typeParam = type ? '&type=' + encodeURIComponent(type) : '';
+            const key = currentMd5 + '\n' + buildSearchQuery() + typeParam;
             if (trafficMap && trafficMapDataKey === key) {
+                // what's shown is right - but a fetch for another tab or
+                // search may still be on its way, and must not land over it
+                trafficMapFetchGen++;
                 trafficMap.setHighlighted(trafficMapCountries());
                 return;
             }
@@ -9430,7 +9455,7 @@
             try {
                 [world, data] = await Promise.all([
                     loadTrafficMapWorld(),
-                    fetch(`/api/traffic-map?md5=${encodeURIComponent(currentMd5)}${buildSearchQuery()}&t=${Date.now()}`)
+                    fetch(`/api/traffic-map?md5=${encodeURIComponent(currentMd5)}${buildSearchQuery()}${typeParam}&t=${Date.now()}`)
                         .then(r => { if (!r.ok) throw new Error('traffic map ' + r.status); return r.json(); }),
                 ]);
             } catch (e) {
@@ -9445,7 +9470,7 @@
                 panel.innerHTML = TRAFFIC_MAP_BAR_EXPANDED + '<div class="traffic-map"></div>';
                 trafficMap = createTrafficMap(panel.querySelector('.traffic-map'), world);
             }
-            // a new search of the same capture keeps the replay where it was
+            // a new search or tab of the same capture keeps the replay where it was
             const sameCapture = !!trafficMapDataKey && trafficMapDataKey.split('\n')[0] === currentMd5;
             trafficMapDataKey = key;
             trafficMap.setData(data, trafficMapCountries(), sameCapture);
@@ -9461,8 +9486,9 @@
                     <canvas class="tm-bg"></canvas><canvas class="tm-fx"></canvas>
                     <div class="tm-tooltip" hidden></div>
                     <div class="tm-panel tm-panel-left">
+                        <div class="tm-showing" data-tm="showing" hidden></div>
                         <div class="tm-stats">
-                            <div class="tm-stat"><span data-tm="flows">0</span><small>flows</small></div>
+                            <div class="tm-stat"><span data-tm="flows">0</span><small data-tm="noun">flows</small></div>
                             <div class="tm-stat"><span data-tm="places">0</span><small>countries</small></div>
                             <div class="tm-stat tm-stat-alert"><span data-tm="alerts">0</span><small>alerts</small></div>
                         </div>
@@ -9499,6 +9525,7 @@
             let data = null, binCounts = [], maxTotal = 1, highlighted = new Set();
             let p = 0, playing = false, lastNow = 0, bi = 0, ai = 0;
             let cum = {}, routes = new Map(), alertRoutes = new Map(), flowsSoFar = 0, alertsSoFar = 0;
+            let noun = 'flows';   // what the records under the alerts are (setData)
             let arcs = [], ripples = [], labels = [], feed = [];
             let lastBg = 0, lastPanel = 0, rafId = 0, visible = true, destroyed = false, dragging = false, listStale = true;
 
@@ -9961,7 +9988,8 @@
                 const cc = hitTest(x, y);
                 if (!cc) { tip.hidden = true; fx.style.cursor = ''; return; }
                 const v = cum[cc] || { src: 0, dst: 0, bytes: 0 };
-                tip.innerHTML = `<b>${escapeHtml(ccName(cc))}</b><br>${fmt(v.src)} flows from · ${fmt(v.dst)} to · ${fmtBytes(v.bytes)}` +
+                const tipCounts = `${fmt(v.src)} ${noun} from · ${fmt(v.dst)} to` + (data && data.hasBytes === false ? '' : ` · ${fmtBytes(v.bytes)}`);
+                tip.innerHTML = `<b>${escapeHtml(ccName(cc))}</b><br>${tipCounts}` +
                     `<br><span class="tm-tip-hint">${highlighted.has(cc) ? 'Click to remove its filter' : 'Click to filter to its traffic'}</span>`;
                 tip.hidden = false; fx.style.cursor = 'pointer';
                 tip.style.left = Math.max(4, Math.min(x + 14, W - tip.offsetWidth - 8)) + 'px';
@@ -10014,8 +10042,15 @@
                     for (const b of data.buckets) binCounts[b[0]] += b[3];
                     maxTotal = Math.max(1, ...Object.entries(data.totals).filter(([c]) => c !== 'LAN' && c !== '??').map(([, v]) => v[0]));
                     const note = $('note');
+                    noun = !data.type ? 'flows' : data.type === 'all' ? 'events'
+                        : isConnectionType(data.type) ? 'connections' : 'records';
+                    $('noun').textContent = noun;
+                    // which tab's records these are, when not every flow
+                    $('showing').textContent = !data.type ? '' : 'Showing ' + (data.type === 'all' ? 'All Events' : eventTypeLabel(data.type));
+                    $('showing').hidden = !data.type;
+                    const what = data.type === 'all' ? 'events' : data.type ? eventTypeLabel(data.type) + ' or alerts' : 'flows or alerts';
                     if (!data.flows && !data.alertCount) {
-                        note.textContent = currentSearch.length ? 'No flows or alerts match the current search' : 'No flows or alerts to map';
+                        note.textContent = currentSearch.length ? `No ${what} match the current search` : `No ${what} to map`;
                     } else if (!data.geo) {
                         note.textContent = "IP location data isn't installed, so only local network traffic can be placed - the container image includes it";
                     } else note.textContent = '';
@@ -16267,7 +16302,10 @@
             
             // Remember this URL for future resets
             lastSampleUrl = url;
-            
+            // Give up the field's focus, or the hotkeys ('>', '?', arrow
+            // keys) keep typing into it while the analysis loads and after.
+            urlInput.blur();
+
             showLoading('Downloading file... (0s)');
             const downloadStart = Date.now();
             let downloadInterval = setInterval(() => {

@@ -64,7 +64,7 @@ If the true match count exceeds what was fetched, `ensureCappedBatch()` marks th
 | `computeFilteredStats()` | Counts events by type from the filtered subset |
 | `getSankeyEvents()` | Returns filtered events for the currently visible tab for the Sankey diagram |
 | `refreshCurrentView()` | Rebuilds the current tab's table, aggregations, stats, filter bar, and Sankey diagram |
-| `updateSankeyDiagram()` | Rebuilds the Sankey diagram using events from `getSankeyEvents()`, and has `updateTrafficMap()` refetch the Traffic Map if the analysis or search changed |
+| `updateSankeyDiagram()` | Rebuilds the Sankey diagram using events from `getSankeyEvents()`, and has `updateTrafficMap()` refetch the Traffic Map if the analysis, search or tab changed |
 | `toggleCountryFilter(cc)` | Adds the `country:<cc>` search term, or removes it if present (any case) - the Traffic Map's click |
 
 ## Data Flow

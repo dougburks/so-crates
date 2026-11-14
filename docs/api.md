@@ -256,7 +256,7 @@ Unfiltered (no `q`) responses are cached server-side per `(md5, type)` and inval
 
 ### `GET /api/traffic-map`
 
-The Traffic Map's data: an analysis's Suricata flows and alerts by country over time (`traffic_map.py`). Flows are placed at their start and grouped into `bins` time bins per source and destination country, so the payload stays small however many flows there are; alerts are listed one by one.
+The Traffic Map's data: an analysis's Suricata flows and alerts by country over time (`traffic_map.py`). Flows are placed at their start and grouped into `bins` time bins per source and destination country, so the payload stays small however many flows there are; alerts are listed one by one. Given a `type`, another record type takes the flows' place.
 
 **Query Parameters:**
 
@@ -264,6 +264,7 @@ The Traffic Map's data: an analysis's Suricata flows and alerts by country over 
 |---|---|---|---|
 | `md5` | Yes | - | MD5 hash of the analysis |
 | `q` | No | none | Search terms, as for every other endpoint - `country:` terms included (see [Search Terms](#search-terms)). |
+| `type` | No | none | The record type to map instead of flows (the tab shown): its records, placed at their timestamp, fill the buckets, with the alerts over them as always. `alert` maps the alerts alone (counted as its records too, so `flows` equals `alertCount`), `findings` the records the Findings rules match, and `all` every event All Events lists but the alerts (bytes from its flows alone); none, or `flow`, maps every flow. |
 
 **Response:**
 ```json
@@ -271,12 +272,12 @@ The Traffic Map's data: an analysis's Suricata flows and alerts by country over 
  "buckets": [[0, "FR", "US", 11, 11562], ...],
  "alerts": [[12.5, "CN", "US", 2, "ET SCAN Zmap User-Agent (Inbound)", "1.2.3.4", "203.0.113.8"], ...],
  "totals": {"US": [207010, 39914993], "FR": [86840, 10831078], ...},
- "flows": 207010, "alertCount": 157,
+ "flows": 207010, "alertCount": 157, "type": null, "hasBytes": true,
  "geo": {"source": "DB-IP IP to Country Lite", "date": "2026-11"}}
 ```
-`start` is the first flow's or alert's time (epoch seconds) and `span` the seconds to the last. Each bucket is `[bin, source country, destination country, flows, bytes]`; each alert is `[seconds after start, source country, destination country, severity, signature, source IP, destination IP]`, at most 2,000 of them, in time order - when there are more, the 2,000 most severe are kept (`alertCount` is the full count). `totals` is flows and bytes per country, as source or destination. A country is an ISO 3166-1 alpha-2 code, `LAN` for an address that doesn't route on the internet, or `??` when there's none. `geo` is `null` when the image's IP location data isn't installed (a local development run), in which case every public address is `??`. An analysis with no flows or alerts gets `"start": null` and empty lists.
+`start` is the first flow's or alert's time (epoch seconds) and `span` the seconds to the last. Each bucket is `[bin, source country, destination country, flows, bytes]`; each alert is `[seconds after start, source country, destination country, severity, signature, source IP, destination IP]`, at most 2,000 of them, in time order - when there are more, the 2,000 most severe are kept (`alertCount` is the full count). `totals` is flows and bytes per country, as source or destination. With a `type`, `flows` and the counts are that type's records, and `type` names it (`null` for flows); `hasBytes` is `false` when the type has no byte counts (anything but flows and tshark's connection rows), so every bytes figure is 0. A country is an ISO 3166-1 alpha-2 code, `LAN` for an address that doesn't route on the internet, or `??` when there's none. `geo` is `null` when the image's IP location data isn't installed (a local development run), in which case every public address is `??`. An analysis with no flows or alerts gets `"start": null` and empty lists.
 
-Unfiltered (no `q`) responses are cached per analysis, like `/api/sankey-data`.
+Unfiltered (no `q`) responses are cached per analysis and type, like `/api/sankey-data`.
 
 ---
 

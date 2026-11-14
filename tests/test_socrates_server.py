@@ -1235,15 +1235,25 @@ class TestAPIEndpoints(unittest.TestCase):
         self.assertEqual(data['buckets'], [[0, 'LAN', 'LAN', 1, 15]])
         self.assertEqual(data['alerts'], [[1.0, 'LAN', 'LAN', 2, 'TEST alert', '10.0.0.5', '10.0.0.9']])
         with analysis_cache.CACHE_LOCK:
-            self.assertIn((md5,), analysis_cache.TRAFFIC_MAP_CACHE)
+            self.assertIn((md5, None), analysis_cache.TRAFFIC_MAP_CACHE)
 
         # a search isn't cached, and filters like any other view's
         status, body = self._get(f'/api/traffic-map?md5={md5}&q=country:FR')
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)['flows'], 0)
+
+        # the tab shown: alerts alone, cached apart from the whole map
+        status, body = self._get(f'/api/traffic-map?md5={md5}&type=alert')
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual((data['type'], data['flows'], data['alertCount']), ('alert', 1, 1))
+        with analysis_cache.CACHE_LOCK:
+            self.assertIn((md5, 'alert'), analysis_cache.TRAFFIC_MAP_CACHE)
+        status, body = self._get(f'/api/traffic-map?md5={md5}&type=flow')
+        self.assertEqual(json.loads(body)['type'], None, "the flow tab is the whole map")
         analysis_cache.evict_analysis_cache(md5)
         with analysis_cache.CACHE_LOCK:
-            self.assertNotIn((md5,), analysis_cache.TRAFFIC_MAP_CACHE)
+            self.assertNotIn((md5, None), analysis_cache.TRAFFIC_MAP_CACHE)
 
     def test_traffic_map_without_events_db(self):
         md5 = 'e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b2'

@@ -2888,6 +2888,32 @@ class TestThemeAndMenu(unittest.TestCase):
         self.assertEqual(result['previewTheme'], result['realTheme'],
                          "the '>' hotkey must keep the preview iframe in sync with the real theme while the modal is open")
 
+    def test_theme_hotkey_works_after_starting_from_url(self):
+        """Starting an analysis from the URL field must give up its focus,
+        or '>' types into the field instead of changing the theme."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements('''
+            setTheme('dark');
+            var input = document.createElement('input');
+            input.type = 'text';
+            input.id = 'pcapUrl';
+            input.value = 'https://example.com/a.pcap';
+            document.body.appendChild(input);
+            input.focus();
+            var focusedBefore = document.activeElement === input;
+            window.fetch = function() { return new Promise(function() {}); };
+            loadFromUrl();
+            document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: '>', bubbles: true }));
+            window.__jsdom_result = {
+                focusedBefore: focusedBefore,
+                focusedAfter: document.activeElement === input,
+                theme: document.documentElement.getAttribute('data-theme')
+            };
+        ''')
+        self.assertTrue(result['focusedBefore'])
+        self.assertFalse(result['focusedAfter'], 'loadFromUrl must blur the URL field')
+        self.assertEqual(result['theme'], 'monokai', "'>' must change the theme once the analysis has started")
+
     def test_escape_closes_themes_modal(self):
         from tests.jsdom_helper import js_statements
         result = js_statements('''
@@ -23640,6 +23666,132 @@ class TestTrafficMap(unittest.TestCase):
         self.assertEqual(result['log'], 'none')
         self.assertEqual(result['email'], 'none')
         self.assertEqual(result['fetches'], [], 'nothing is fetched until the map is opened')
+
+    def test_follows_the_tab_shown(self):
+        """The map asks for the shown tab's type, as the Sankey Diagram
+        does - DNS Heuristics' being DNS - but not for Acknowledged, Flow,
+        which is the whole map already, or Network Alerts, which an
+        analysis opens on (alerts fly over every map)."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var fetches = [];
+            window.fetch = function(url) {
+                fetches.push(url);
+                return url.startsWith('/api/traffic-map') ? new Promise(() => {}) : Promise.resolve({ ok: true, json: () => ({}) });
+            };
+            loadTrafficMapWorld = () => Promise.resolve(world);
+            currentMd5 = 'a'.repeat(32);
+            trafficMapMode = true;
+            var types = {};
+            for (var tab of ['dns', 'alert', 'conn_openvpn', 'all', 'findings', 'dns_heuristics', 'acknowledged', 'flow']) {
+                document.querySelectorAll('.section').forEach(s => s.remove());
+                var section = document.createElement('div');
+                section.className = 'section';
+                section.id = 'section-' + tab;
+                document.body.appendChild(section);
+                fetches = [];
+                destroyTrafficMap();
+                updateTrafficMap();   // its fetch goes out before its first await
+                var m = /[?&]type=([^&]*)/.exec(fetches.find(u => u.startsWith('/api/traffic-map')) || '');
+                types[tab] = m ? decodeURIComponent(m[1]) : null;
+            }
+            window.__jsdom_result = types;
+        """)
+        self.assertEqual(result, {'dns': 'dns', 'alert': None, 'conn_openvpn': 'conn_openvpn', 'all': 'all',
+                                  'findings': 'findings', 'dns_heuristics': 'dns', 'acknowledged': None,
+                                  'flow': None})
+
+    def test_tabs_that_skip_the_sankey_still_update_the_map(self):
+        """Findings, DNS Heuristics and Acknowledged return from
+        loadTabData() before updateSankeyDiagram(), which updates the map
+        for every other tab - so each must update it itself."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var calls = [];
+            updateTrafficMap = function() { calls.push(trafficMapType()); };
+            buildFindingsSection = buildDnsHeuristicsSection = buildAcknowledgedAlertsSection = async function() {};
+            updateSankeyDiagram = async function() {};
+            for (var tab of ['findings', 'dns_heuristics', 'acknowledged']) {
+                document.querySelectorAll('.section').forEach(s => s.remove());
+                var section = document.createElement('div');
+                section.className = 'section';
+                section.id = 'section-' + tab;
+                document.body.appendChild(section);
+                await loadTabData(tab);
+            }
+            window.__jsdom_result = calls;
+        """)
+        self.assertEqual(result, ['findings', 'dns', None])
+
+    def test_a_fetch_for_a_tab_left_doesnt_land(self):
+        """DNS clicked, then back to a tab whose data is already shown
+        before DNS's arrives: the DNS data must not replace it."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var pending = [];
+            window.fetch = function(url) {
+                return new Promise(function(resolve) {
+                    pending.push(() => resolve({ ok: true, json: () => Object.assign({}, mapData,
+                        { type: (/[?&]type=([^&]*)/.exec(url) || [])[1] || null }) }));
+                });
+            };
+            loadTrafficMapWorld = () => Promise.resolve(world);
+            currentMd5 = 'a'.repeat(32);
+            trafficMapMode = true;
+            function show(tab) {
+                document.querySelectorAll('.section').forEach(s => s.remove());
+                var section = document.createElement('div');
+                section.className = 'section';
+                section.id = 'section-' + tab;
+                document.body.appendChild(section);
+            }
+            show('flow');
+            var first = updateTrafficMap();
+            pending.shift()();
+            await first;
+            show('dns');
+            var dns = updateTrafficMap();
+            show('flow');
+            await updateTrafficMap();
+            pending.shift()();
+            await dns;
+            window.__jsdom_result = {
+                showing: document.querySelector('[data-tm="showing"]').hidden ? null : document.querySelector('[data-tm="showing"]').textContent,
+                noun: document.querySelector('[data-tm="noun"]').textContent
+            };
+            destroyTrafficMap();
+        """, with_d3=True)
+        self.assertEqual(result, {'showing': None, 'noun': 'flows'})
+
+    def test_labels_for_a_record_type(self):
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.STUBS + r"""
+            var root = document.createElement('div');
+            document.body.appendChild(root);
+            var map = createTrafficMap(root, world);
+            var q = s => root.querySelector(s);
+            var read = () => ({ showing: q('[data-tm="showing"]').hidden ? null : q('[data-tm="showing"]').textContent,
+                                noun: q('[data-tm="noun"]').textContent });
+            var out = {};
+            map.setData(mapData, new Set(), false);
+            out.whole = read();
+            map.setData(Object.assign({}, mapData, { type: 'dns', hasBytes: false }), new Set(), true);
+            out.dns = read();
+            map.setData(Object.assign({}, mapData, { type: 'conn_openvpn', hasBytes: true }), new Set(), true);
+            out.conn = read();
+            map.setData(Object.assign({}, mapData, { type: 'all', hasBytes: true }), new Set(), true);
+            out.all = read();
+            map.setData({ start: null, span: 0, bins: 1200, flows: 0, alertCount: 0, geo: mapData.geo, type: 'dns',
+                          hasBytes: false, buckets: [], alerts: [], totals: {} }, new Set(), false);
+            out.empty = q('[data-tm="note"]').textContent;
+            window.__jsdom_result = out;
+            map.destroy();
+        """, with_d3=True)
+        self.assertEqual(result['whole'], {'showing': None, 'noun': 'flows'})
+        self.assertEqual(result['dns'], {'showing': 'Showing DNS Queries', 'noun': 'records'})
+        self.assertEqual(result['conn']['noun'], 'connections')
+        self.assertEqual(result['all'], {'showing': 'Showing All Events', 'noun': 'events'})
+        self.assertEqual(result['empty'], 'No DNS Queries or alerts to map')
 
     def test_resize_on_the_welcome_screen_leaves_it_hidden(self):
         """currentMd5 outlives a return to the welcome screen - a resize

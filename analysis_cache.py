@@ -15,7 +15,7 @@ from db import AGGREGATION_JSON_PATHS, REAL_AGGREGATION_COLUMNS
 SANKEY_CACHE = {}
 AGGREGATION_CACHE = {}
 AGGREGATION_TOTALS_CACHE = {}
-TRAFFIC_MAP_CACHE = {}   # (md5,) -> the unfiltered Traffic Map data
+TRAFFIC_MAP_CACHE = {}   # (md5, event_type or None) -> the unfiltered Traffic Map data
 # Single source of truth for "every analysis-result cache": evict_analysis_cache
 # and the delete-all handler must always cover the same set, so a new cache
 # added here is automatically evicted/cleared in both places.
