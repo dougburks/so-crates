@@ -1599,6 +1599,17 @@ class TestWSDiscovery(unittest.TestCase):
         self.assertEqual(dtd['message'], 'invalid')
         self.assertTrue(dtd['payload'].startswith('<?xml version="1.0"?><!DOCTYPE lolz'))
 
+    def test_a_dtd_in_utf16_is_never_parsed_either(self):
+        envelope = ('<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
+                    'xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing"><s:Header>'
+                    '<a:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/{}</a:Action>'
+                    '</s:Header><s:Body/></s:Envelope>')
+        from shark_protocols import _wsd_parse
+        self.assertEqual(_wsd_parse(envelope.format('Probe').encode('utf-16')), {'message': 'Probe'})
+        with_dtd = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE e [<!ENTITY a "Probe">]>' + envelope.format('&a;')
+        self.assertIsNone(_wsd_parse(with_dtd.encode('utf-16')),
+                          "a search of the bytes doesn't find <!DOCTYPE in UTF-16")
+
     def test_the_merge_adds_the_records(self):
         from scripts.compare_shark_suricata import compare
         report = compare(_load_eve('wsd_fixture.eve.json'), self.records)['flow']
@@ -1677,6 +1688,41 @@ class TestKNXnetIP(unittest.TestCase):
             'services': {'Routing Indication': 2}, 'sources': ['1.1.20'], 'group_writes': {'0/0/1': 1},
             'values': {'0/0/1': '0'}, 'group_reads': {'0/0/2': 1}})
         self.assertEqual(self.flows[(KNX_SECURE_ROUTER, 3671)], {'services': {'Secure Wrapper': 1}, 'secure': True})
+
+    @staticmethod
+    def _fed(*frames):
+        """A KNXnetIP fed (src, sport, dst, dport, frame hex) packets - its bodies by (src, sport)."""
+        from shark_protocols import KNXnetIP, Packet
+        knx = KNXnetIP()
+        for i, (src, sport, dst, dport, frame) in enumerate(frames):
+            key = tuple(sorted(((src, sport), (dst, dport))))
+            flow = shark_analyzer._Flow(key, 'UDP', 4, src, dst, sport, dport, 1.0, '0')
+            knx.feed(Packet(i + 1, 1.0 + i, flow, sport, dport, 'kip', src, dst), {'@kip': [frame]})
+        return {(f.client, f.cport): body for f, _when, _type, body in knx.finish()}
+
+    @staticmethod
+    def _tunnelled(cemi):
+        body = '04070000' + cemi
+        return f'06100420{6 + len(body) // 2:04x}' + body
+
+    def test_a_tunnel_confirmation_isnt_a_second_write(self):
+        write = '2900bce011050a03010081'           # L_Data.ind: 1.1.5 writes 1 to 1/2/3
+        bodies = self._fed(('10.0.0.5', 50000, '10.0.0.9', 3671, self._tunnelled('11' + write[2:])),
+                           ('10.0.0.9', 3671, '10.0.0.5', 50000, self._tunnelled('2e' + write[2:])))
+        self.assertEqual(next(iter(bodies.values()))['group_writes'], {'1/2/3': 1}, 'the L_Data.con echoes the .req')
+
+    def test_data_secure_isnt_ip_secure(self):
+        bodies = self._fed(('10.0.0.5', 50000, '10.0.0.9', 3671, self._tunnelled('2900bce011050a030103f1')))
+        body = next(iter(bodies.values()))
+        self.assertEqual((body.get('data_secure'), 'secure' in body), (True, False),
+                         'an encrypted telegram in a plain tunnel - the connection itself has no KNX IP Secure')
+
+    def test_an_answer_pairs_only_with_its_own_request(self):
+        hpai = '08010a0000050e57'                   # answer to 10.0.0.5:3671
+        bodies = self._fed(('10.0.0.5', 3671, '224.0.23.12', 3671, '0610020100 0e'.replace(' ', '') + hpai),
+                           ('10.0.0.7', 3671, '10.0.0.5', 3671, '06100206000804' + '00'))
+        self.assertEqual(bodies[('10.0.0.5', 3671)], {'services': {'Search Request': 1}, 'answered': False},
+                         "a connect response isn't an answer to a search")
 
     def test_the_merge_adds_the_records(self):
         from scripts.compare_shark_suricata import compare
@@ -4109,6 +4155,12 @@ class TestHostileProtocolInput(unittest.TestCase):
         self.assertEqual(len(knx.finish()), 1)
         self.assertIsNone(_cemi(b'\x11\xff'))
         self.assertEqual(_cemi(b'\x29\x00\xbc\xe0\x11\x14\x00\x01\x05')[3], '', 'a TPDU length past the frame')
+
+    def test_zabbix_table_field_names_that_arent_text(self):
+        from shark_protocols import _zabbix_secrets
+        found = {}
+        _zabbix_secrets({'hosts': {'fields': [['tls_psk'], 'tls_psk', None], 'data': [[1, 'secret', 2]]}}, found)
+        self.assertEqual(found, {'tls_psk': 1}, 'a field name the fuzzer made a list is skipped, not raised on')
 
     def test_a_truncated_tds_rpc(self):
         from shark_protocols import _tds_rpc

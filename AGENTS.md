@@ -307,9 +307,11 @@ Before cutting a release:
 
    **Then make the release's social videos**, against the same container:
    `python3 scripts/social_video/capture.py --base-url
-   http://127.0.0.1:<port>/socrates.html` uploads `attack-lab.pcap` (real
-   attacks on Redis, MySQL, SQL Server, a Zabbix agent and an IRC server,
-   run in containers) and captures its Findings and an IRC record into
+   http://127.0.0.1:<port>/socrates.html` uploads a lab capture - the
+   release's own, made by attacking its new protocols in containers
+   (`building-lab.pcap` for 5.4, `attack-lab.pcap` for 5.3; `--lab` and
+   `--record` pick them, its docstring describes each) - and captures its
+   Findings and one record up close into
    `~/Videos/so-crates-<version>-social/shots`; first update
    `scripts/social_video/video.html` for the release - the version, the
    scenes' text, the protocol wall and the "Also in" stats (its header

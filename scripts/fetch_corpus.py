@@ -148,7 +148,7 @@ def write(folder, name, data):
 
 def fetch_urls(fetch, folder, named_urls, max_bytes=None, report=print):
     for name, url in named_urls:
-        if os.path.exists(os.path.join(folder, name)):
+        if os.path.exists(os.path.join(folder, os.path.basename(name))):
             continue
         try:
             data = fetch.get(url, max_bytes)
@@ -388,7 +388,12 @@ def main(argv=None):
         for folder in folders:
             fetcher, delay = FOLDERS[folder]
             print(f'{folder}...', flush=True)
-            fetcher(Fetch(delay), args.corpus)
+            try:
+                fetcher(Fetch(delay), args.corpus)
+            except (OSError, RuntimeError, urllib.error.URLError, tarfile.TarError, zipfile.BadZipFile) as error:
+                # A whole archive or page that couldn't be had: its files are
+                # reported missing below, and the other folders still come
+                print(f'  failed {folder}: {error}')
     missing, changed, extra = check(args.corpus, folders)
     for label, paths in (('missing', missing), ('changed since the manifest', changed), ('not in the manifest', extra)):
         if paths:

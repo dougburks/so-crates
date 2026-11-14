@@ -2060,12 +2060,30 @@ def _wsd_describe(element):
     return out
 
 
+def _xml_without_dtd(raw):
+    """Whether raw is well-formed XML with no document type declaration -
+    asked of expat itself, so the XML's own encoding (UTF-16, say) can't
+    hide one from a search of its bytes."""
+    import xml.parsers.expat
+
+    def refuse(*_args):
+        raise ValueError('DTD')
+    parser = xml.parsers.expat.ParserCreate()
+    parser.StartDoctypeDeclHandler = refuse
+    parser.EntityDeclHandler = refuse
+    try:
+        parser.Parse(raw, True)
+    except (xml.parsers.expat.ExpatError, ValueError, LookupError, RecursionError):
+        return False
+    return True
+
+
 def _wsd_parse(raw):
     """A WS-Discovery message's bytes as {'message', 'message_id',
     'relates_to', ...} - or None for anything that isn't a SOAP envelope
     (or has a DTD, never parsed)."""
     import xml.etree.ElementTree as ElementTree
-    if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+    if not _xml_without_dtd(raw):
         return None
     try:
         root = ElementTree.fromstring(raw)
@@ -2273,7 +2291,7 @@ _KNXIP_SERVICES = {
     0x0951: 'Session Request', 0x0952: 'Session Response', 0x0953: 'Session Authenticate',
     0x0954: 'Session Status', 0x0955: 'Timer Notify'}
 _KNXIP_ASKS = {0x0201, 0x0203, 0x0205, 0x020b}       # requests a gateway answers, perhaps on another flow
-_KNXIP_ANSWERS = {0x0202: 0x0201, 0x0204: 0x0203, 0x0206: 0x0205, 0x020c: 0x020b}
+_KNXIP_ANSWERS = {0x0202: 0x0201, 0x0204: 0x0203, 0x0206: 0x0205, 0x020c: 0x020b}  # answer -> its request
 _KNXIP_SECURE = {0x0950, 0x0951, 0x0952, 0x0953, 0x0954, 0x0955}
 _KNXIP_FAMILIES = {2: 'core', 3: 'device management', 4: 'tunnelling', 5: 'routing', 6: 'remote logging',
                    7: 'remote configuration', 8: 'object server', 9: 'security'}
@@ -2426,7 +2444,7 @@ class KNXnetIP:
     def __init__(self):
         self.records = []
         self.by_flow = {}        # flow key -> its body
-        self.asked = {}          # (address, port) a request asked to be answered at -> the asking flow's body
+        self.asked = {}          # (address, port, request service) asked to be answered at -> the asking body
 
     def _body(self, pkt):
         body = self.by_flow.get(pkt.flow.key)
@@ -2451,16 +2469,18 @@ class KNXnetIP:
             body['secure'] = True
         if service in _KNXIP_ASKS:
             body.setdefault('answered', False)
-            self.asked[(pkt.src, str(pkt.sport))] = body
+            self.asked[(pkt.src, str(pkt.sport), service)] = body
             endpoint = _knxip_hpai(data)
             if endpoint:
-                self.asked[tuple(endpoint.rsplit(':', 1))] = body
+                self.asked[(*endpoint.rsplit(':', 1), service)] = body
         if service in _KNXIP_ANSWERS:
-            asker = self.asked.get((pkt.dst, str(pkt.dport)))
-            for answered in {id(b): b for b in (body, asker) if b is not None and 'answered' in b}.values():
-                answered['answered'] = True
-                if answered is not body:
-                    responders = answered.setdefault('responders', [])
+            # Only an answer to what was asked there: a client's port 3671
+            # can see another gateway's connect response after its search
+            asker = self.asked.get((pkt.dst, str(pkt.dport), _KNXIP_ANSWERS[service]))
+            if asker is not None:
+                asker['answered'] = True
+                if asker is not body:
+                    responders = asker.setdefault('responders', [])
                     if pkt.src not in responders and len(responders) < _KNXIP_MAX_LIST:
                         responders.append(pkt.src)
         if service in (0x0202, 0x020c):
@@ -2489,13 +2509,15 @@ class KNXnetIP:
         cemi = _cemi(data)
         if cemi is None:
             return
-        _message, source, target, service, value = cemi
+        message, source, target, service, value = cemi
+        if message == 'L_Data.con':
+            return                       # the gateway confirming a telegram the client just sent - not another
         if source:
             sources = body.setdefault('sources', [])
             if source not in sources and len(sources) < _KNXIP_MAX_LIST:
                 sources.append(source)
         if service == 'SecureService':
-            body['secure'] = True
+            body['data_secure'] = True   # KNX Data Secure: the telegram, not the connection, is encrypted
         if service in ('GroupValue_Write', 'GroupValue_Read'):
             groups = body.setdefault('group_writes' if service == 'GroupValue_Write' else 'group_reads', {})
             if target in groups or len(groups) < _KNXIP_MAX_GROUPS:
@@ -5279,7 +5301,7 @@ def _zabbix_secrets(tree, found, depth=0):
         fields, rows = tree.get('fields'), tree.get('data')
         if isinstance(fields, list) and isinstance(rows, list):
             for i, name in enumerate(fields):
-                if name in _ZABBIX_SECRET_FIELDS:
+                if isinstance(name, str) and name in _ZABBIX_SECRET_FIELDS:
                     n = sum(1 for row in rows if isinstance(row, list) and i < len(row) and row[i] not in ('', None))
                     if n:
                         found[name] = found.get(name, 0) + n

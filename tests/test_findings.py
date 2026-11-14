@@ -240,6 +240,8 @@ NON_MATCHES = [
     ('wsd', {'message': 'Probe', 'multicast': True, 'request_bytes': 624, 'response': 'ProbeMatches',
              'response_bytes': 3326, 'answered': True}),
     ('wsd', {'message': 'invalid', 'payload': '<:>', 'response_bytes': 441}),
+    ('wsd', {'message': 'Probe', 'request_bytes': 900, 'response': 'ProbeMatches', 'response_bytes': 540,
+             'answered': True, 'amplification': 0.6}),
     ('knxip', {'connection_type': 'tunnel', 'status': 'no more connections'}),
     ('knxip', {'status': 'accepted', 'secure': True}),
     ('knxip', {'services': {'Routing Indication': 2}, 'group_writes': {'0/0/1': 1}, 'management': ['DeviceDescriptor_Read 1.1.5']}),

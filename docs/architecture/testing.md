@@ -57,7 +57,7 @@ python3 scripts/fetch_corpus.py ~/so-crates-corpus
 | `ics` | 4SICS: three days of an ICS lab's traffic | Netresec |
 | `ics_iti` | BACnet, IEC 104, IEC 61850, OPC and PROFINET | ITI/ICS-Security-Tools on GitHub |
 | `ics_emre` | BACnet, IEC 104, IEC 61850, LLDP, OPC UA and PROFINET | EmreEkin/ICS-Pcaps on GitHub |
-| `ics_inl` | 14 ICS protocols' captures, BSAP and Synchrophasor among them | Idaho National Laboratory's Malcolm-Test-Artifacts |
+| `ics_inl` | 14 captures of 11 ICS protocols, BSAP and Synchrophasor among them | Idaho National Laboratory's Malcolm-Test-Artifacts |
 | `mta`, `mta_scans`, `mta_ex` | infections, six weeks of scans hitting a web server, and traffic analysis exercises | malware-traffic-analysis.net |
 
 Every file is checked against the SHA-256 the corpus held when the script was written (`scripts/corpus/manifest.sha256`): one a source has since changed is kept and reported, and one that can't be fetched is reported missing. A run that stopped can be run again - what's there is kept - and `--check` only compares. The sweep also needs Suricata's output for each capture, in `eve/`, from the same Suricata version and config as an analysis; `--eve so-crates:local` makes it by running Suricata in that image (podman or docker) for every capture without one yet.

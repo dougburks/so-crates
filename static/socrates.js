@@ -5424,6 +5424,7 @@
             html += htmlRowText('Channel', k.channel !== undefined ? String(k.channel) : '');
             html += htmlRowText('Tunnel Address', k.tunnel_address, 'mono');
             html += htmlRowText('KNX IP Secure', k.secure ? 'yes (encrypted - not read)' : '');
+            html += htmlRowText('KNX Data Secure', k.data_secure ? 'yes (telegrams encrypted - not read)' : '');
             html += htmlRowText('Group Writes', Object.entries(k.group_writes || {}).map(([ga, n]) =>
                 `${ga}${k.values?.[ga] !== undefined ? ` = ${k.values[ga]}` : ''}${n > 1 ? ` (${n.toLocaleString()}×)` : ''}`).join(', '), 'mono');
             html += htmlRowText('Group Reads', counts(k.group_reads), 'mono');

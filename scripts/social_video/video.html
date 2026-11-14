@@ -7,7 +7,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>SO-CRATES 5.3</title>
+<title>SO-CRATES 5.4</title>
 <style>
 :root {
   --bg: #0d1117; --panel: #161b22; --panel2: #21262d; --border: #30363d;
@@ -124,6 +124,7 @@ body.sq { --W: 1080px; --H: 1080px; }
 .chip::after { content: ''; position: absolute; right: -5px; top: -5px; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .more { position: absolute; left: 120px; right: 120px; top: 900px; text-align: center; font-size: 32px; color: var(--text); }
 .more b { color: var(--bright); }
+.groups.two { grid-template-columns: 1fr 1fr; gap: 80px; }
 .sq .groups { left: 50px; right: 50px; top: 290px; grid-template-columns: 1fr 1fr; gap: 26px 30px; }
 .sq .group h4 { font-size: 22px; margin-bottom: 14px; }
 .sq .chips { gap: 9px; }
@@ -159,8 +160,9 @@ body.sq { --W: 1080px; --H: 1080px; }
 .sq .url-big { font-size: 74px; margin-top: 18px; }
 .sq .cta-list { font-size: 29px; margin-top: 22px; }
 
-/* ---------- 5.3: tags over a moving screenshot read from the left ---------- */
+/* ---------- tags over a moving screenshot read from the left ---------- */
 #s7 .tag, #s3 .tag { font-size: 24px; }
+.shot .tag { z-index: 2; }
 .sq #s7 .tag, .sq #s3 .tag { font-size: 26px; }
 .sq #s5 .groups { top: 280px; }
 </style>
@@ -173,7 +175,7 @@ body.sq { --W: 1080px; --H: 1080px; }
   <section class="scene" id="s1" data-start="0" data-end="4.5">
     <div class="mascot a" data-zoom="1.08,1.0"><img src="shots/socrates.jpg"></div>
     <div class="copy">
-      <div class="title a">SO-CRATES <span class="ver">5.3</span></div>
+      <div class="title a">SO-CRATES <span class="ver">5.4</span></div>
       <div class="sub a" data-in="0.9" data-fx="up"><b>S</b>ecurity <b>O</b>nion <b>C</b>ontainerized <b>R</b>apid <b>A</b>nalysis of <b>T</b>hreats, <b>E</b>vil, and <b>S</b>us</div>
     </div>
   </section>
@@ -213,44 +215,41 @@ body.sq { --W: 1080px; --H: 1080px; }
     </div>
   </section>
 
-  <!-- 3. New in 5.3 -->
+  <!-- 3. New in 5.4 -->
   <section class="scene" id="s4" data-start="10.5" data-end="15.5">
     <div class="center">
-      <div class="badge a" data-in="0.1" data-fx="pop">NEW IN 5.3</div>
-      <div class="l1 a" data-in="0.6" data-fx="up">Databases. Botnets. PLCs. VPNs.</div>
-      <div class="l2 a" data-in="1.6" data-fx="pop"><em>19</em> more protocols from tshark</div>
-      <div class="l3 a" data-in="2.3" data-fx="up">The ones Suricata doesn't parse, in the same tabs, search and pivots</div>
+      <div class="badge a" data-in="0.1" data-fx="pop">NEW IN 5.4</div>
+      <div class="l1 a" data-in="0.6" data-fx="up">Lights. Blinds. Heating. Printers. Cameras.</div>
+      <div class="l2 a" data-in="1.6" data-fx="pop"><em>KNXnet/IP</em> and <em>WS-Discovery</em></div>
+      <div class="l3 a" data-in="2.3" data-fx="up">Two more protocols from tshark, in the same tabs, search and pivots</div>
     </div>
   </section>
 
   <!-- 4. Protocol wall -->
   <section class="scene" id="s5" data-start="15.5" data-end="25.5">
     <div class="head">
-      <h2 class="a" data-in="0.1" data-fx="up"><em>19</em> new protocol records</h2>
-      <p class="a" data-in="0.4" data-fx="up">Each with its own columns, aggregations and detail panel</p>
+      <h2 class="a" data-in="0.1" data-fx="up"><em>2</em> new protocol records</h2>
+      <p class="a" data-in="0.4" data-fx="up">Each with its own columns, aggregations, detail panel and Findings</p>
     </div>
-    <div class="groups" id="groups"></div>
-    <div class="more a" data-in="6.2" data-fx="up">Logins, SQL statements, admin commands and orders - <b>passwords masked</b> wherever they're listed</div>
+    <div class="groups two" id="groups"></div>
+    <div class="more a" data-in="5.2" data-fx="up">And <b>MMS</b> read in substation captures that start after the connection opened</div>
   </section>
 
   <!-- 5. The lab -->
   <section class="scene" id="s6" data-start="25.5" data-end="31.5">
     <div class="head">
-      <h2 class="a" data-in="0.1" data-fx="up">An attack lab, <em>one capture</em></h2>
-      <p class="a" data-in="0.4" data-fx="up"><b>Redis, MySQL, SQL Server, Zabbix and IRC</b>, attacked in containers: 8 protocols parsed in a second</p>
+      <h2 class="a" data-in="0.1" data-fx="up">A building network, <em>one capture</em></h2>
+      <p class="a" data-in="0.4" data-fx="up"><b>A KNX gateway and a network printer</b>, attacked in containers: both parsed in under a second</p>
     </div>
     <div class="win a" data-in="0.3" data-fx="rise">
-      <div class="chrome"><span></span><span></span><span></span><div class="url">so-crates-5.3-lab.pcap</div></div>
+      <div class="chrome"><span></span><span></span><span></span><div class="url">so-crates-5.4-lab.pcap</div></div>
       <div class="view">
-        <div class="shot a" data-cam='[[0,0,150,1.05],[1.4,0,150,1.05],[2.6,10,160,1.3],[6,12,162,1.31]]'
-             data-cam-sq='[[0,0,150,0.625],[1.4,0,150,0.625],[2.6,10,160,0.79],[6,12,162,0.8]]'>
+        <div class="shot a" data-cam='[[0,0,110,1.05],[1.4,0,110,1.05],[2.6,10,120,1.3],[6,12,122,1.31]]'
+             data-cam-sq='[[0,0,110,0.625],[1.4,0,110,0.625],[2.6,10,120,0.79],[6,12,122,0.8]]'>
           <img src="shots/lab-findings.png">
-          <div class="hl a" data-in="2.7" data-fx="pop" style="left:149px;top:315px;width:116px;height:80px"></div>
-          <div class="hl a" data-in="2.9" data-fx="pop" style="left:269px;top:315px;width:236px;height:80px"></div>
-          <div class="hl a" data-in="3.1" data-fx="pop" style="left:509px;top:315px;width:236px;height:80px"></div>
-          <div class="hl a" data-in="3.3" data-fx="pop" style="left:749px;top:315px;width:236px;height:80px"></div>
-          <div class="hl a" data-in="3.5" data-fx="pop" style="left:989px;top:315px;width:116px;height:80px"></div>
-          <div class="hl red a" data-in="4.2" data-fx="pop" style="left:269px;top:182px;width:116px;height:80px"></div>
+          <div class="hl a" data-in="2.7" data-fx="pop" style="left:291px;top:180px;width:120px;height:84px"></div>
+          <div class="hl a" data-in="3.0" data-fx="pop" style="left:411px;top:180px;width:120px;height:84px"></div>
+          <div class="hl red a" data-in="4.0" data-fx="pop" style="left:27px;top:180px;width:120px;height:84px"></div>
         </div>
       </div>
     </div>
@@ -260,26 +259,26 @@ body.sq { --W: 1080px; --H: 1080px; }
   <section class="scene" id="s7" data-start="31.5" data-end="42.5">
     <div class="head">
       <h2 class="a" data-in="0.1" data-fx="up"><em>Findings</em> call out the attacker's moves</h2>
-      <p class="a" data-in="0.4" data-fx="up">72 new rules, ranked by severity - a lead to check on every row</p>
+      <p class="a" data-in="0.4" data-fx="up">5 new rules, ranked by severity - a lead to check on every row</p>
     </div>
     <div class="win a" data-in="0.3" data-fx="rise">
-      <div class="chrome"><span></span><span></span><span></span><div class="url">so-crates-5.3-lab.pcap · Findings</div></div>
+      <div class="chrome"><span></span><span></span><span></span><div class="url">so-crates-5.4-lab.pcap · Findings</div></div>
       <div class="view">
-        <div class="shot a" data-cam='[[0,30,650,1.25],[1.6,30,650,1.25],[2.8,30,1250,1.25],[4.4,30,1250,1.25],[5.6,30,1645,1.25],[7.6,30,1645,1.25],[8.8,30,2010,1.25],[11,30,2010,1.25]]'
-             data-cam-sq='[[0,30,650,0.9],[1.6,30,650,0.9],[2.8,30,1250,0.9],[4.4,30,1250,0.9],[5.6,30,1645,0.9],[7.6,30,1645,0.9],[8.8,30,2010,0.9],[11,30,2010,0.9]]'>
+        <!-- tags sit inside their own row, over its Type and Source - adjacent
+             rows' boxes would cover a tag on a border -->
+        <div class="shot a" data-cam='[[0,30,440,1.25],[4.6,30,440,1.25],[5.8,30,580,1.25],[11,30,580,1.25]]'
+             data-cam-sq='[[0,0,450,0.8],[11,0,450,0.8]]'>
           <img src="shots/lab-findings.png">
-          <div class="hl red a" data-in="0.8" data-fx="pop" style="left:41px;top:786px;width:1518px;height:177px"></div>
-          <div class="tag red a" data-in="1.0" data-fx="pop" style="left:560px;top:930px">SQL Server: xp_cmdshell</div>
-          <div class="hl red a" data-in="2.9" data-fx="pop" style="left:41px;top:1316px;width:1518px;height:71px"></div>
-          <div class="tag red a" data-in="3.1" data-fx="pop" style="left:560px;top:1290px">MySQL: a PHP web shell</div>
-          <div class="hl pink a" data-in="5.7" data-fx="pop" style="left:41px;top:1718px;width:1518px;height:161px"></div>
-          <div class="tag pink a" data-in="5.9" data-fx="pop" style="left:560px;top:1692px">IRC: botnet orders</div>
-          <div class="hl a" data-in="6.6" data-fx="pop" style="left:41px;top:1879px;width:1518px;height:161px"></div>
-          <div class="tag a" data-in="6.8" data-fx="pop" style="left:560px;top:2004px">Zabbix: system.run</div>
-          <div class="hl red a" data-in="8.9" data-fx="pop" style="left:41px;top:2041px;width:1518px;height:94px"></div>
-          <div class="tag red a" data-in="9.1" data-fx="pop" style="left:560px;top:2101px">Redis: a rogue replica</div>
-          <div class="hl red a" data-in="9.5" data-fx="pop" style="left:41px;top:2268px;width:1518px;height:181px"></div>
-          <div class="tag red a" data-in="9.7" data-fx="pop" style="left:560px;top:2415px">Redis: SSH key write</div>
+          <div class="hl red a" data-in="0.8" data-fx="pop" style="left:41px;top:535px;width:1518px;height:138px"></div>
+          <div class="tag red a" data-in="1.0" data-fx="pop" style="left:830px;top:582px">Reprogrammed and reset</div>
+          <div class="hl a" data-in="2.6" data-fx="pop" style="left:41px;top:672px;width:1518px;height:71px"></div>
+          <div class="tag a" data-in="2.8" data-fx="pop" style="left:830px;top:685px">A 2.1x reflector</div>
+          <div class="hl pink a" data-in="4.0" data-fx="pop" style="left:41px;top:743px;width:1518px;height:142px"></div>
+          <div class="tag pink a" data-in="4.2" data-fx="pop" style="left:830px;top:792px">No KNX IP Secure</div>
+          <div class="hl a" data-in="6.4" data-fx="pop" style="left:41px;top:885px;width:1518px;height:137px"></div>
+          <div class="tag a" data-in="6.6" data-fx="pop" style="left:830px;top:931px">Found by a search</div>
+          <div class="hl pink a" data-in="8.2" data-fx="pop" style="left:41px;top:1022px;width:1518px;height:71px"></div>
+          <div class="tag pink a" data-in="8.4" data-fx="pop" style="left:830px;top:1035px">A reflector hunt</div>
         </div>
       </div>
     </div>
@@ -289,37 +288,34 @@ body.sq { --W: 1080px; --H: 1080px; }
   <section class="scene" id="s3" data-start="42.5" data-end="50">
     <div class="head">
       <h2 class="a" data-in="0.1" data-fx="up">Every record, <em>up close</em></h2>
-      <p class="a" data-in="0.4" data-fx="up">An IRC bot: its nickname, its herder's orders, the key to the channel, the file it sent</p>
+      <p class="a" data-in="0.4" data-fx="up">A KNX tunnel: the gateway's answer, the tunnel address, the device it reprogrammed and reset</p>
     </div>
     <div class="win a" data-in="0.3" data-fx="rise">
-      <div class="chrome"><span></span><span></span><span></span><div class="url">so-crates-5.3-lab.pcap · IRC</div></div>
+      <div class="chrome"><span></span><span></span><span></span><div class="url">so-crates-5.4-lab.pcap · KNXnet/IP</div></div>
       <div class="view">
-        <div class="shot a" data-cam='[[0,0,720,1.05],[1.0,0,720,1.05],[2.2,0,760,1.5],[4.0,0,1060,1.5],[7.5,0,1120,1.5]]'
-             data-cam-sq='[[0,0,720,0.64],[1.0,0,720,0.64],[2.2,0,780,1.05],[4.0,0,1100,1.05],[7.5,0,1130,1.05]]'>
-          <img src="shots/lab-irc.png" style="width:1558px">
-          <div class="hl a" data-in="2.3" data-fx="pop" style="left:30px;top:819px;width:720px;height:34px"></div>
-          <div class="tag a" data-in="2.5" data-fx="pop" style="left:420px;top:868px">a bot-shaped nickname</div>
-          <div class="hl pink a" data-in="4.2" data-fx="pop" style="left:30px;top:1109px;width:720px;height:62px"></div>
-          <div class="hl red a" data-in="4.6" data-fx="pop" style="left:30px;top:1170px;width:720px;height:73px"></div>
-          <div class="tag red a" data-in="4.8" data-fx="pop" style="left:440px;top:1250px">the herder's orders</div>
-          <div class="hl a" data-in="5.8" data-fx="pop" style="left:30px;top:1396px;width:720px;height:34px"></div>
-          <div class="tag a" data-in="6.0" data-fx="pop" style="left:440px;top:1360px">loot.zip, by DCC</div>
+        <div class="shot a" data-cam='[[0,0,780,1.05],[1.2,0,780,1.05],[2.4,0,1800,1.5],[7.5,0,1830,1.5]]'
+             data-cam-sq='[[0,0,780,0.64],[1.2,0,780,0.64],[2.4,0,1790,1.05],[7.5,0,1810,1.05]]'>
+          <img src="shots/lab-record.png" style="width:1558px">
+          <div class="hl a" data-in="2.6" data-fx="pop" style="left:30px;top:1930px;width:720px;height:96px"></div>
+          <div class="tag a" data-in="2.8" data-fx="pop" style="left:420px;top:1940px">a tunnel, accepted</div>
+          <div class="hl red a" data-in="4.4" data-fx="pop" style="left:30px;top:2160px;width:720px;height:79px"></div>
+          <div class="tag red a" data-in="4.6" data-fx="pop" style="left:420px;top:2180px">re-addressed, rewritten, erased</div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- 8. Also in 5.3 -->
+  <!-- 8. Also in 5.4 -->
   <section class="scene" id="s8" data-start="50" data-end="55">
     <div class="head">
-      <h2 class="a" data-in="0.1" data-fx="up">Also in <em>5.3</em></h2>
-      <p class="a" data-in="0.4" data-fx="up">Hardened against the packets it reads</p>
+      <h2 class="a" data-in="0.1" data-fx="up">Also in <em>5.4</em></h2>
+      <p class="a" data-in="0.4" data-fx="up">Checked against the packets it reads</p>
     </div>
     <div class="stats">
-      <div class="stat a" data-in="0.7" data-fx="pop"><div class="n" style="color:var(--accent)">72</div><div class="t">new Findings rules</div><p>32 to 104, from SQL account changes to botnet orders</p></div>
-      <div class="stat a" data-in="1.0" data-fx="pop"><div class="n" style="color:var(--green)">790K</div><div class="t">fuzzed parser runs</div><p>Every protocol parser: ten crashes found and fixed</p></div>
-      <div class="stat a" data-in="1.3" data-fx="pop"><div class="n" style="color:var(--orange)">1</div><div class="t">packet lost, not one analysis</div><p>A packet a parser can't read now costs only itself</p></div>
-      <div class="stat a" data-in="1.6" data-fx="pop"><div class="n" style="color:var(--purple)">7</div><div class="t">new themes</div><p>One Dark, Thermal, War&nbsp;Room and four from Omarchy</p></div>
+      <div class="stat a" data-in="0.7" data-fx="pop"><div class="n" style="color:var(--accent)">5</div><div class="t">new Findings rules</div><p>104 to 109, from KNX programming to WS-Discovery reflectors</p></div>
+      <div class="stat a" data-in="1.0" data-fx="pop"><div class="n" style="color:var(--teal)">MMS</div><div class="t">read mid-connection</div><p>Substation captures that start after the association opened</p></div>
+      <div class="stat a" data-in="1.3" data-fx="pop"><div class="n" style="color:var(--green)">138K</div><div class="t">fuzzed parser runs</div><p>Every protocol parser: one crash found and fixed</p></div>
+      <div class="stat a" data-in="1.6" data-fx="pop"><div class="n" style="color:var(--orange)">505</div><div class="t">real captures replayed</div><p>Wireshark's samples and ICS labs, through every parser</p></div>
     </div>
   </section>
 
@@ -327,14 +323,14 @@ body.sq { --W: 1080px; --H: 1080px; }
   <section class="scene" id="s9" data-start="55" data-end="60">
     <div class="mascot a" data-in="0" data-fx="fade" data-dur="1" data-zoom="1.0,1.08"><img src="shots/socrates.jpg"></div>
     <div class="copy">
-      <div class="title a" data-in="0.2" data-fx="up">SO-CRATES <span class="ver">5.3</span></div>
+      <div class="title a" data-in="0.2" data-fx="up">SO-CRATES <span class="ver">5.4</span></div>
       <div class="url-big a" data-in="0.6" data-fx="pop">so-crates.org</div>
       <div class="cta-list a" data-in="1.1" data-fx="up">▸ <b>Try the interactive demo</b><br>▸ Run it with Docker, Podman or OhMyDebn<br>▸ Free and open source</div>
     </div>
   </section>
 
   <div id="bar"></div>
-  <div id="brand"><b>SO-CRATES</b> 5.3</div>
+  <div id="brand"><b>SO-CRATES</b> 5.4</div>
 </div>
 
 <script>
@@ -342,12 +338,13 @@ const SQ = new URLSearchParams(location.search).get('fmt') === 'square';
 if (SQ) document.body.classList.add('sq');
 const DURATION = 60;
 
-// Protocol wall content, from docs/release-notes.md 5.3.0
+// Protocol wall content, from docs/release-notes.md 5.4.0: what each new
+// record holds
 const GROUPS = [
-  ['Databases & caches', '#ffa726', ['MySQL', 'SQL Server', 'Oracle TNS', 'MongoDB', 'Redis', 'memcached']],
-  ['Industrial', '#26a69a', ['MMS / IEC 61850', 'PROFINET DCP', 'Omron FINS', 'HART-IP', 'C37.118', 'EtherCAT']],
-  ['Remote access & VPN', '#58a6ff', ['rsh / rlogin / rexec', 'OpenVPN', 'WireGuard', 'TACACS+']],
-  ['Monitoring & more', '#ba68c8', ['Zabbix', 'IRC', 'RakNet']],
+  ['KNXnet/IP · building automation', '#43a047', ['Gateway name & KNX address', 'Serial & services', 'Tunnels & their result',
+    'Group writes & values', 'Group reads', 'Device programming', 'KNX IP Secure', 'KNX Data Secure']],
+  ['WS-Discovery · devices finding each other', '#7986cb', ['Probes & matches', 'Device types & scopes', 'Service addresses',
+    'Hello & Bye', 'SOAP faults', 'Amplification', "Scanners' junk"]],
 ];
 const gEl = document.getElementById('groups');
 GROUPS.forEach(([name, color, chips], gi) => {

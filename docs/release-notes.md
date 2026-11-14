@@ -20,7 +20,7 @@
   were connection cards before
 - **Findings** - a KNX device programmed or reset through a KNXnet/IP
   gateway is high; a device answering a WS-Discovery request sent
-  straight to it (a reflector), and a KNXnet/IP connection accepted
+  straight to it with a larger reply (a reflector), and a KNXnet/IP connection accepted
   without KNX IP Secure, are medium; a message that isn't WS-Discovery
   sent to its port, and a KNXnet/IP gateway describing itself, are low
 
@@ -31,6 +31,9 @@
   is read now. tshark learns which OSI presentation context carries MMS
   from the association, so it decoded none of it, and the connection was
   a PRES connection card; it's told the context IEC 61850 uses now
+- A Zabbix proxy configuration whose table names a column with something
+  other than text no longer costs that packet's Zabbix record - found by
+  fuzzing the parsers again
 
 ## 5.3.0
 

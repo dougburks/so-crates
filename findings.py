@@ -402,7 +402,7 @@ RULES = (
          "Messages or a channel topic that read as a botnet's orders - !download, !ddos.syn, .scan... - on an "
          'IRC connection: a bot taking commands from its herder, or the herder giving them.'),
     Rule('zabbix_remote_command', 'high', 'zabbix', 'Zabbix running commands',
-         f"EXISTS (SELECT 1 FROM json_each(json_data, '$.zabbix.commands'))",
+         "EXISTS (SELECT 1 FROM json_each(json_data, '$.zabbix.commands'))",
          _zabbix_commands,
          'system.run, a remote command or a script: Zabbix running a shell command on an agent - remote code '
          'execution by design, and an attacker\'s once they hold a server, run a rogue one an agent trusts, or '
@@ -638,15 +638,15 @@ RULES = (
          _in('syslog', 'severity', ['emerg', 'alert', 'crit']),
          lambda b: _join(b.get('hostname'), b.get('program'), ('-', (b.get('message') or '')[:120])),
          'A device logging an emergency, alert or critical condition.'),
-    Rule('wsd_reflector', 'medium', 'wsd', 'WS-Discovery answering a request sent to it',
-         f"{_j('wsd', 'amplification')} IS NOT NULL",
+    Rule('wsd_reflector', 'medium', 'wsd', 'WS-Discovery answering a request sent to it with more',
+         f"{_j('wsd', 'amplification')} > 1",
          lambda b: _join(f"{b['amplification']:g}x amplification -", b.get('response'),
                          f"({b.get('response_bytes') or 0:,} bytes back for {b.get('request_bytes') or 0:,})",
                          ('for', 'a message that isn\'t WS-Discovery' if b.get('message') == 'invalid' else '')),
          'WS-Discovery is meant for the local network, asked by multicast. A device that answers a request '
-         "sent straight to it - many answer even junk with a SOAP fault - is a reflector: with the request's "
-         'source address forged, its larger reply goes to the victim, as in the 2019 attacks. Keep UDP 3702 '
-         'off the internet.'),
+         'sent straight to it with more than it was sent - many answer even junk with a SOAP fault - is a '
+         "reflector: with the request's source address forged, its larger reply goes to the victim, as in the "
+         '2019 attacks. Keep UDP 3702 off the internet.'),
 
     Rule('knxip_open_connection', 'medium', 'knxip', 'KNXnet/IP connection accepted without KNX IP Secure',
          f"{_j('knxip', 'status')} = 'accepted' AND {_j('knxip', 'secure')} IS NULL",

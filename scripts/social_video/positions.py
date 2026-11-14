@@ -2,11 +2,11 @@
 """Where video.html's highlight boxes belong on capture.py's screens, in
 the CSS pixels video.html places them in - for when the UI moved a card or
 a row. Prints the stat cards (the lab scene), every Findings row (the
-Findings pan) and the IRC record's detail rows (the up-close scene), each
+Findings pan) and the up-close record's detail rows (the up-close scene), each
 as left, top, width, height. Run it against the same server capture.py
 used, with the lab capture already analyzed there.
 
-Usage: python3 scripts/social_video/positions.py <md5> [--base-url URL]
+Usage: python3 scripts/social_video/positions.py <md5> [--base-url URL] [--record knxip|irc]
 """
 import argparse
 import asyncio
@@ -18,7 +18,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
 
 
-async def main(base_url, md5):
+async def main(base_url, md5, record):
+    from capture import RECORDS
+    record_section, record_row, record_cell = RECORDS[record]
     from playwright.async_api import async_playwright
     from capture_screenshots import find_chromium
     async with async_playwright() as p:
@@ -54,22 +56,22 @@ async def main(base_url, md5):
         for row in found['findings']:
             print('  ' + json.dumps(row))
 
-        await open_card('section-irc')
-        await page.locator('#section-irc tbody tr[data-id]', has_text='USA|83621').locator('td').nth(6).click()
+        await open_card(record_section)
+        await page.locator(f'#{record_section} tbody tr[data-id]', has_text=record_row).locator('td').nth(record_cell).click()
         await page.locator('.pivot-menu-item', has_text='Expand Row').click()
         await page.wait_for_timeout(1500)
-        rows = await page.evaluate("""() => {
-            const section = document.getElementById('section-irc').getBoundingClientRect();
+        rows = await page.evaluate("""section => {
+            const box = document.getElementById(section).getBoundingClientRect();
             // (the expanded record's: the others' details are there, hidden)
-            return [...document.querySelectorAll('#section-irc .detail-label')].filter(label => label.offsetHeight).map(label => {
+            return [...document.querySelectorAll(`#${section} .detail-label`)].filter(label => label.offsetHeight).map(label => {
                 const a = label.getBoundingClientRect();
                 const v = label.nextElementSibling ? label.nextElementSibling.getBoundingClientRect() : a;
                 const top = Math.min(a.top, v.top), bottom = Math.max(a.bottom, v.bottom);
-                return [label.textContent.trim(), Math.round(a.left - section.left), Math.round(top - section.top),
+                return [label.textContent.trim(), Math.round(a.left - box.left), Math.round(top - box.top),
                         Math.round(v.right - a.left), Math.round(bottom - top)];
-            }); }""")
-        width = await page.evaluate("() => Math.round(document.getElementById('section-irc').getBoundingClientRect().width)")
-        print(f'IRC record (lab-irc.png, {width} px wide - its <img> width in video.html):')
+            }); }""", record_section)
+        width = await page.evaluate("s => Math.round(document.getElementById(s).getBoundingClientRect().width)", record_section)
+        print(f'Up-close record (lab-record.png, {width} px wide - its <img> width in video.html):')
         for row in rows:
             print('  ' + json.dumps(row))
         await browser.close()
@@ -79,5 +81,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('md5')
     parser.add_argument('--base-url', default='http://127.0.0.1:8000/socrates.html')
+    parser.add_argument('--record', default='knxip', help="the up-close scene's record (capture.py's RECORDS)")
     args = parser.parse_args()
-    asyncio.run(main(args.base_url, args.md5))
+    asyncio.run(main(args.base_url, args.md5, args.record))
