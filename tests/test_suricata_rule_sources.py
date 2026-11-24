@@ -21,6 +21,7 @@ DATA_DIR)."""
 import gzip
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -252,6 +253,19 @@ class TestFetchSingleSource(unittest.TestCase):
         self.assertNotIn('msg:"ET ', content)
         self.assertLess(os.path.getsize(dest), 1024 * 1024, 'an isolated trafficid fetch should be well under 1MB, not ~45MB')
 
+    def test_a_url_source_fetch_is_isolated_too(self):
+        """The real fetch of ThreatDefence's rules, by URL: its own rules,
+        in its SID block, and none of et/open's."""
+        dest = os.path.join(self.tmpdir, 'threatdefence-agentic.rules')
+        messages = []
+        ok = suricata_analyzer._fetch_single_source(self.suricata_dir, 'threatdefence/agentic', dest, messages.append)
+        self.assertTrue(ok, messages)
+        with open(dest) as f:
+            content = f.read()
+        self.assertNotIn('msg:"ET ', content)
+        sids = [int(s) for s in re.findall(r'\bsid\s*:\s*(\d+)', content)]
+        self.assertTrue(any(3800000 <= s <= 3899999 for s in sids))
+
     def test_fetch_reports_elapsed_time(self):
         """'Fetched X' now says how long the isolated suricata-update run
         took - e.g. 'Fetched et/open in 4 seconds' - so a slow source (or a
@@ -278,6 +292,30 @@ class TestFetchSingleSource(unittest.TestCase):
             suricata_analyzer._fetch_single_source(
                 self.suricata_dir, 'et/open', os.path.join(self.tmpdir, 'et-open.rules'), messages.append)
         self.assertIn('Fetched et/open in 1 second', messages)
+
+    def test_a_source_outside_suricata_updates_index_is_added_by_url(self):
+        """ThreatDefence's rules aren't in suricata-update's index, so its
+        fetch adds the source by its URL - and is isolated from et/open's
+        default like any other."""
+        name = 'threatdefence/agentic'
+        url = suricata_analyzer.SURICATA_RULE_SOURCES[name]['fetch_url']
+        self.assertEqual(suricata_analyzer._enable_source_args(name), ['add-source', name, url])
+        self.assertEqual(suricata_analyzer._enable_source_args('et/open'), ['enable-source', 'et/open'])
+        with unittest.mock.patch('suricata_analyzer.subprocess.run') as mock_run, \
+             unittest.mock.patch('suricata_analyzer.shutil.move'), \
+             unittest.mock.patch('suricata_analyzer.os.path.isfile', return_value=True):
+            mock_run.return_value = unittest.mock.Mock(returncode=0, stdout='', stderr='')
+            ok = suricata_analyzer._fetch_single_source(
+                self.suricata_dir, name, os.path.join(self.tmpdir, 'td.rules'), lambda m: None)
+        self.assertTrue(ok)
+        args = [c.args[0] for c in mock_run.call_args_list]
+        self.assertEqual(args[1][:4], ['suricata-update', 'add-source', name, url])
+        self.assertIn(['suricata-update', 'disable-source', 'et/open'], [a[:3] for a in args])
+
+    def test_every_url_source_is_https(self):
+        for name, source in suricata_analyzer.SURICATA_RULE_SOURCES.items():
+            if 'fetch_url' in source:
+                self.assertTrue(source['fetch_url'].startswith('https://'), name)
 
     def test_dest_path_not_created_on_enable_failure(self):
         dest = os.path.join(self.tmpdir, 'bogus.rules')

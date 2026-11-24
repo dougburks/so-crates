@@ -22,7 +22,7 @@ CYBERCHEF_DIR = os.environ.get('CYBERCHEF_DIR', '/usr/share/cyberchef')
 
 # SO-CRATES's own policy (script-src 'self', nothing else) stops CyberChef
 # from loading at all. Each carve-out below was measured against the real
-# v11.5.0 build in Chromium - this policy passes every operation tested
+# v11.6.0 build in Chromium - this policy passes every operation tested
 # that also passes with no CSP at all:
 #   - the two inline <script>s in index.html (theme/loader bootstrap, IE
 #     warning) are allowed by hash, not 'unsafe-inline' - see

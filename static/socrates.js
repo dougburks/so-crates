@@ -14899,7 +14899,15 @@
                 if (win.closed) return;
                 let app = null;
                 try {
-                    if (win.document.body && win.document.body.classList.contains('loaded')) app = win.app;
+                    // CyberChef marks its body 'loaded' for only a second,
+                    // then removes the class with its loading screen
+                    // (#loader-wrapper) - so a fetch that took longer than
+                    // that finds it ready only by the screen being gone. (A
+                    // pop-up's first, blank page has no app at all.)
+                    const doc = win.document;
+                    if (doc.body && (doc.body.classList.contains('loaded') || !doc.getElementById('loader-wrapper'))) {
+                        app = win.app;
+                    }
                 } catch (e) { /* still navigating - try again */ }
                 if (app && app.manager && app.manager.input) {
                     // CyberChef's "update the URL" option rewrites the tab's

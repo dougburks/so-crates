@@ -7632,7 +7632,7 @@ class TestDockerfile(unittest.TestCase):
         sync with the curated catalog."""
         with open(DOCKERFILE, 'r') as f:
             content = f.read()
-        self.assertIn('from suricata_analyzer import BAKED_IN_SURICATA_SOURCES, _source_filename', content)
+        self.assertIn('from suricata_analyzer import BAKED_IN_SURICATA_SOURCES, _enable_source_args, _source_filename', content)
         self.assertIn('for slug in BAKED_IN_SURICATA_SOURCES:', content)
         # Deriving the loop from BAKED_IN_SURICATA_SOURCES (asserted
         # above) rather than a hand-written slug list is what actually
@@ -7692,9 +7692,10 @@ class TestDockerfile(unittest.TestCase):
             content = f.read()
         bake_loop = content.split('for slug in BAKED_IN_SURICATA_SOURCES:')[1].split("PY\n")[0]
         update_idx = bake_loop.find("'suricata-update', 'update-sources'")
-        enable_idx = bake_loop.find("'suricata-update', 'enable-source'")
+        # (enable-source, or add-source for a source fetched by URL)
+        enable_idx = bake_loop.find("'suricata-update', *_enable_source_args(slug)")
         self.assertGreater(update_idx, -1, 'bake loop must call suricata-update update-sources')
-        self.assertGreater(enable_idx, -1, 'bake loop must call suricata-update enable-source')
+        self.assertGreater(enable_idx, -1, 'bake loop must turn the source on')
         self.assertLess(update_idx, enable_idx, 'update-sources must run before enable-source')
 
     def test_dockerfile_has_python_build_dependencies(self):

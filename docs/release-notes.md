@@ -32,8 +32,22 @@
   its rules matched; on All Events, every event. Network Alerts and
   Flow still show every flow
 
+### Updates
+
+- **ThreatDefence Agentic Attacks** - a new Suricata ruleset in the Rules
+  modal, off by default and baked into the image: ThreatDefence's rules
+  for AI agent attack frameworks (PentAGI, HexStrike, Strix, Agent
+  Zero...) - their tool traffic, C2 and infrastructure. It's fetched from
+  the newest GitHub release, since it isn't in suricata-update's index
+- **CyberChef** is updated to v11.6.0 - with X.509 certificate bundle
+  parsing and newer versions of the libraries it runs on
+
 ### Fixes
 
+- **Send to CyberChef** delivers data that took more than a second or
+  two to fetch - a large stored file, a long stream. CyberChef marks
+  itself loaded for only a second, and SO-CRATES, waiting for that mark,
+  could miss it and give up with "CyberChef did not finish loading"
 - A pasted URL's field gives up its focus once its analysis starts, so
   the hotkeys (`>` for the next theme) work instead of typing into it
 - MMS in a capture that starts after its connection's association

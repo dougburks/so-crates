@@ -51,6 +51,10 @@ SURICATA_SID_RANGES = [
     (3300003, 3321492, 'pawpatrules', 'PAW Patrules'),
     (3400001, 3400021, 'aleksibovellan/nmap', 'NMAP Scan Detection'),
     (3500000, 3500201, 'the-hunters-ledger/open', "The Hunter's Ledger"),
+    # Derived 2026-11-24 from its v2.11.0 release (3800001-3810011), and
+    # numbered 38xxxxx by framework - a new project releasing several times
+    # a day, so its whole block, which no other source is near
+    (3800000, 3899999, 'threatdefence/agentic', 'ThreatDefence Agentic Attacks'),
     (5000000, 5000020, 'etnetera/aggressive', 'Etnetera Aggressive IP Blacklist'),
     (6000000, 6013663, 'julioliraup/antiphishing', 'Antiphishing'),
     (10000035, 11004724, 'ptrules/open', 'Positive Technologies PT Rules (Open)'),

@@ -327,7 +327,7 @@ import tempfile
 import time
 
 sys.path.insert(0, '/app')
-from suricata_analyzer import BAKED_IN_SURICATA_SOURCES, _source_filename
+from suricata_analyzer import BAKED_IN_SURICATA_SOURCES, _enable_source_args, _source_filename
 
 ATTEMPTS = 3
 SID = re.compile(r'\bsid\s*:\s*(\d+)')
@@ -374,8 +374,10 @@ for slug in BAKED_IN_SURICATA_SOURCES:
                 ['suricata-update', 'update-sources', '--data-dir', scratch_data],
                 check=True,
             )
+            # enable-source, or add-source with its URL for a source not in
+            # suricata-update's index (ThreatDefence's)
             subprocess.run(
-                ['suricata-update', 'enable-source', slug, '--data-dir', scratch_data],
+                ['suricata-update', *_enable_source_args(slug), '--data-dir', scratch_data],
                 check=True,
             )
             # enable-source on a brand-new --data-dir always ALSO silently

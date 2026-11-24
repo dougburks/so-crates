@@ -24,6 +24,7 @@ SAMPLE_SIDS = {
     'pawpatrules': 3310000,
     'aleksibovellan/nmap': 3400010,
     'the-hunters-ledger/open': 3500100,
+    'threatdefence/agentic': 3801104,
     'etnetera/aggressive': 5000010,
     'julioliraup/antiphishing': 6005000,
     'ptrules/open': 10500000,
@@ -54,6 +55,14 @@ class TestClassifyAlertRuleset(unittest.TestCase):
         for sid in (1000000, 1000001, 1500000, 1999999):
             self.assertEqual(sr.classify_alert_ruleset(sid), sr.SURICATA_LOCAL_LABEL, sid)
         self.assertEqual(sr.classify_alert_ruleset(2000005), 'Emerging Threats Open')
+
+    def test_no_two_curated_ranges_overlap(self):
+        """An alert is labeled by the first range holding its SID, so a new
+        source's range overlapping another's would mislabel one of them."""
+        ranges = sorted((lo, hi if hi is not None else float('inf'), slug)
+                        for lo, hi, slug, _label in sr.SURICATA_SID_RANGES)
+        for (lo, hi, slug), (next_lo, _next_hi, next_slug) in zip(ranges, ranges[1:]):
+            self.assertLess(hi, next_lo, f'{slug} overlaps {next_slug}')
 
     def test_no_other_range_overlaps_the_local_range(self):
         """Custom rules are labeled by range alone, so no curated source or

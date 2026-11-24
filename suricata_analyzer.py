@@ -42,6 +42,15 @@ SURICATA_RULE_SOURCES = {
     'aleksibovellan/nmap': {'label': 'NMAP Scan Detection', 'url': 'https://github.com/aleksibovellan/opnsense-suricata-nmaps'},
     'julioliraup/antiphishing': {'label': 'Antiphishing', 'url': 'https://github.com/julioliraup/Antiphishing'},
     'the-hunters-ledger/open': {'label': "The Hunter's Ledger", 'url': 'https://the-hunters-ledger.com/'},
+    # Not in suricata-update's index: fetched from its URL instead (see
+    # _enable_source_args). Each GitHub release attaches every rule in one
+    # file, and latest/ always names the newest release.
+    'threatdefence/agentic': {
+        'label': 'ThreatDefence Agentic Attacks',
+        'url': 'https://github.com/ThreatDefence/agentic-attack-detections',
+        'fetch_url': 'https://github.com/ThreatDefence/agentic-attack-detections/releases/latest/download/'
+                     'agentic-attack-detections.rules',
+    },
     # Last, deliberately - unlike every other entry above, this is a
     # content-*filtering* blocklist rather than threat detection (see
     # BAKED_IN_SURICATA_SOURCES's comment below) and is by far the largest/
@@ -61,6 +70,15 @@ SURICATA_RULE_SOURCES = {
 # which public trust stores don't carry, so every download of it fails -
 # don't trust that CA in the image to get it back.
 DEFAULT_SURICATA_SOURCES = ['et/open']
+
+
+def _enable_source_args(name):
+    """suricata-update's arguments that turn source name on in a fresh
+    --data-dir: enable-source for a source in its index, add-source with
+    the URL for one that isn't (a 'fetch_url' in SURICATA_RULE_SOURCES).
+    The Dockerfile's bake loop uses this too."""
+    fetch_url = SURICATA_RULE_SOURCES.get(name, {}).get('fetch_url')
+    return ['add-source', name, fetch_url] if fetch_url else ['enable-source', name]
 
 # ipfire/dbl deliberately excluded from what the Docker image bakes in -
 # it's the single biggest source in the curated set (~51 MiB on its own,
@@ -487,7 +505,7 @@ def _fetch_single_source(suricata_dir, name, dest_path, on_progress):
 
         try:
             enable_result = subprocess.run(
-                ['suricata-update', 'enable-source', name, *parameters, '--data-dir', scratch_data],
+                ['suricata-update', *_enable_source_args(name), *parameters, '--data-dir', scratch_data],
                 capture_output=True, text=True, timeout=config.SURICATA_SOURCE_RECONCILE_TIMEOUT,
             )
         except (OSError, subprocess.TimeoutExpired) as e:

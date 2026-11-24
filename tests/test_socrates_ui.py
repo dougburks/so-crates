@@ -8198,7 +8198,8 @@ class TestSendToCyberChef(unittest.TestCase):
         var fakeWin = {
             closed: false,
             close: function() { this.closed = true; calls.closed = true; },
-            document: { body: { classList: { contains: function(c) { return c === 'loaded'; } } } },
+            document: { body: { classList: { contains: function(c) { return c === 'loaded'; } } },
+                        getElementById: function(id) { return id === 'loader-wrapper' ? {} : null; } },
             File: window.File,
             app: {
                 options: { updateUrl: true },
@@ -8474,6 +8475,28 @@ class TestSendToCyberChef(unittest.TestCase):
         ''')
         self.assertEqual(len(result['toasts']), 1)
         self.assertIn('did not finish loading', result['toasts'][0])
+
+
+    def test_ready_once_the_loading_screen_is_gone(self):
+        """CyberChef keeps its 'loaded' class for a second only, then
+        removes it with its loading screen: data that took longer to
+        fetch must still be delivered - and not before CyberChef loaded."""
+        from tests.jsdom_helper import js_statements
+        result = js_statements(self.FAKE_WIN + self._stub_fetch() + '''
+            fakeWin.document.body.classList.contains = function() { return false; };
+            var wrapper = {};
+            fakeWin.document.getElementById = function(id) { return id === 'loader-wrapper' ? wrapper : null; };
+            currentMd5 = 'abc';
+            sendExtractedFileToCyberChef('a'.repeat(64), 'x.bin');
+            await new Promise(function(r) { setTimeout(r, 450); });
+            var whileLoading = !!calls.files;
+            wrapper = null;   // loaded, and its class already gone
+            await new Promise(function(r) { setTimeout(r, 450); });
+            window.__jsdom_result = { whileLoading: whileLoading, delivered: !!calls.files, toasts: toasts };
+        ''')
+        self.assertFalse(result['whileLoading'], 'nothing is handed over while the loading screen is up')
+        self.assertTrue(result['delivered'])
+        self.assertEqual(result['toasts'], [])
 
 
 class TestCyberChefThemeSync(unittest.TestCase):
